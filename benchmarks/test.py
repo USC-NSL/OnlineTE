@@ -113,7 +113,7 @@ def zoo_test_1_dist():
     set_edge_capacity_to(graph, c_min*3)
     print(f"Capacity lower bound is: {c_min}")
 
-    solver_params = DistributedSolverParams(NumberOfEpochs=1000)
+    solver_params = DistributedSolverParams(NumberOfEpochs=100)
     with contextlib.closing(DistributedEdgeBasedLP(graph, tm, solver_params)) as lp:
         lp.make_lp()
         t = lp.solve()
@@ -138,7 +138,7 @@ def zoo_test_1_dist_parallel():
     set_edge_capacity_to(graph, c_min*3)
     print(f"Capacity lower bound is: {c_min}")
 
-    solver_params = DistributedParallelSolverParams()
+    solver_params = DistributedParallelSolverParams(NumberOfEpochs=100)
     controller_params = DistributedParallelSolverControllerParams()
     node_params = DistributedParallelSolverNodeParams()
     with contextlib.closing(DistributedParallelEdgeBasedLP(graph, tm, solver_params, controller_params, node_params)) as lp:
@@ -237,4 +237,5 @@ if __name__ == '__main__':
     # toy_test_1()
     # toy_test_2()
     # zoo_test_1()
-    zoo_test_1_dist()
+    # zoo_test_1_dist()
+    zoo_test_1_dist_parallel()
