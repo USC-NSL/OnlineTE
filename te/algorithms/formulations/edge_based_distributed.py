@@ -4,41 +4,20 @@ import numpy as np
 import networkx as nx
 import te.constants
 from typing import List, Dict, Tuple
-from collections import namedtuple
+from dataclasses import dataclass
 from gurobipy import GRB, GurobiError, quicksum
-from pathos.multiprocessing import ProcessingPool
-from te.algorithms.base import TrafficEngineeringLP, SolverParams
+from te.algorithms.base import TrafficEngineeringLP, GurobiSolverParams, SolverParams
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
 from topologies.utils import get_edge_indexing, get_node_and_out_edge_index_mapping
 
-
-def _optimize(model: gurobipy.Model):
-    model.optimize()
-    return 0
-
-
-DistributedSolverParams = namedtuple('DistributedSolverParams', [
-    'Method', 'NumericFocus', 'BarConvTol',
-    'OptimalityTol', 'FeasibilityTol',
-    'EpsilonOE', 'EpsilonKE',
-    'Alpha', 'Beta',
-    'Seed',
-    'LogFile'
-], defaults=[
-    te.constants.DEFAULT_SOLVER_METHOD,
-    te.constants.DEFAULT_NUMERIC_FOCUS,
-    te.constants.DEFAULT_BARRIER_CONVERGENCE_TOLERANCE,
-    te.constants.DEFAULT_OPTIMALITY_TOLERANCE,
-    te.constants.DEFAULT_FEASIBILITY_TOLERANCE,
-    te.constants.DEFAULT_EPSILON_OE, 
-    te.constants.DEFAULT_EPSILON_KE,
-    te.constants.DEFAULT_ALPHA,
-    te.constants.DEFAULT_BETA,
-    te.constants.DEFAULT_SEED,
-    te.constants.DEFAULT_GUROBI_LOG_FILE
-])
-
-SolverParams.register(DistributedSolverParams)
+@dataclass
+class DistributedSolverParams(GurobiSolverParams):
+    NumberOfEpochs: int = 1000
+    EpsilonOE: float = te.constants.DEFAULT_EPSILON_OE
+    EpsilonKE: float = te.constants.DEFAULT_EPSILON_KE
+    Alpha: float = te.constants.DEFAULT_ALPHA
+    Beta: float = te.constants.DEFAULT_BETA
+    Seed: int = te.constants.DEFAULT_SEED
 
 
 class DistributedEdgeBasedLP(TrafficEngineeringLP):
@@ -351,13 +330,11 @@ class DistributedEdgeBasedLP(TrafficEngineeringLP):
         total_runtime = 0
         try:
             # with ProcessingPool(8) as pool:
-            for _ in tqdm.tqdm(range(10000)):
+            for _ in tqdm.tqdm(range(self._solver_params.NumberOfEpochs)):
                 t_nodes = []
                 # First, update `X_{ke}` at each node (along with `mu`)
-                # pool.map(_optimize, NODE_MODELS)
                 for model in NODE_MODELS:
                     model.optimize()
-                # pool.map(_optimize, NODE_MODELS)
                 for v in range(M):
                     t_nodes.append(NODE_MODELS[v].Runtime)
                     self._update_mu(v)

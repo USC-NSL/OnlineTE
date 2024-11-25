@@ -6,6 +6,10 @@ from te.traffic_models.models import UniformTrafficMatrixParams, CustomTrafficMa
 from te.algorithms.base import GurobiSolverParams
 from te.algorithms.formulations.edge_based_centralized import CentralizedEdgeBasedLP
 from te.algorithms.formulations.edge_based_distributed import DistributedEdgeBasedLP, DistributedSolverParams
+from te.algorithms.formulations.edge_based_distributed_parallel import (
+    DistributedParallelEdgeBasedLP, DistributedParallelSolverParams,
+    DistributedParallelSolverNodeParams, DistributedParallelSolverControllerParams
+)
 from te.algorithms.utils import report_commodity_assignments
 from topologies.utils import (
     load_zoo_topology, get_capacity_lower_bound, 
@@ -109,8 +113,35 @@ def zoo_test_1_dist():
     set_edge_capacity_to(graph, c_min*3)
     print(f"Capacity lower bound is: {c_min}")
 
-    solver_params = DistributedSolverParams()
+    solver_params = DistributedSolverParams(NumberOfEpochs=1000)
     with contextlib.closing(DistributedEdgeBasedLP(graph, tm, solver_params)) as lp:
+        lp.make_lp()
+        t = lp.solve()
+        expected = lp.commodity_list
+        result = lp.get_solution_commodity_list()
+        # unsatisfied = lp.get_ratio_of_unsatisfied_demands(solver_params)
+        report_commodity_assignments(expected, result, 0.0)
+        print(f"Solved in {t} seconds. Final objective value: {lp.objective_value}")
+        plt.plot(lp.objective_trace)
+        plt.show()
+
+
+def zoo_test_1_dist_parallel():
+    graph = load_zoo_topology('Twaren')
+    
+    tm_params = UniformTrafficMatrixParams(
+        n = len(graph.nodes), min = 0.0, max = 1.0
+    )
+    tm = get_traffic_model('Uniform')(seed=12345, params=tm_params)
+    
+    c_min = get_capacity_lower_bound(graph, tm)
+    set_edge_capacity_to(graph, c_min*3)
+    print(f"Capacity lower bound is: {c_min}")
+
+    solver_params = DistributedParallelSolverParams()
+    controller_params = DistributedParallelSolverControllerParams()
+    node_params = DistributedParallelSolverNodeParams()
+    with contextlib.closing(DistributedParallelEdgeBasedLP(graph, tm, solver_params, controller_params, node_params)) as lp:
         lp.make_lp()
         t = lp.solve()
         expected = lp.commodity_list

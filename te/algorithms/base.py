@@ -2,27 +2,21 @@ import networkx as nx
 import te.constants
 from typing import List
 from abc import ABC, abstractmethod
-from collections import namedtuple
+from dataclasses import dataclass
 from te.traffic_models.base import TrafficMatrixBase, Commodity
 
 
 class SolverParams(ABC):
     pass
 
-GurobiSolverParams = namedtuple('GurobiSolverParams', [
-    'Method', 'NumericFocus', 'BarConvTol',
-    'OptimalityTol', 'FeasibilityTol',
-    'LogFile'
-], defaults=[
-    te.constants.DEFAULT_SOLVER_METHOD,
-    te.constants.DEFAULT_NUMERIC_FOCUS,
-    te.constants.DEFAULT_BARRIER_CONVERGENCE_TOLERANCE,
-    te.constants.DEFAULT_OPTIMALITY_TOLERANCE,
-    te.constants.DEFAULT_FEASIBILITY_TOLERANCE,
-    te.constants.DEFAULT_GUROBI_LOG_FILE
-])
-
-SolverParams.register(GurobiSolverParams)
+@dataclass
+class GurobiSolverParams(SolverParams):
+    Method: int = te.constants.DEFAULT_SOLVER_METHOD
+    NumericFocus: int = te.constants.DEFAULT_NUMERIC_FOCUS
+    BarConvTol: float = te.constants.DEFAULT_BARRIER_CONVERGENCE_TOLERANCE
+    OptimalityTol: float = te.constants.DEFAULT_OPTIMALITY_TOLERANCE
+    FeasibilityTol: float = te.constants.DEFAULT_FEASIBILITY_TOLERANCE
+    LogFile: str = te.constants.DEFAULT_GUROBI_LOG_FILE
 
 
 class TrafficEngineeringLP(ABC):
@@ -57,22 +51,22 @@ class TrafficEngineeringLP(ABC):
         pass
     
     @abstractmethod
-    def _make_variables(self):
+    def _make_variables(self, *args, **kwargs):
         """Add required variables to the problem model"""
         pass
 
     @abstractmethod
-    def _add_constraints(self):
+    def _add_constraints(self, *args, **kwargs):
         """Add all constraints needed to the problem model"""
         pass
 
     @abstractmethod
-    def _add_objective(self):
+    def _add_objective(self, *args, **kwargs):
         """Add the objective function to the problem model"""
         pass
 
     @abstractmethod
-    def make_lp(self):
+    def make_lp(self, *args, **kwargs):
         """Create the LP and the Gurobi model object"""
         pass
 

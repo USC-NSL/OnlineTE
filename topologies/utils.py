@@ -70,6 +70,25 @@ def get_node_and_out_edge_index_mapping(graph: nx.DiGraph) -> Dict[Tuple[int, in
     return d
 
 
+def get_in_edge_mapping(graph: nx.DiGraph):
+    """
+    This creates a mapping from node index to a list of
+    tuples of (pred_node_index, pred_edge_out_index).
+    """
+
+    m = len(graph.nodes)
+    mapping: Dict[int, List[Tuple[int, int]]] = dict()
+    
+    for v in range(m):
+        mapping[v] = list()
+        for pred_v in graph.predecessors(v):
+            for i, (_, dst) in enumerate(graph.out_edges(pred_v, data=False)):
+                if v == dst:
+                    mapping[v].append([pred_v, i])
+
+    return mapping
+
+
 def index_zoo():
     """Make a map from topology name to its number of nodes"""
     
