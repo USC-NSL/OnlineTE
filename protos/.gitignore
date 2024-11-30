@@ -1,0 +1,8 @@
+
+# Everything ...
+*
+
+# Except
+!.gitignore
+!*.proto
+!__init__.py

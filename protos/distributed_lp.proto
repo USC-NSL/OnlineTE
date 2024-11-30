@@ -1,0 +1,24 @@
+syntax = "proto3";
+import "google/protobuf/empty.proto";
+
+service NodeLP {
+    rpc GetXKE (google.protobuf.Empty) returns (GetXKEResponse) {}
+    rpc GetMUKV (google.protobuf.Empty) returns (GetMUKVResponse) {}
+}
+
+service ControllerLP {
+    rpc GetLambdaVE (google.protobuf.Empty) returns (GetLambdaVEResponse) {}
+}
+
+message GetXKEResponse {
+    int32 out_degree = 1;
+    bytes x_ke = 2;
+}
+
+message GetMUKVResponse {
+    bytes mu_kv = 1;
+}
+
+message GetLambdaVEResponse {
+    bytes lambda_ve = 1;
+}
