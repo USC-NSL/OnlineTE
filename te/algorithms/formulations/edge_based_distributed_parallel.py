@@ -1,14 +1,23 @@
+import grpc
 import tqdm
+import pickle
 import gurobipy
 import numpy as np
 import networkx as nx
 import te.constants
+import protos.distributed_lp.distributed_lp_pb2 as lp_messages
 from typing import List, Dict, Tuple
 from dataclasses import dataclass
 from gurobipy import GRB, GurobiError, quicksum
 from te.algorithms.base import TrafficEngineeringLP, SolverParams, GurobiSolverParams
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
 from topologies.utils import get_node_and_out_edge_index_mapping, get_in_edge_mapping
+from protos.distributed_lp.distributed_lp_pb2_grpc import (
+    NodeLPServicer, NodeLPStub, add_NodeLPServicer_to_server,
+    ControllerLPServicer, ControllerLPStub, add_ControllerLPServicer_to_server
+)
+from google.protobuf.empty_pb2 import Empty
+
 
 # Shared between the controller and node solvers
 @dataclass
@@ -29,18 +38,26 @@ class DistributedParallelSolverNodeParams(SolverParams):
     Beta: float = te.constants.DEFAULT_BETA
 
 
-class NodeLP(TrafficEngineeringLP):
-    def __init__(self, node_index: int, commodity_list: List[Commodity], out_degree: int, 
-                 solver_params: DistributedParallelSolverParams, 
-                 node_params: DistributedParallelSolverNodeParams) -> None:
-        super().__init__()
-        self._node_index: int = node_index
-        self._commodity_list = commodity_list
-        self._out_degree = out_degree
-        self._solver_params: DistributedParallelSolverParams = solver_params
-        self._node_params: DistributedParallelSolverNodeParams = node_params
 
-        self._rng = np.random.default_rng(seed=solver_params.Seed)
+@dataclass
+class NodeLPInput:
+    node_index: int
+    commodity_list: List[Commodity]
+    out_degree: int
+    solver_params: DistributedParallelSolverParams
+    node_params: DistributedParallelSolverNodeParams
+
+
+class NodeLP(TrafficEngineeringLP):
+    def __init__(self, inputs: NodeLPInput) -> None:
+        super().__init__()
+        self._node_index: int = inputs.node_index
+        self._commodity_list = inputs.commodity_list
+        self._out_degree = inputs.out_degree
+        self._solver_params: DistributedParallelSolverParams = inputs.solver_params
+        self._node_params: DistributedParallelSolverNodeParams = inputs.node_params
+
+        self._rng = np.random.default_rng(seed=inputs.solver_params.Seed)
         self._env: gurobipy.Env = None
         self._node_model: gurobipy.Model = None
         self._node_objective: gurobipy.QuadExpr = None
@@ -189,25 +206,31 @@ class NodeLP(TrafficEngineeringLP):
         return self._mu_kv.copy()
 
 
+@dataclass
+class ControllerLPInput:
+    graph: nx.DiGraph
+    commodity_list: List[Commodity]
+    solver_params: DistributedParallelSolverParams
+    controller_params: DistributedParallelSolverControllerParams
+
+
 class ControllerLP(TrafficEngineeringLP):
-    def __init__(self, graph: nx.DiGraph, commodity_list: List[Commodity],
-                 solver_params: DistributedParallelSolverParams, 
-                 controller_params: DistributedParallelSolverControllerParams) -> None:
+    def __init__(self, inputs: ControllerLPInput) -> None:
         super().__init__()
-        self._graph = graph
-        self._commodity_list = commodity_list
-        self._solver_params = solver_params
-        self._controller_params = controller_params
+        self._graph = inputs.graph
+        self._commodity_list = inputs.commodity_list
+        self._solver_params = inputs.solver_params
+        self._controller_params = inputs.controller_params
         
         self._env: gurobipy.Env = None
-        self._rng = np.random.default_rng(seed=solver_params.Seed)
+        self._rng = np.random.default_rng(seed=inputs.solver_params.Seed)
         self._controller_model: gurobipy.Model = None
         self._controller_objective: gurobipy.QuadExpr = None
         self._flows_oe: List[gurobipy.MVar] = None
         self._utility = None
         self._lambda_ve: List[np.ndarray] = None
 
-        self._out_degrees = {k: v for k, v in graph.out_degree()}
+        self._out_degrees = {k: v for k, v in inputs.graph.out_degree()}
 
     @property
     def graph(self) -> nx.DiGraph:
@@ -348,6 +371,33 @@ class ControllerLP(TrafficEngineeringLP):
         return self._lambda_ve.copy()
 
 
+class MultiNodeLP(NodeLPServicer):
+    def __init__(self, inputs: List[NodeLPInput]) -> None:
+        super().__init__()
+        self._nodes: Dict[int, NodeLP] = {
+            _input.node_index: NodeLP(_input)
+                for _input in inputs
+        }
+    
+    def _inititate(self):
+        for node in self._nodes.values():
+            node._initiate_mu()
+    
+    # def _make_lp(self):
+    #     for node in self._nodes.values():
+    #         node._make_variables()
+    #         node._add_constraints()
+            # node._add_objective()
+    
+    def Inititate(self, request, context):
+        self._inititate()
+        return lp_messages.NodeLPInititationResponse(True)
+
+    def MakeLP(self, request: lp_messages.NodeLPMakeRequest, context):
+        lambda_ve: np.ndarray = pickle.loads(request.lambda_ve)
+        mu_prime: Dict[int, np.ndarray] = pickle.loads(request.lambda_ve)
+
+
 class DistributedParallelEdgeBasedLP(TrafficEngineeringLP):
     def __init__(self, graph: nx.DiGraph, traffic: TrafficMatrixBase, 
                  solver_params: DistributedParallelSolverParams,
@@ -364,13 +414,19 @@ class DistributedParallelEdgeBasedLP(TrafficEngineeringLP):
         self._out_degrees: Dict[int, int] = {k: v for k, v in graph.out_degree()}
         self._objective_trace: List[float] = []
 
-        self._controller_lp = ControllerLP(
-            graph, self._commodity_list, solver_params,
-            controller_params
-        )
+        self._controller_lp = ControllerLP(ControllerLPInput(
+            graph=graph, commodity_list=self._commodity_list,
+            solver_params=solver_params, controller_params=controller_params))
         self._node_lps = [
             NodeLP(v, self._commodity_list, self._out_degrees[v],
                    solver_params, node_params) for v in range(len(graph.nodes))
+        ]
+        self._node_lps = [
+            NodeLP(NodeLPInput(
+                node_index=v, commodity_list=self._commodity_list,
+                out_degree=self._out_degrees[v], solver_params=solver_params,
+                node_params=node_params
+            )) for v in range(len(graph.nodes))
         ]
 
         self._in_edge_mapping: Dict[int, List[Tuple[int, int]]] = get_in_edge_mapping(graph)

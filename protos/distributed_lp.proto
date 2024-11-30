@@ -1,24 +1,74 @@
 syntax = "proto3";
 import "google/protobuf/empty.proto";
 
+// Service for our node instances. 
+// This can potentially serve multiple node instances, and _MUST_ block
+// until all nodes that are associated with it have either finished or
+// returned with an error for the request.
 service NodeLP {
-    rpc GetXKE (google.protobuf.Empty) returns (GetXKEResponse) {}
-    rpc GetMUKV (google.protobuf.Empty) returns (GetMUKVResponse) {}
+    // Get x_ke from all nodes.
+    rpc GetXKE (CurrentEpoch) returns (GetXKEResponse) {}
+    // Get mu_kv from all nodes.
+    rpc GetMUKV (CurrentEpoch) returns (GetMUKVResponse) {}
+    // Inititate the multipliers for all nodes
+    rpc Initiate (google.protobuf.Empty) returns (NodeLPInititationResponse) {}
+    // Make the LP for all nodes (includes adding constraints, setting objectives, etc.)
+    rpc MakeLP (NodeLPMakeRequest) returns (NodeLPMakeLPResponse) {}
+    // Do a single round of optimization for all nodes associated with this service
+    rpc Optimize (CurrentEpoch) returns (NodeLPOptimizeResponse) {}
 }
 
+// Service for our controller. The controller exists as part of the global solver,
+// thus we won't have to invoke these RPCs. The node instances are the ones that
+// do it.
 service ControllerLP {
-    rpc GetLambdaVE (google.protobuf.Empty) returns (GetLambdaVEResponse) {}
+    // Get the value of lambda_ve for our current controller LP
+    rpc GetLambdaVE (CurrentEpoch) returns (GetLambdaVEResponse) {}
 }
 
+// Almost all requests must be indexed with the epoch number to make sure
+// that the stale respones are not returned. 
+// Any RPC that is invoked with this _MUST_ wait until the epoch count reaches
+// this value.
+message CurrentEpoch {
+    int32 epoch = 1;
+}
+
+// Return the pickled dict that maps the index of a node to a 2D Numpy 
+// array that reflects the current value of x_ke
 message GetXKEResponse {
-    int32 out_degree = 1;
-    bytes x_ke = 2;
+    bytes x_ke = 1;
 }
 
+// Return the pickled dict that maps the index of a node to a Numpy vector
+// that reflects the current value of mu_kv
 message GetMUKVResponse {
     bytes mu_kv = 1;
 }
 
+// Return True if LP initialization was ok
+message NodeLPInititationResponse {
+    bool ok = 1;
+}
+
+// Contains the pickled dict that maps node index to the Numpy array for mu prime,
+// and the initial value for lambda_ve
+message NodeLPMakeRequest {
+    bytes mu_prime = 1;
+    bytes lambda_ve = 2;
+}
+
+// Return True if LP creation was ok
+message NodeLPMakeLPResponse {
+    bool ok = 1;
+}
+
+// Return the runtime of the optimization once done
+message NodeLPOptimizeResponse {
+    float runtime = 1;
+}
+
+// Return the pickled Numpy array object
 message GetLambdaVEResponse {
     bytes lambda_ve = 1;
 }
