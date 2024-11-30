@@ -172,6 +172,7 @@ class NodeLP(TrafficEngineeringLP):
         self._node_model.optimize()
         return self._node_model.Runtime
     
+    # rpc
     @property
     def x_ke(self) -> np.ndarray:
         K = len(self._commodity_list)
@@ -182,6 +183,7 @@ class NodeLP(TrafficEngineeringLP):
         assert res.shape == (OUT_DEGREE, K)
         return res
     
+    # rpc
     @property
     def mu_kv(self) -> np.ndarray:
         return self._mu_kv.copy()
@@ -340,6 +342,7 @@ class ControllerLP(TrafficEngineeringLP):
         self._controller_model.optimize()
         return self._controller_model.Runtime
     
+    # rpc
     @property
     def lambda_ve(self) -> List[np.ndarray]:
         return self._lambda_ve.copy()
