@@ -34,6 +34,14 @@ def compile_proto(proto: str):
 
     subprocess.call(cmd.split())
 
+    """
+    FIXME: We need to fix the gRPC relative imports ...
+    """
+
+    # Make an empty `__init__` for the proto dir
+    init_ = os.path.join(dir_path, '__init__.py')
+    open(init_, 'w').close()
+
 
 if __name__ == '__main__':
     for proto in PROTOS:

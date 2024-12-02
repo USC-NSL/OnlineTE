@@ -140,7 +140,7 @@ class NodeLP(TrafficEngineeringLP):
 
         NODE_MODEL.setObjective(OBJECTIVE_NODE, GRB.MINIMIZE)
 
-    def _add_objective(self, lambda_e: List[float], mu_prime: np.ndarray):
+    def _add_objective(self, lambda_e: np.ndarray, mu_prime: np.ndarray):
         self._update_node_objective(lambda_e, mu_prime)
 
     def _update_mu(self, flows_in: List[float]):
@@ -173,7 +173,7 @@ class NodeLP(TrafficEngineeringLP):
         if self._env:
             self._env.close()
 
-    def make_lp(self, lambda_e: List[float], mu_prime: List[float]):
+    def make_lp(self, lambda_e: np.ndarray, mu_prime: np.ndarray):
         self._make_variables()
         self._add_constraints()
         self._add_objective(lambda_e, mu_prime)
@@ -378,24 +378,57 @@ class MultiNodeLP(NodeLPServicer):
             _input.node_index: NodeLP(_input)
                 for _input in inputs
         }
+        self._epoch: int = 0
+        self._runtimes: List[float] = []
     
     def _inititate(self):
+        self._epoch = 0
         for node in self._nodes.values():
             node._initiate_mu()
     
-    # def _make_lp(self):
-    #     for node in self._nodes.values():
-    #         node._make_variables()
-    #         node._add_constraints()
-            # node._add_objective()
+    def _make_lp(self, lambda_ve: List[np.ndarray], mu_prime: Dict[int, np.ndarray]):
+        for node in self._nodes.values():
+            node._make_variables()
+            node._add_constraints()
+            node._add_objective(lambda_ve[node._node_index], mu_prime[node._node_index])
     
     def Inititate(self, request, context):
         self._inititate()
         return lp_messages.NodeLPInititationResponse(True)
 
     def MakeLP(self, request: lp_messages.NodeLPMakeRequest, context):
-        lambda_ve: np.ndarray = pickle.loads(request.lambda_ve)
+        lambda_ve: List[np.ndarray] = pickle.loads(request.lambda_ve)
         mu_prime: Dict[int, np.ndarray] = pickle.loads(request.lambda_ve)
+        self._make_lp(lambda_ve, mu_prime)
+    
+    def optimize(self, epoch: int) -> float:
+        if epoch <= self._epoch:
+            return self._runtimes[epoch]
+        runtimes = [node.solve for node in self._nodes.values()]
+        assert len(runtimes) == epoch
+        max_run = np.max(runtimes)
+        self._runtimes[epoch] = max_run
+        return max_run
+    
+    def Optimize(self, request: lp_messages.CurrentEpoch, context) -> lp_messages.NodeLPOptimizeResponse:
+        epoch = request.epoch
+        runtime = self.optimize(epoch)
+        return lp_messages.NodeLPOptimizeResponse(runtime=runtime)
+
+
+class ControllerNodeLP(ControllerLPServicer):
+    def __init__(self, inputs: ControllerLPInput) -> None:
+        self._inputs = inputs
+        self._controller_lp = ControllerLP(inputs)
+    
+    def inititate(self):
+        self._controller_lp._initiate_lambda_ve()
+    
+    def make_lp(self):
+        self._controller_lp.make_lp()
+    
+    def optimize(self) -> float:
+        return self._controller_lp.solve()
 
 
 class DistributedParallelEdgeBasedLP(TrafficEngineeringLP):
@@ -418,8 +451,8 @@ class DistributedParallelEdgeBasedLP(TrafficEngineeringLP):
             graph=graph, commodity_list=self._commodity_list,
             solver_params=solver_params, controller_params=controller_params))
         self._node_lps = [
-            NodeLP(v, self._commodity_list, self._out_degrees[v],
-                   solver_params, node_params) for v in range(len(graph.nodes))
+            NodeLP(NodeLPInput(v, self._commodity_list, self._out_degrees[v],
+                solver_params, node_params)) for v in range(len(graph.nodes))
         ]
         self._node_lps = [
             NodeLP(NodeLPInput(

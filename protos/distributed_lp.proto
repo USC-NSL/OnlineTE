@@ -52,7 +52,7 @@ message NodeLPInititationResponse {
 }
 
 // Contains the pickled dict that maps node index to the Numpy array for mu prime,
-// and the initial value for lambda_ve
+// and the initial value for lambda_ve (list of numpy arrays)
 message NodeLPMakeRequest {
     bytes mu_prime = 1;
     bytes lambda_ve = 2;
@@ -68,7 +68,7 @@ message NodeLPOptimizeResponse {
     float runtime = 1;
 }
 
-// Return the pickled Numpy array object
+// Return the pickled list of Numpy array object
 message GetLambdaVEResponse {
     bytes lambda_ve = 1;
 }

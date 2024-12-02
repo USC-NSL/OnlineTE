@@ -99,6 +99,7 @@ def zoo_test_1():
             unsatisfied = lp.get_ratio_of_unsatisfied_demands(solver_params)
             report_commodity_assignments(expected, result, unsatisfied)
             print(f"Solved in {t} seconds. Final objective value: {lp.objective_value}")
+            print(f"Final utilization value: {lp._utility.X}")
 
 
 def zoo_test_1_dist():
@@ -113,7 +114,10 @@ def zoo_test_1_dist():
     set_edge_capacity_to(graph, c_min*3)
     print(f"Capacity lower bound is: {c_min}")
 
-    solver_params = DistributedSolverParams(NumberOfEpochs=100)
+    solver_params = DistributedSolverParams(
+        NumberOfEpochs=2000,
+        Alpha=1e-1, Beta=1e-1
+    )
     with contextlib.closing(DistributedEdgeBasedLP(graph, tm, solver_params)) as lp:
         lp.make_lp()
         t = lp.solve()
@@ -122,6 +126,7 @@ def zoo_test_1_dist():
         # unsatisfied = lp.get_ratio_of_unsatisfied_demands(solver_params)
         report_commodity_assignments(expected, result, 0.0)
         print(f"Solved in {t} seconds. Final objective value: {lp.objective_value}")
+        print(f"Final utilization value: {lp._utility.X}")
         plt.plot(lp.objective_trace)
         plt.show()
 
@@ -138,7 +143,7 @@ def zoo_test_1_dist_parallel():
     set_edge_capacity_to(graph, c_min*3)
     print(f"Capacity lower bound is: {c_min}")
 
-    solver_params = DistributedParallelSolverParams(NumberOfEpochs=100)
+    solver_params = DistributedParallelSolverParams(NumberOfEpochs=1000)
     controller_params = DistributedParallelSolverControllerParams()
     node_params = DistributedParallelSolverNodeParams()
     with contextlib.closing(DistributedParallelEdgeBasedLP(graph, tm, solver_params, controller_params, node_params)) as lp:
@@ -237,5 +242,5 @@ if __name__ == '__main__':
     # toy_test_1()
     # toy_test_2()
     # zoo_test_1()
-    # zoo_test_1_dist()
-    zoo_test_1_dist_parallel()
+    zoo_test_1_dist()
+    # zoo_test_1_dist_parallel()
