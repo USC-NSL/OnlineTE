@@ -55,6 +55,21 @@ def get_edge_indexing(graph: nx.DiGraph) -> Dict[Tuple[int, int], int]:
     return {edge: index for index, edge in enumerate(graph.edges(data=False))}
 
 
+def get_edge_to_out_index_mapping(graph: nx.DiGraph) -> Dict[Tuple[int, int], Tuple[int, int]]:
+    """
+    This returns a dict object that maps pairs of an edge to its
+    out index for its source node.
+    """
+
+    assert isinstance(graph, nx.DiGraph)
+    d = dict()
+    counter = {node: 0 for node in graph.nodes(data=False)}
+    for src, dst in graph.edges(data=False):
+        d[(src, dst)] = counter[src]
+        counter[src] += 1
+    return d
+
+
 def get_node_and_out_edge_index_mapping(graph: nx.DiGraph) -> Dict[Tuple[int, int], Tuple[int, int]]:
     """
     This returns a dict object that maps pairs of (node_index,

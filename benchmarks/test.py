@@ -10,6 +10,10 @@ from te.algorithms.formulations.edge_based_distributed_parallel import (
     DistributedParallelEdgeBasedLP, DistributedParallelSolverParams,
     DistributedParallelSolverNodeParams, DistributedParallelSolverControllerParams
 )
+from te.algorithms.formulations.edge_based_distributed_admm import (
+    DistributedEdgeBasedADMMLP, DistributedADMMSolverParams,
+    SemiDistributedEdgeBasedADMMLP
+)
 from te.algorithms.utils import report_commodity_assignments
 from topologies.utils import (
     load_zoo_topology, get_capacity_lower_bound, 
@@ -158,6 +162,36 @@ def zoo_test_1_dist_parallel():
         plt.show()
 
 
+def zoo_test_1_admm():
+    graph = load_zoo_topology('Twaren')
+    
+    tm_params = UniformTrafficMatrixParams(
+        n = len(graph.nodes), min = 0.0, max = 1.0
+    )
+    tm = get_traffic_model('Uniform')(seed=12345, params=tm_params)
+    
+    c_min = get_capacity_lower_bound(graph, tm)
+    set_edge_capacity_to(graph, c_min*3)
+    print(f"Capacity lower bound is: {c_min}")
+
+    solver_params = DistributedADMMSolverParams(
+        NumberOfEpochs=5,
+        NumberOfNetworkUpdates=10
+    )
+    with contextlib.closing(DistributedEdgeBasedADMMLP(graph, tm, solver_params)) as lp:
+    # with contextlib.closing(SemiDistributedEdgeBasedADMMLP(graph, tm, solver_params)) as lp:
+        lp.make_lp()
+        t = lp.solve()
+        expected = lp.commodity_list
+        result = lp.get_solution_commodity_list()
+        # unsatisfied = lp.get_ratio_of_unsatisfied_demands(solver_params)
+        report_commodity_assignments(expected, result, 0.0)
+        print(f"Solved in {t} seconds.")
+        print(f"Final utilization value: {lp._utility.X}")
+        plt.plot(lp.objective_trace)
+        plt.show()
+
+
 def zoo_test_2():
     graph = load_zoo_topology('Sanet')
     
@@ -242,5 +276,6 @@ if __name__ == '__main__':
     # toy_test_1()
     # toy_test_2()
     # zoo_test_1()
-    zoo_test_1_dist()
+    # zoo_test_1_dist()
+    zoo_test_1_admm()
     # zoo_test_1_dist_parallel()

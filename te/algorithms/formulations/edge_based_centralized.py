@@ -40,7 +40,7 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
     @property
     def objective_value(self) -> float:
         if self._objective:
-            return self._objective.getValue()
+            return self._objective.X
         return None
     
     def _make_variables(self):
@@ -135,7 +135,7 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
         MODEL = self._model
 
         # For now, let's minimize maximum link utilization
-        self._objective = self._utility ** 2
+        self._objective = self._utility
         MODEL.setObjective(self._objective, GRB.MINIMIZE)
     
     def close(self):
