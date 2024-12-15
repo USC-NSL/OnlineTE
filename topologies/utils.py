@@ -2,12 +2,13 @@ import os
 import json
 import numpy as np
 import networkx as nx
+from scipy.linalg import null_space
 from typing import Dict, Tuple, Union, List
 from topologies import (
     TOPOLOGIES_PATH, TOPOLOGY_ZOO_DIR_NAME, 
     TOPOLOGY_ZOO_INDEX_FILE_NAME
 )
-from te.traffic_models.base import TrafficMatrixBase
+from te.traffic_models.base import TrafficMatrixBase, Commodity
 
 
 TOPOLGOY_ZOO_PATH = os.path.join(TOPOLOGIES_PATH, TOPOLOGY_ZOO_DIR_NAME)
@@ -55,7 +56,7 @@ def get_edge_indexing(graph: nx.DiGraph) -> Dict[Tuple[int, int], int]:
     return {edge: index for index, edge in enumerate(graph.edges(data=False))}
 
 
-def get_edge_to_out_index_mapping(graph: nx.DiGraph) -> Dict[Tuple[int, int], Tuple[int, int]]:
+def get_edge_to_out_index_mapping(graph: nx.DiGraph) -> Dict[Tuple[int, int], int]:
     """
     This returns a dict object that maps pairs of an edge to its
     out index for its source node.
@@ -227,6 +228,43 @@ def make_graph_from_dict(graph_n: int, graph_dict: Dict[Tuple[int, int], float])
         dict_of_dicts[src][dst]['capacity'] = v
     
     return nx.Graph(dict_of_dicts).to_directed()
+
+
+def get_graph_M_matrix(graph: nx.DiGraph) -> np.ndarray:
+    assert isinstance(graph, nx.DiGraph)
+
+    m = len(graph.nodes())
+    n = len(graph.edges())
+    M = np.zeros(shape=(m, n))
+    
+    for i, (s, d) in enumerate(graph.edges(data=False)):
+        M[s, i] = +1
+        M[d, i] = -1
+    
+    return M
+
+
+def get_adjacency_null_space(M_matrix: np.ndarray) -> np.ndarray:
+    assert len(M_matrix.shape) == 2
+
+    return null_space(M_matrix)
+
+
+def get_feasible_flow_assignment(graph: nx.DiGraph, commodities: List[Commodity]):
+    N = len(graph.edges())
+    K = len(commodities)
+    X_KE = np.zeros(shape=(N, K))
+    EDGE_INDEXING = get_edge_indexing(graph)
+    
+    for k, commodity in enumerate(commodities):
+        SOURCE = commodity.source
+        DESTINATION = commodity.destination
+        DEMAND = commodity.demand
+        path = nx.shortest_path(graph, SOURCE, DESTINATION)
+        for i in range(len(path) - 1):
+            edge = (path[i], path[i+1])
+            X_KE[EDGE_INDEXING[edge], k] = DEMAND
+    return X_KE
 
 
 if __name__ == '__main__':

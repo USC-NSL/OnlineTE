@@ -14,9 +14,9 @@ from te.algorithms.formulations.edge_based_distributed_admm import (
     DistributedEdgeBasedADMMLP, DistributedADMMSolverParams,
     SemiDistributedEdgeBasedADMMLP
 )
-from te.algorithms.utils import report_commodity_assignments
+from te.algorithms.utils import report_commodity_assignments, check_centralized_flow_conservation
 from topologies.utils import (
-    load_zoo_topology, get_capacity_lower_bound, 
+    load_zoo_topology, get_capacity_lower_bound,
     set_edge_capacity_to, make_graph_from_dict
 )
 
@@ -97,7 +97,8 @@ def zoo_test_1():
     with contextlib.closing(CentralizedEdgeBasedLP(graph, tm, solver_params)) as lp:
         lp.make_lp()
         t = lp.solve()
-        if t > 0:
+        if t >= 0:
+            lp.check()
             expected = lp.commodity_list
             result = lp.get_solution_commodity_list()
             unsatisfied = lp.get_ratio_of_unsatisfied_demands(solver_params)
@@ -175,8 +176,9 @@ def zoo_test_1_admm():
     print(f"Capacity lower bound is: {c_min}")
 
     solver_params = DistributedADMMSolverParams(
-        NumberOfEpochs=5,
-        NumberOfNetworkUpdates=10
+        NumberOfEpochs=1000,
+        NumberOfNetworkUpdates=3,
+        Alpha=0.01, Beta=1e-2
     )
     with contextlib.closing(DistributedEdgeBasedADMMLP(graph, tm, solver_params)) as lp:
     # with contextlib.closing(SemiDistributedEdgeBasedADMMLP(graph, tm, solver_params)) as lp:

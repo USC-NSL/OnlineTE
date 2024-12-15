@@ -92,3 +92,10 @@ class TrafficEngineeringLP(ABC):
         return the runtime of the model, or `-1` if it failed.
         """
         pass
+
+    @abstractmethod
+    def check(self):
+        """
+        Performs sanity checks on the current solution
+        """
+        pass

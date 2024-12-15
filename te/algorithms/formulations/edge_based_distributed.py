@@ -225,7 +225,7 @@ class DistributedEdgeBasedLP(TrafficEngineeringLP):
         Node objective is:
 
             \sum_k \sum_v \sum_{e \in E_v^{out}} (
-                f_{ke}(X_{ke}) + X_{ke} (\lambda_e + mu_{kv} - mu_{kv'}) 
+                f_{ke}(X_{ke}) + X_{ke} (\lambda_e + mu_{kv} - mu_{kv'})
             )
         """
 

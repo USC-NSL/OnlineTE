@@ -10,15 +10,19 @@ from gurobipy import GRB, GurobiError, quicksum
 from te.algorithms.base import TrafficEngineeringLP, GurobiSolverParams, SolverParams
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
 from topologies.utils import (get_edge_indexing, get_node_and_out_edge_index_mapping, 
-                              get_in_edge_mapping, get_edge_to_out_index_mapping)
+                              get_in_edge_mapping, get_edge_to_out_index_mapping,
+                              get_graph_M_matrix, get_adjacency_null_space,
+                              get_feasible_flow_assignment)
+from te.algorithms.utils import check_distributed_flow_conservation, check_centralized_flow_conservation
+
 
 @dataclass
 class DistributedADMMSolverParams(GurobiSolverParams):
     NumberOfEpochs: int = 1000
-    EpsilonKE: float = 1e-2
-    Rho: float = te.constants.DEFAULT_RHO
-    Beta: float = te.constants.DEFAULT_BETA
     NumberOfNetworkUpdates: int = te.constants.DEFAULT_NUMBER_OF_NETWORK_UPDATES
+    Rho: float = te.constants.DEFAULT_RHO
+    Alpha: float = te.constants.DEFAULT_ALPHA
+    Beta: float = te.constants.DEFAULT_BETA
     Seed: int = te.constants.DEFAULT_SEED
 
 
@@ -26,6 +30,8 @@ class DistributedEdgeBasedADMMLP(TrafficEngineeringLP):
     def __init__(self, graph: nx.DiGraph, traffic: TrafficMatrixBase, solver_params: DistributedADMMSolverParams) -> None:
         super().__init__()
         self._graph = graph
+        self._M = get_graph_M_matrix(graph)
+        self._N = get_adjacency_null_space(self._M)
         self._traffic = traffic
         self._solver_params = solver_params
         self._rng = np.random.default_rng(seed=solver_params.Seed)
@@ -36,6 +42,8 @@ class DistributedEdgeBasedADMMLP(TrafficEngineeringLP):
         self._in_edge_mapping: Dict[int, List[Tuple[int, int]]] = get_in_edge_mapping(graph)
         self._edge_out_indexing = get_edge_to_out_index_mapping(graph)
         self._out_degrees = {k: v for k, v in graph.out_degree()}
+        self._in_degree = {k: v for k, v in graph.in_degree()}
+        self._successors = {v: graph.successors(v) for v in graph.nodes(data=False)}
 
         self._env: gurobipy.Env = None
 
@@ -44,15 +52,20 @@ class DistributedEdgeBasedADMMLP(TrafficEngineeringLP):
         self._objective_controller: gurobipy.QuadExpr = None
         self._objective_nodes: List[gurobipy.QuadExpr] = None
         
-        self._X_ke: List[gurobipy.MVar] = None
         self._X_oe: List[gurobipy.MVar] = None
         self._Z_oe: List[np.ndarray] = None
         self._utility: gurobipy.Var = None
+
+        # This need not be managed by Gurobi
+        self._X_ke: np.ndarray = get_feasible_flow_assignment(graph, self._commodity_list)
+        # Just a sanity check ...
+        check_centralized_flow_conservation(self._X_ke, self._graph, self._commodity_list, self._solver_params.FeasibilityTol)
+
+        self._Y_vkt: List[np.ndarray] = None
+        self._P_vkt: List[gurobipy.MVar] = None
         
         self._re: List[np.ndarray] = None
-        self._mu: np.ndarray = None
-
-        # self._residual: Dict[Tuple[int, int], gurobipy.LinExpr] = None
+        self._mu: List[np.ndarray] = None
 
         self._objective_trace = []
 
@@ -81,19 +94,14 @@ class DistributedEdgeBasedADMMLP(TrafficEngineeringLP):
     @property
     def objective_trace(self) -> List[float]:
         return self._objective_trace
-
-    def _f_ke(self, x_ke: gurobipy.Var) -> gurobipy.QuadExpr:
-        return self._solver_params.EpsilonKE * x_ke ** 2
     
     def _initiate_dual_weights(self):
         M = len(self._graph.nodes)
-        K = len(self._commodity_list)
 
         self._re = [
             self._rng.random(size=(self._out_degrees[i]))
                 for i in range(M)
         ]
-        self._mu = self._rng.random(size=(K, M))
 
     def _make_variables(self):
         """
@@ -107,6 +115,10 @@ class DistributedEdgeBasedADMMLP(TrafficEngineeringLP):
         M = len(self._graph.nodes)
         K = len(self._commodity_list)
         OUT_DEGREES = self._out_degrees
+        IN_DEGREE = self._in_degree
+
+        (m, T) = self._N.shape
+        assert m == M
 
         ENV = gurobipy.Env()
         ENV.setParam('OutputFlag', 0)
@@ -130,51 +142,11 @@ class DistributedEdgeBasedADMMLP(TrafficEngineeringLP):
         # This need not be managed by Gurobi, since each step has a closed form solution
         self._Z_oe = [np.zeros((OUT_DEGREES[v],)) for v in range(M)]
 
-        self._X_ke = [
-            node_model.addVars(OUT_DEGREES[v], K, lb=0.0, vtype=GRB.CONTINUOUS, name=f'X_KE_{v}') \
+        # This we need not give to gurobi
+        self._Y_vkt = [
+            node_model.addVars(K, T, vtype=GRB.CONTINUOUS, name=f'Y_{v}')
                 for v, node_model in enumerate(MODEL_NODES)
         ]
-
-        # self._make_residual()
-    
-    # def _make_residual(self):
-    #     assert self._model_controller is not None and \
-    #            self._model_nodes is not None
-        
-    #     M = len(self._graph.nodes)
-    #     K = len(self._commodity_list)
-    #     COMMODITIES = self._commodity_list
-    #     OUT_DEGREES = self._out_degrees
-    #     OUT_EDGE_MAPPING = self._out_edge_mapping
-    #     X_KE = self._X_ke
-
-    #     flow_out = {k: defaultdict(list) for k in range(K)}
-    #     flow_in = {k: defaultdict(list) for k in range(K)}
-    #     residual: Dict[Tuple[int, int], gurobipy.LinExpr] = dict()
-
-    #     for k, commodity in enumerate(COMMODITIES):
-    #         SOURCE = commodity.source
-    #         DESTINATION = commodity.destination
-    #         DEMAND = commodity.demand
-
-    #         for v in range(M):
-    #             for i in range(OUT_DEGREES[v]):
-    #                 dst = OUT_EDGE_MAPPING[(v, i)][1]
-    #                 flow_out[k][v].append(X_KE[v][i, k])
-    #                 flow_in[k][dst].append(X_KE[v][i, k])
-        
-    #         for v in range(M):
-    #             if v == SOURCE:
-    #                 # Demand constraint from source
-    #                 residual[(k, v)] = quicksum(flow_out[v]) - DEMAND
-    #             elif v == DESTINATION:
-    #                 # Demand constraint in destination
-    #                 residual[(k, v)] = DEMAND - quicksum(flow_in[v])
-    #             else:
-    #                 # Flow conservation in transit
-    #                 residual[(k, v)] = quicksum(flow_out[v]) - quicksum(flow_in[v])
-        
-    #     self._residual = residual
 
     def _add_constraints(self):
         """
@@ -185,12 +157,12 @@ class DistributedEdgeBasedADMMLP(TrafficEngineeringLP):
                self._model_nodes is not None
 
         M = len(self._graph.nodes)
+        K = len(self._commodity_list)
         GRAPH = self._graph
-        OUT_INDEX_MAPPING = self._edge_out_indexing
         X_OE = self._X_oe
         X_KE = self._X_ke
+        Y_VKT = self._Y_vkt
         UTILITY = self._utility
-        COMMODITIES = self._commodity_list
         MODEL_CONTROLLER = self._model_controller
         MODEL_NODES = self._model_nodes
 
@@ -201,33 +173,12 @@ class DistributedEdgeBasedADMMLP(TrafficEngineeringLP):
                     for i, (_, _, c_e) in enumerate(GRAPH.out_edges(v, data='capacity'))
             )
         
-        # Demand constraints
-        for k, commodity in enumerate(COMMODITIES):
-            SOURCE = commodity.source
-            DESTINATION = commodity.destination
-            DEMAND = commodity.demand
-
-            flow_out = defaultdict(list)
-            flow_in = defaultdict(list)
-            for edge in GRAPH.edges():
-                v = edge[0]
-                i = OUT_INDEX_MAPPING[edge]
-                flow_out[edge[0]].append(X_KE[v][i, k])
-                flow_in[edge[1]].append(X_KE[v][i, k])
-            
-            for v in GRAPH.nodes():
-                node_model = MODEL_NODES[v]
-                if v == SOURCE:
-                    # Demand constraint from source
-                    node_model.addConstr(quicksum(flow_out[v]) == DEMAND)
-                    node_model.addConstr(quicksum(flow_in[v]) == 0)
-                elif v == DESTINATION:
-                    # Demand constraint in destination
-                    node_model.addConstr(quicksum(flow_in[v]) == DEMAND)
-                    node_model.addConstr(quicksum(flow_out[v]) == 0)
-                else:
-                    # Flow conservation in transit
-                    node_model.addConstr(quicksum(flow_out[v]) == quicksum(flow_in[v]))
+        # Non-negativity constraint
+        X_mins = np.min(X_KE, axis=0)
+        assert X_mins.shape == (K,)
+        for v, node_model in enumerate(MODEL_NODES):
+            for k in range(K):
+                node_model.addConstr(Y_VKT[v][k, :] >= X_mins[k])
     
     def _update_controller_objective(self):
         M = len(self._graph.nodes)
@@ -249,7 +200,7 @@ class DistributedEdgeBasedADMMLP(TrafficEngineeringLP):
             RHO/2 * quicksum([
                 quicksum([
                     (X_OE[v][i] - Z_OE[v][i] + RE[v][i]) ** 2
-                        for i in range(OUT_DEGREES[v])
+                    for i in range(OUT_DEGREES[v])
                 ]) for v in range(M)
             ])
         
@@ -260,29 +211,19 @@ class DistributedEdgeBasedADMMLP(TrafficEngineeringLP):
         M = len(self._graph.nodes)
         K = len(self._commodity_list)
         OUT_DEGREES = self._out_degrees
+        IN_DEGREE = self._in_degree
         Z_OE = self._Z_oe
         X_KE = self._X_ke
+        Y_VKT = self._Y_vkt
+        N = self._N
         RE = self._re
-        MU = self._mu
         RHO = self._solver_params.Rho
-        BETA = self._solver_params.Beta
-        # RESIDUAL = self._residual
         MODEL_NODES = self._model_nodes
 
         """
         The node objective is:
             \sum_{e \in E_v^{out}} (
-                \sum_k (f_ke(X_ke) + rho/2 * (\sum_k X_ke - Z_oe - r_e)^2 
-            ) + 
-            \sum_k (
-                \mu_kv * (
-                    \sum_{e \in E_v^{out}}{X_ke} - \sum_{e \in E_v^{in}}{X_ke} - b_k d_k
-                )
-            ) + 
-            \sum_k (
-                beta/2 * (
-                    \sum_{e \in E_v^{out}}{X_ke} - \sum_{e \in E_v^{in}}{X_ke} - b_k d_k
-                )^2
+                rho/2 * (\sum_k X_ke - Z_oe - r_e)^2
             )
         """
 
@@ -290,12 +231,11 @@ class DistributedEdgeBasedADMMLP(TrafficEngineeringLP):
             quicksum([
                 RHO/2 * (X_KE[v].sum(i, '*') - Z_OE[v][i] - RE[v][i]) ** 2
                 for i in range(OUT_DEGREES[v])
+            ]) + quicksum([
+                ETA/2 * quicksum([
+                    (Y_KE[v][i, k] - TY_KE[v][i, k]) ** 2 for k in range(K)
+                ]) for i in range(IN_DEGREE[v])
             ])
-            # ]) + quicksum([
-            #     MU[k, v] * RESIDUAL[(k, v)] for k in range(K)
-            # ]) + quicksum([
-            #     BETA/2 * RESIDUAL[(k, v)] ** 2 for k in range(K)
-            # ])
             for v in range(M)
         ]
         assert len(OBJECTIVE_NODES) == len(MODEL_NODES)
@@ -309,6 +249,23 @@ class DistributedEdgeBasedADMMLP(TrafficEngineeringLP):
 
         self._update_controller_objective()
         self._update_node_objective()
+    
+    def _update_T_ke(self):
+        assert self._model_controller is not None and \
+               self._model_nodes is not None
+
+        M = len(self._graph.nodes)
+        K = len(self._commodity_list)
+        IN_EDGE_MAPPING = self._in_edge_mapping
+        X_KE = self._X_ke
+        TY_KE = self._TY_ke
+        Y_KE = self._Y_ke
+
+        for v in range(M):
+            in_edges = IN_EDGE_MAPPING[v]
+            for in_index, (sender_node, out_index) in enumerate(in_edges):
+                for k in range(K):
+                    TY_KE[v][in_index, k] = (X_KE[sender_node][out_index, k].X + Y_KE[v][in_index, k].X) / 2
     
     def _update_re(self):
         assert self._model_controller is not None and \
@@ -349,19 +306,8 @@ class DistributedEdgeBasedADMMLP(TrafficEngineeringLP):
         for v in range(M):
             for i in range(OUT_DEGREES[v]):
                 Z_OE[v][i] = (
-                    X_OE[v][i].X + X_KE[v].sum(i, '*').getValue()
+                    X_OE[v][i].X + X_KE[v].sum(i, '*').getValue() 
                 ) / 2
-
-    # def _update_mu(self, v: int):
-    #     assert self._model_controller is not None and \
-    #            self._model_nodes is not None
-        
-    #     PARAMS = self._solver_params
-    #     MU = self._mu
-    #     RESIDUAL = self._residual
-
-    #     for (k, v), value in RESIDUAL.items():
-    #         MU[(k, v)] += PARAMS.Beta * value.getValue()
     
     def close(self):
         self._model_controller.close()
@@ -391,24 +337,22 @@ class DistributedEdgeBasedADMMLP(TrafficEngineeringLP):
         MODEL_NODES = self._model_nodes
         PARAMS = self._solver_params
 
-        total_runtime = 0
-        t_nodes = {v: [] for v in range(len(MODEL_NODES))}
+        # total_runtime = 0
+        # t_nodes = {v: [] for v in range(len(MODEL_NODES))}
 
         try:
             for _ in tqdm.tqdm(range(PARAMS.NumberOfEpochs)):
-                # First, concurrently solve both controller and network models
                 MODEL_CONTROLLER.optimize()
                 if MODEL_CONTROLLER.Status != GRB.OPTIMAL:
                     raise RuntimeError(f"Optimization for controller returned non-optimal status: {MODEL_CONTROLLER.Status}")
-                # for _ in range(PARAMS.NumberOfNetworkUpdates):
-                for v, node_model in enumerate(MODEL_NODES):
-                    node_model.optimize()
-                    if node_model.Status != GRB.OPTIMAL:
-                        raise RuntimeError(f"Optimization for node {v} returned non-optimal status: {node_model.Status}")
-                    t_nodes[v].append(node_model.Runtime)
-                # for v in range(len(MODEL_NODES)):
-                #     self._update_mu(v)
-                # self._update_node_objective()
+                
+                for _ in range(PARAMS.NumberOfNetworkUpdates):
+                    for v, node_model in enumerate(MODEL_NODES):
+                        node_model.optimize()
+                        if node_model.Status != GRB.OPTIMAL:
+                            raise RuntimeError(f"Optimization for node {v} returned non-optimal status: {node_model.Status}")
+                    self._update_T_ke()
+                    self._update_node_objective()
 
                 # Second, update Z_oe and r_e
                 self._update_Z_oe()
@@ -421,55 +365,77 @@ class DistributedEdgeBasedADMMLP(TrafficEngineeringLP):
                 # Houskeeping
                 self._objective_trace.append(self._utility.X)
                 # print(f"Controller solver time: {MODEL_CONTROLLER.Runtime}")
-                total_node = max(sum(t_nodes[v]) for v in range(len(MODEL_NODES)))
+                # total_node = max(sum(t_nodes[v]) for v in range(len(MODEL_NODES)))
                 # print(f"Node solver time: {total_node}")
-                total_runtime += max(MODEL_CONTROLLER.Runtime, total_node)
-                for k in t_nodes.keys():
-                    t_nodes[k].clear()
+                # total_runtime += max(MODEL_CONTROLLER.Runtime, total_node)
+                # for k in t_nodes.keys():
+                #     t_nodes[k].clear()
 
-            return total_runtime
+            # return total_runtime
+            return 10
         except GurobiError as e:
             print(f'Error code {e.errno}: {e}')
             return -1
+    
+    def check(self):
+        X_OE = self._X_oe
+        Z_OE = self._Z_oe
+        X_KE = self._X_ke
+        OUT_DEGREE = self._out_degrees
+        PARAMS = self._solver_params
+
+        for v in range(len(X_OE)):
+            for i in range(OUT_DEGREE[v]):
+                primal = X_OE[v][i].X
+                pair = Z_OE[v][i]
+                primal_str = str(np.round(primal, 4))
+                pair_str = str(np.round(pair, 4))
+                assert abs(primal - pair) < 2*PARAMS.FeasibilityTol, \
+                    f"Node {v}: Edge {i} --> ADMM pairing is not in consensus with primal variable: {primal_str} vs {pair_str}"
+        
+        check_distributed_flow_conservation(
+            X_KE, self._graph, self._edge_out_indexing, self._commodity_list,
+            PARAMS.FeasibilityTol
+        )
 
     def get_solution_commodity_list(self) -> List[Commodity]:
         COMMODITIES = self._commodity_list
         X_KE = self._X_ke
-        X_OE = self._X_oe
-        Z_OE = self._Z_oe
-        OUT_DEGREE = self._out_degrees
+        OUT_INDEX_MAPPING = self._edge_out_indexing
+        GRAPH = self._graph
 
-        for v in range(len(X_OE)):
-            for i in range(OUT_DEGREE[v]):
-                print(f"X = {X_OE[v][i].X} vs. Z = {Z_OE[v][i]}")
+        out_and_in: Dict[Tuple[int, int], Tuple[int, int]] = dict()
 
-        # TODO: WHY DO WE NEED `max` !?
+        for k, commodity in enumerate(COMMODITIES):
+            SOURCE = commodity.source
+            DESTINATION = commodity.destination
+
+            flow_out = []
+            flow_in = []
+            for s, d in GRAPH.edges(data=False):
+                i = OUT_INDEX_MAPPING[(s, d)]
+                if s == SOURCE:
+                    flow_out.append(X_KE[s][i, k].X)
+                if d == DESTINATION:
+                    flow_in.append(X_KE[s][i, k].X)
+            
+            out_and_in[(SOURCE, DESTINATION)] = (sum(flow_out), sum(flow_in))
 
         return [
-            Commodity(
-                source=commodity.source,
-                destination=commodity.destination,
-                demand=X_KE[commodity.source].sum('*', i).getValue()
+            (
+                Commodity(
+                    source=source_dest[0],
+                    destination=source_dest[1],
+                    demand=fout_fin[0]
+                ),
+                Commodity(
+                    source=source_dest[0],
+                    destination=source_dest[1],
+                    demand=fout_fin[1]
+                )
             )
-            for i, commodity in enumerate(COMMODITIES)
+            for source_dest, fout_fin in out_and_in.items()
         ]
-    
-    # def get_ratio_of_unsatisfied_demands(self, params: DistributedSolverParams, solution: List[Commodity] = None) -> float:
-    #     COMMODITIES = self._commodity_list
-    #     K = len(COMMODITIES)
-    #     if solution is None:
-    #         solution = self.get_solution_commodity_list()
-    #     assert len(solution) == K
-
-    #     k = 0
-    #     for actual, ideal in zip(solution, COMMODITIES):
-    #         assert actual.source == ideal.source
-    #         assert actual.destination == ideal.destination
-    #         if abs(actual.demand - ideal.demand) > params.FeasibilityTol * 2:
-    #             print(f"COULD NOT SATISFY {actual.source} -> {actual.destination}: {actual.demand} vs {ideal.demand}")
-    #             k += 1
-
-    #     return k / K
 
 
 class SemiDistributedEdgeBasedADMMLP(TrafficEngineeringLP):
@@ -614,7 +580,7 @@ class SemiDistributedEdgeBasedADMMLP(TrafficEngineeringLP):
                 flow_out[edge[0]].append(X_KE[v][i, k])
                 flow_in[edge[1]].append(X_KE[v][i, k])
 
-            for v in GRAPH.nodes():
+            for v in GRAPH.nodes(data=False):
                 if v == SOURCE:
                     # Demand constraint from source
                     MODEL_NETWORK.addConstr(quicksum(flow_out[v]) == DEMAND)
@@ -777,41 +743,62 @@ class SemiDistributedEdgeBasedADMMLP(TrafficEngineeringLP):
             print(f'Error code {e.errno}: {e}')
             return -1
 
-    def get_solution_commodity_list(self) -> List[Commodity]:
-        COMMODITIES = self._commodity_list
-        X_KE = self._X_ke
+    def check(self):
         X_OE = self._X_oe
         Z_OE = self._Z_oe
+        X_KE = self._X_ke
         OUT_DEGREE = self._out_degrees
+        PARAMS = self._solver_params
 
         for v in range(len(X_OE)):
             for i in range(OUT_DEGREE[v]):
-                print(f"X = {X_OE[v][i].X} vs. Z = {Z_OE[v][i]}")
+                primal = X_OE[v][i].X
+                pair = Z_OE[v][i]
+                primal_str = str(np.round(primal, 4))
+                pair_str = str(np.round(pair, 4))
+                assert abs(primal - pair) < 2*PARAMS.FeasibilityTol, \
+                    f"Node {v}: Edge {i} --> ADMM pairing is not in consensus with primal variable: {primal_str} vs {pair_str}"
+        
+        check_distributed_flow_conservation(
+            X_KE, self._graph, self._edge_out_indexing, self._commodity_list,
+            PARAMS.FeasibilityTol
+        )
 
-        # TODO: WHY DO WE NEED `max` !?
+    def get_solution_commodity_list(self) -> List[Commodity]:
+        COMMODITIES = self._commodity_list
+        X_KE = self._X_ke
+        OUT_INDEX_MAPPING = self._edge_out_indexing
+        GRAPH = self._graph
+
+        out_and_in: Dict[Tuple[int, int], Tuple[int, int]] = dict()
+
+        for k, commodity in enumerate(COMMODITIES):
+            SOURCE = commodity.source
+            DESTINATION = commodity.destination
+
+            flow_out = []
+            flow_in = []
+            for s, d in GRAPH.edges(data=False):
+                i = OUT_INDEX_MAPPING[(s, d)]
+                if s == SOURCE:
+                    flow_out.append(X_KE[s][i, k].X)
+                if d == DESTINATION:
+                    flow_in.append(X_KE[s][i, k].X)
+            
+            out_and_in[(SOURCE, DESTINATION)] = (sum(flow_out), sum(flow_in))
 
         return [
-            Commodity(
-                source=commodity.source,
-                destination=commodity.destination,
-                demand=X_KE[commodity.source].sum('*', i).getValue()
+            (
+                Commodity(
+                    source=source_dest[0],
+                    destination=source_dest[1],
+                    demand=fout_fin[0]
+                ),
+                Commodity(
+                    source=source_dest[0],
+                    destination=source_dest[1],
+                    demand=fout_fin[1]
+                )
             )
-            for i, commodity in enumerate(COMMODITIES)
+            for source_dest, fout_fin in out_and_in.items()
         ]
-    
-    # def get_ratio_of_unsatisfied_demands(self, params: DistributedSolverParams, solution: List[Commodity] = None) -> float:
-    #     COMMODITIES = self._commodity_list
-    #     K = len(COMMODITIES)
-    #     if solution is None:
-    #         solution = self.get_solution_commodity_list()
-    #     assert len(solution) == K
-
-    #     k = 0
-    #     for actual, ideal in zip(solution, COMMODITIES):
-    #         assert actual.source == ideal.source
-    #         assert actual.destination == ideal.destination
-    #         if abs(actual.demand - ideal.demand) > params.FeasibilityTol * 2:
-    #             print(f"COULD NOT SATISFY {actual.source} -> {actual.destination}: {actual.demand} vs {ideal.demand}")
-    #             k += 1
-
-    #     return k / K

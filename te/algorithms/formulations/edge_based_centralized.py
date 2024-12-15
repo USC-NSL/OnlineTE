@@ -1,11 +1,12 @@
 import gurobipy
 import networkx as nx
-from typing import List
+from typing import List, Tuple
 from collections import defaultdict
 from gurobipy import GRB, GurobiError, quicksum
 from te.algorithms.base import TrafficEngineeringLP, SolverParams, GurobiSolverParams
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
 from topologies.utils import get_edge_indexing
+from te.algorithms.utils import check_centralized_flow_conservation
 
 
 class CentralizedEdgeBasedLP(TrafficEngineeringLP):
@@ -14,12 +15,12 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
         self._graph = graph
         self._edge_indexing = get_edge_indexing(graph)
         self._traffic = traffic
-        self._solver_params = solver_params
-        self._model = None
-        self._flows = None
-        self._utility = None
-        self._objective = None
-        self._commodity_list = traffic_to_commodity(self._traffic)
+        self._solver_params: GurobiSolverParams = solver_params
+        self._model: gurobipy.Model = None
+        self._flows: gurobipy.MVar = None
+        self._utility: gurobipy.Var = None
+        self._objective: gurobipy.LinExpr = None
+        self._commodity_list: List[Commodity] = traffic_to_commodity(self._traffic)
     
     @property
     def graph(self) -> nx.DiGraph:
@@ -31,7 +32,7 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
 
     @property
     def params(self) -> SolverParams:
-        return self._params
+        return self._solver_params
     
     @property
     def commodity_list(self) -> List[Commodity]:
@@ -166,25 +167,33 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
             print(f'Error code {e.errno}: {e}')
             return -1
 
+    def check(self):
+        PARAMS: GurobiSolverParams = self._solver_params
+        check_centralized_flow_conservation(
+            self._flows, self._graph, self._commodity_list,
+            PARAMS.FeasibilityTol
+        )
     
-    def get_solution_commodity_list(self) -> List[Commodity]:
+    def get_solution_commodity_list(self) -> List[Tuple[Commodity, Commodity]]:
         COMMODITIES = self._commodity_list
         FLOWS = self._flows
         GRAPH = self._graph
         INDICES = self._edge_indexing
 
-        # TODO: WHY DO WE NEED `max` !?
-
         return [
-            Commodity(
-                source=commodity.source,
-                destination=commodity.destination,
-                demand=max(
-                    sum([
+            (
+                Commodity(
+                    source=commodity.source,
+                    destination=commodity.destination,
+                    demand=sum([
                         FLOWS[INDICES[(v, commodity.destination)], i].X \
                             for v in GRAPH.predecessors(commodity.destination)
-                    ]),
-                    sum([
+                    ])
+                ),
+                Commodity(
+                    source=commodity.source,
+                    destination=commodity.destination,
+                    demand=sum([
                         FLOWS[INDICES[(commodity.source, v)], i].X \
                             for v in GRAPH.successors(commodity.source)
                     ])
@@ -193,7 +202,7 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
             for i, commodity in enumerate(COMMODITIES)
         ]
     
-    def get_ratio_of_unsatisfied_demands(self, params: GurobiSolverParams, solution: List[Commodity] = None) -> float:
+    def get_ratio_of_unsatisfied_demands(self, params: GurobiSolverParams, solution: List[Tuple[Commodity, Commodity]] = None) -> float:
         COMMODITIES = self._commodity_list
         K = len(COMMODITIES)
         if solution is None:
@@ -202,10 +211,12 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
 
         k = 0
         for actual, ideal in zip(solution, COMMODITIES):
-            assert actual.source == ideal.source
-            assert actual.destination == ideal.destination
-            if abs(actual.demand - ideal.demand) > params.FeasibilityTol * 2:
-                print(f"COULD NOT SATISFY {actual.source} -> {actual.destination}: {actual.demand} vs {ideal.demand}")
+            assert actual[0].source == ideal.source
+            assert actual[0].destination == ideal.destination
+            assert actual[1].source == ideal.source
+            assert actual[1].destination == ideal.destination
+            if abs(actual[0].demand - ideal.demand) > params.FeasibilityTol * 2:
+                print(f"COULD NOT SATISFY {actual[0].source} -> {actual[0].destination}: {actual[0].demand} vs {ideal.demand}")
                 k += 1
 
         return k / K
