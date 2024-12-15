@@ -176,9 +176,8 @@ def zoo_test_1_admm():
     print(f"Capacity lower bound is: {c_min}")
 
     solver_params = DistributedADMMSolverParams(
-        NumberOfEpochs=1000,
-        NumberOfNetworkUpdates=3,
-        Alpha=0.01, Beta=1e-2
+        NumberOfEpochs=20,
+        NumberOfNetworkUpdates=5
     )
     with contextlib.closing(DistributedEdgeBasedADMMLP(graph, tm, solver_params)) as lp:
     # with contextlib.closing(SemiDistributedEdgeBasedADMMLP(graph, tm, solver_params)) as lp:

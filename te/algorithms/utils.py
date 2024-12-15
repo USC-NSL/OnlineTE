@@ -7,6 +7,12 @@ from collections import defaultdict
 from te.traffic_models.base import Commodity
 
 
+def optimize_or_scream(model: gurobipy.Model):
+    model.optimize()
+    if model.Status != gurobipy.GRB.OPTIMAL:
+        raise RuntimeError(f"Optimizing model {model.ModelName} returned non-optimal status: {model.Status}")
+
+
 def report_commodity_assignments(expected: List[Commodity], actual: List[Tuple[Commodity, Commodity]], unsatisfied: float, verbose: bool = True):
     assert len(expected) == len(actual)
 
