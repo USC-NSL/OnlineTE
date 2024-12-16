@@ -38,11 +38,11 @@ def report_commodity_assignments(expected: List[Commodity], actual: List[Tuple[C
 
 
 def check_centralized_flow_conservation(
-        flows: Union[gurobipy.MVar, np.ndarray], graph: nx.DiGraph, commodities: List[Commodity], 
+        flows: Union[gurobipy.tupledict, np.ndarray], graph: nx.DiGraph, commodities: List[Commodity], 
         feasibility_tol: float = te.constants.DEFAULT_FEASIBILITY_TOLERANCE
     ):
 
-    IS_GUROBI_VAR = isinstance(flows, gurobipy.MVar)
+    IS_GUROBI_VAR = isinstance(flows, gurobipy.tupledict)
 
     for k, commodity in enumerate(commodities):
         SOURCE = commodity.source

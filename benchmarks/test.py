@@ -11,8 +11,10 @@ from te.algorithms.formulations.edge_based_distributed_parallel import (
     DistributedParallelSolverNodeParams, DistributedParallelSolverControllerParams
 )
 from te.algorithms.formulations.edge_based_distributed_admm import (
-    DistributedEdgeBasedADMMLP, DistributedADMMSolverParams,
-    SemiDistributedEdgeBasedADMMLP
+    DistributedEdgeBasedADMMLP, DistributedADMMSolverParams
+)
+from te.algorithms.formulations.edge_based_distributed_admm_debug import (
+    SemiDistributedEdgeBasedADMMLP, DistributedADMMDebugSolverParams
 )
 from te.algorithms.utils import report_commodity_assignments, check_centralized_flow_conservation
 from topologies.utils import (
@@ -177,15 +179,13 @@ def zoo_test_1_admm():
 
     solver_params = DistributedADMMSolverParams(
         NumberOfEpochs=20,
-        NumberOfNetworkUpdates=5
+        NumberOfNetworkUpdates=3
     )
     with contextlib.closing(DistributedEdgeBasedADMMLP(graph, tm, solver_params)) as lp:
-    # with contextlib.closing(SemiDistributedEdgeBasedADMMLP(graph, tm, solver_params)) as lp:
         lp.make_lp()
         t = lp.solve()
         expected = lp.commodity_list
         result = lp.get_solution_commodity_list()
-        # unsatisfied = lp.get_ratio_of_unsatisfied_demands(solver_params)
         report_commodity_assignments(expected, result, 0.0)
         print(f"Solved in {t} seconds.")
         print(f"Final utilization value: {lp._utility.X}")
@@ -243,7 +243,7 @@ def zoo_test_3():
             print(f"Solved in {t} seconds. Final objective value: {lp.objective_value}")
 
 
-def zoo_test_4():
+def centralized_test_medium():
     graph = load_zoo_topology('Interoute')
     
     tm_params = UniformTrafficMatrixParams(
@@ -267,6 +267,34 @@ def zoo_test_4():
             print(f"Solved in {t} seconds. Final objective value: {lp.objective_value}")
 
 
+def admm_test_medium():
+    graph = load_zoo_topology('Interoute')
+    
+    tm_params = UniformTrafficMatrixParams(
+        n = len(graph.nodes), min = 0.0, max = 1.0
+    )
+    tm = get_traffic_model('Uniform')(seed=12345, params=tm_params)
+    
+    c_min = get_capacity_lower_bound(graph, tm)
+    set_edge_capacity_to(graph, c_min*10)
+    print(f"Capacity lower bound is: {c_min}")
+
+    solver_params = DistributedADMMSolverParams(
+        NumberOfEpochs=20,
+        NumberOfNetworkUpdates=3
+    )
+    with contextlib.closing(DistributedEdgeBasedADMMLP(graph, tm, solver_params)) as lp:
+        lp.make_lp()
+        t = lp.solve()
+        expected = lp.commodity_list
+        result = lp.get_solution_commodity_list()
+        report_commodity_assignments(expected, result, 0.0)
+        print(f"Solved in {t} seconds.")
+        print(f"Final utilization value: {lp._utility.X}")
+        plt.plot(lp.objective_trace)
+        plt.show()
+
+
 if __name__ == '__main__':
     # toy_test_1()
     # zoo_test_1()
@@ -278,5 +306,7 @@ if __name__ == '__main__':
     # toy_test_2()
     # zoo_test_1()
     # zoo_test_1_dist()
-    zoo_test_1_admm()
+    # zoo_test_1_admm()
     # zoo_test_1_dist_parallel()
+    # centralized_test_medium()
+    admm_test_medium()
