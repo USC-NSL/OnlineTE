@@ -16,6 +16,7 @@ from te.algorithms.formulations.edge_based_distributed_admm import (
 from te.algorithms.formulations.edge_based_distributed_admm_debug import (
     SemiDistributedEdgeBasedADMMLP, DistributedADMMDebugSolverParams
 )
+from te.algorithms.formulations.edge_based_regularized_admm import RegularizedADMMLP, RegularizedADMMSolverParams
 from te.algorithms.utils import report_commodity_assignments, check_centralized_flow_conservation
 from topologies.utils import (
     load_zoo_topology, get_capacity_lower_bound,
@@ -243,6 +244,31 @@ def zoo_test_3():
             print(f"Solved in {t} seconds. Final objective value: {lp.objective_value}")
 
 
+def centralized_test_small():
+    graph = load_zoo_topology('Claranet')
+    
+    tm_params = UniformTrafficMatrixParams(
+        n = len(graph.nodes), min = 0.0, max = 1.0
+    )
+    tm = get_traffic_model('Uniform')(seed=12345, params=tm_params)
+    
+    c_min = get_capacity_lower_bound(graph, tm)
+    set_edge_capacity_to(graph, c_min*10)
+    print(f"Capacity lower bound is: {c_min}")
+
+    solver_params = GurobiSolverParams()
+    with contextlib.closing(CentralizedEdgeBasedLP(graph, tm, solver_params)) as lp:
+        lp.make_lp()
+        t = lp.solve()
+        if t > 0:
+            lp.check()
+            expected = lp.commodity_list
+            result = lp.get_solution_commodity_list()
+            unsatisfied = lp.get_ratio_of_unsatisfied_demands(solver_params)
+            report_commodity_assignments(expected, result, unsatisfied)
+            print(f"Solved in {t} seconds. Final objective value: {lp.objective_value}")
+
+
 def centralized_test_medium():
     graph = load_zoo_topology('Interoute')
     
@@ -295,6 +321,70 @@ def admm_test_medium():
         plt.show()
 
 
+def regularized_admm_test_small():
+    graph = load_zoo_topology('Claranet')
+    
+    tm_params = UniformTrafficMatrixParams(
+        n = len(graph.nodes), min = 0.0, max = 1.0
+    )
+    tm = get_traffic_model('Uniform')(seed=12345, params=tm_params)
+    
+    c_min = get_capacity_lower_bound(graph, tm)
+    set_edge_capacity_to(graph, c_min*10)
+    print(f"Capacity lower bound is: {c_min}")
+
+    solver_params = RegularizedADMMSolverParams(
+        NumberOfEpochs=10,
+        NumberOfNetworkUpdates=10,
+        Epsilon=1,
+        Eta=1e-3,
+        Rho=1e-3
+    )
+    with contextlib.closing(RegularizedADMMLP(graph, tm, solver_params)) as lp:
+        lp.make_lp()
+        t = lp.solve()
+        if t > 0:
+            # lp.check()
+            expected = lp.commodity_list
+            result = lp.get_solution_commodity_list()
+            report_commodity_assignments(expected, result, 0.0)
+            print(f"Solved in {t} seconds.")
+            print(f"Final utilization value: {lp._utility.X}")
+            plt.plot(lp.objective_trace)
+            plt.show()
+
+
+def regularized_admm_test_medium():
+    graph = load_zoo_topology('Interoute')
+    
+    tm_params = UniformTrafficMatrixParams(
+        n = len(graph.nodes), min = 0.0, max = 1.0
+    )
+    tm = get_traffic_model('Uniform')(seed=12345, params=tm_params)
+    
+    c_min = get_capacity_lower_bound(graph, tm)
+    set_edge_capacity_to(graph, c_min*10)
+    print(f"Capacity lower bound is: {c_min}")
+
+    solver_params = RegularizedADMMSolverParams(
+        NumberOfEpochs=20,
+        NumberOfNetworkUpdates=10,
+        Epsilon=1e-3,
+        Rho=1e-3
+    )
+    with contextlib.closing(RegularizedADMMLP(graph, tm, solver_params)) as lp:
+        lp.make_lp()
+        t = lp.solve()
+        if t > 0:
+            expected = lp.commodity_list
+            result = lp.get_solution_commodity_list()
+            report_commodity_assignments(expected, result, 0.0)
+            print(f"Solved in {t} seconds.")
+            print(f"Final utilization value: {lp._utility.X}")
+            plt.plot(lp.objective_trace)
+            plt.show()
+
+
 if __name__ == '__main__':
     # toy_test_1()
     # zoo_test_1()
@@ -309,4 +399,7 @@ if __name__ == '__main__':
     # zoo_test_1_admm()
     # zoo_test_1_dist_parallel()
     # centralized_test_medium()
-    admm_test_medium()
+    # admm_test_medium()
+    # centralized_test_small()
+    # regularized_admm_test_small()
+    regularized_admm_test_medium()

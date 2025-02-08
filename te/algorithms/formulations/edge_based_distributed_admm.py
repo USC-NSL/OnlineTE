@@ -338,12 +338,12 @@ class DistributedEdgeBasedADMMLP(TrafficEngineeringLP):
         not a terrible prospect.
         We introduce the auxiliary variable:
 
-            P_SUM^(v)_t := \sum_k P^v()_tk
+            P_SUM^(v)_t := \sum_k P^(v)_tk
         
         Which allows us to write the first part of the objective as:
 
             \sum_{e \in E_v^{out}} (
-                rho/2 * (\sum_t N_et P_SUM^(v)_t - F_e)^2 +
+                rho/2 * (\sum_t N_et P_SUM^(v)_t - F_e)^2
             )
 
         Which can be easily expanded and written as a normal QuadExpr.
