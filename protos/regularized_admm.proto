@@ -1,0 +1,24 @@
+syntax = "proto3";
+import "google/protobuf/empty.proto";
+
+service RegularizedADMMSolver {
+    rpc Optimize (google.protobuf.Empty) returns (OptimizationRuntime) {}
+    rpc GatherXEK (google.protobuf.Empty) returns (SerializedNumpyArrayMessage) {}
+    rpc GatherYSum (google.protobuf.Empty) returns (SerializedNumpyArrayMessage) {}
+    rpc GatherXKSum (google.protobuf.Empty) returns (SerializedNumpyArrayMessage) {}
+    rpc ScatterInnerADMMLoopUpdates (NodeObjectiveUpdateMessage) returns (google.protobuf.Empty) {}
+}
+
+message OptimizationRuntime {
+    float runtime = 1;
+}
+
+message SerializedNumpyArrayMessage {
+    bytes array = 1;
+}
+
+message NodeObjectiveUpdateMessage {
+    SerializedNumpyArrayMessage Y_BAR_T = 1;
+    SerializedNumpyArrayMessage P_BAR_T = 2;
+    SerializedNumpyArrayMessage U_T = 3;
+}

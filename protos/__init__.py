@@ -8,7 +8,8 @@ COMPILE_PROTO = f'python3 -m grpc_tools.protoc -I {PROTO_PATH} ' \
                 '--python_out={pyout} --pyi_out={pyiout} --grpc_python_out={grpcout} {protobuf}'
 
 PROTOS = [
-    'distributed_lp.proto'
+    'distributed_lp.proto',
+    'regularized_admm.proto'
 ]
 
 def make_proto_dir(proto: str) -> Tuple[str, str]:
