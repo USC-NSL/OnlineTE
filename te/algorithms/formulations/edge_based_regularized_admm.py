@@ -181,7 +181,7 @@ class RegularizedADMMLP(TrafficEngineeringLP):
 
         # This one is just a list of K vectors, each of length `T`
         self._Y_tk = [
-            model.addVars(T, vtype=GRB.CONTINUOUS, name=f'Y_{k}') for k, model in enumerate(MODEL_NODES)
+            model.addVars(T, lb=-float('inf'), vtype=GRB.CONTINUOUS, name=f'Y_{k}') for k, model in enumerate(MODEL_NODES)
         ]
     
     def _get_F(self) -> np.ndarray:

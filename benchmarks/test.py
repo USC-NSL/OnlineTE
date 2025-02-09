@@ -334,9 +334,9 @@ def regularized_admm_test_small():
     print(f"Capacity lower bound is: {c_min}")
 
     solver_params = RegularizedADMMSolverParams(
-        NumberOfEpochs=10,
+        NumberOfEpochs=50,
         NumberOfNetworkUpdates=10,
-        Epsilon=1,
+        Epsilon=1e-4,
         Eta=1e-3,
         Rho=1e-3
     )
@@ -401,5 +401,5 @@ if __name__ == '__main__':
     # centralized_test_medium()
     # admm_test_medium()
     # centralized_test_small()
-    # regularized_admm_test_small()
-    regularized_admm_test_medium()
+    regularized_admm_test_small()
+    # regularized_admm_test_medium()
