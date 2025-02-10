@@ -369,12 +369,12 @@ def mp_regularized_admm_test_small():
     solver_params = MultiProcessesorRegularizedADMMSolverParams(
         NumberOfNodeProcesses=10,
         NumberOfEpochs=50,
-        NumberOfNetworkUpdates=10,
+        NumberOfNetworkUpdates=3,
         Epsilon=1e-4,
         Eta=1e-3,
         Rho=1e-3
     )
-    with contextlib.closing(RegularizedADMMLP(graph, tm, solver_params)) as lp:
+    with contextlib.closing(MultiProcessorRegularizedADMMLP(graph, tm, solver_params)) as lp:
         lp.make_lp()
         t = lp.solve()
         if t > 0:
@@ -383,7 +383,7 @@ def mp_regularized_admm_test_small():
             result = lp.get_solution_commodity_list()
             report_commodity_assignments(expected, result, 0.0)
             print(f"Solved in {t} seconds.")
-            print(f"Final utilization value: {lp._utility.X}")
+            print(f"Final utilization value: {lp._controller_lp._utility.X}")
             plt.plot(lp.objective_trace)
             plt.show()
 

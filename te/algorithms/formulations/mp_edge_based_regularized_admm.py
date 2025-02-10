@@ -30,7 +30,8 @@ class MultiProcessesorRegularizedADMMSolverParams(GurobiSolverParams):
 
 
 class ControllerModel(TrafficEngineeringLP):
-    def __init__(self, graph: nx.DiGraph, solver_params: MultiProcessesorRegularizedADMMSolverParams):
+    def __init__(self, graph: nx.DiGraph, solver_params: MultiProcessesorRegularizedADMMSolverParams,
+                 Xo_e_start: np.ndarray):
         super().__init__()
         self._graph = graph
         self._solver_params = solver_params
@@ -43,7 +44,7 @@ class ControllerModel(TrafficEngineeringLP):
         self._objective_controller: Optional[gurobipy.QuadExpr] = None
 
         # Both just vectors of length `n`
-        self._Xo_e_start: Optional[np.ndarray] = None
+        self._Xo_e_start: np.ndarray = Xo_e_start
         self._Xo_e: Optional[gurobipy.tupledict] = None
         self._Zo_e: Optional[np.ndarray] = None
         # Just a variable between 0 and 1
@@ -218,10 +219,9 @@ class ControllerModel(TrafficEngineeringLP):
 
 
 class NodeModel(TrafficEngineeringLP):
-    def __init__(self, K: int, commodity_mapping: Dict[int, int], commodities: List[Commodity], 
-                 X_ek_start: np.ndarray, NULL_M: np.ndarray, solver_params: MultiProcessesorRegularizedADMMSolverParams):
+    def __init__(self, K: int, commodities: List[Commodity], X_ek_start: np.ndarray, 
+                 NULL_M: np.ndarray, solver_params: MultiProcessesorRegularizedADMMSolverParams):
         super().__init__()
-        self._commodity_mapping = commodity_mapping
         self._commodity_list = commodities
         self._NULL_M: np.ndarray = NULL_M
         self._solver_params = solver_params
@@ -299,7 +299,6 @@ class NodeModel(TrafficEngineeringLP):
         ]
     
     def _get_X_ek_local(self, e: int, k: int) -> gurobipy.LinExpr:
-        assert k >= 0 and k < len(self._commodity_list)
         T = self._T
         NULL_M = self._NULL_M
         Y_K_t = self._Y_tk[k]
@@ -309,23 +308,16 @@ class NodeModel(TrafficEngineeringLP):
             exp.addTerms(NULL_M[e, t], Y_K_t[t])
         return exp
 
-    def _get_X_ek_remote(self, e: int, k_remote: int) -> gurobipy.LinExpr:
-        k = self._commodity_mapping.get(k_remote)
-        assert k is not None
-        return self._get_X_ek_local(e, k)
-
     def _get_X_k_sum(self) -> np.ndarray:
-        K_MAP = self._commodity_mapping
+        K_SLICE = len(self._commodity_list)
         NUM_EDGES = self._NUM_EDGES
         return np.array([
             np.sum([
-                self._get_X_ek_local(e, K_MAP[k]).getValue() if k in K_MAP else 0
-                    for k in range(self._K)
+                self._get_X_ek_local(e, k).getValue() for k in range(K_SLICE)
             ]) for e in range(NUM_EDGES)
         ])
 
     def _get_Y_k_old_local(self, k: int) -> np.ndarray:
-        assert k >= 0 and k < len(self._commodity_list)
         T = self._T
         try:
             return np.array([self._Y_tk[k][t].X for t in range(T)])
@@ -348,6 +340,10 @@ class NodeModel(TrafficEngineeringLP):
                 node_model.addConstr(0 <= self._get_X_ek_local(e, k))
 
     def _update_node_objective(self, Y_BAR_T_scattered, P_BAR_T_scattered, U_T_scattered):
+        assert Y_BAR_T_scattered is not None
+        assert P_BAR_T_scattered is not None
+        assert U_T_scattered is not None
+
         T = self._T
         K_SLICE = len(self._commodity_list)
         NUM_EDGES = self._NUM_EDGES
@@ -469,7 +465,6 @@ class MultiProcessorRegularizedADMMLP(TrafficEngineeringLP):
         self._NUM_EDGES: Optional[int] = None
         self._BASE_NUM_NODE_LPS: Optional[int] = None
         self._REM_NUM_NODE_LPS: Optional[int] = None
-        self._commodity_mapping: Optional[Dict[int, Dict[int, int]]] = None
         self._commodity_slices: Optional[Dict[int, List[Commodity]]] = None
 
         # This need not be managed by Gurobi
@@ -522,8 +517,6 @@ class MultiProcessorRegularizedADMMLP(TrafficEngineeringLP):
 
     def _set_initial_feasible_solution(self):
         self._X_ek_start = get_feasible_flow_assignment(self._graph, self._commodity_list)
-        self._Xo_e_start = np.sum(self._X_ek_start, axis=1)
-        # Just a sanity check ...
         check_centralized_flow_conservation(self._X_ek_start, self._graph, self._commodity_list, self._solver_params.FeasibilityTol)
     
     def _set_NULL_M(self):
@@ -544,40 +537,43 @@ class MultiProcessorRegularizedADMMLP(TrafficEngineeringLP):
         T = self._T
 
         self._u_t = np.zeros(shape=(T,))
-        self._P_bar_t = np.zeros((T,))
+        self._P_bar_t = np.zeros(shape=(T,))
+        self._Y_bar_t = np.zeros(shape=(T,))
     
     def _partition_commodities(self):
-        assert self._BASE_NUM_NODE_LPS and self._REM_NUM_NODE_LPS is None
-        K = self._commodity_list
+        assert self._BASE_NUM_NODE_LPS is None and self._REM_NUM_NODE_LPS is None
+        K = len(self._commodity_list)
         NUM_PROCS = self._solver_params.NumberOfNodeProcesses
         BASE_NUM_NODE_LPS = K // NUM_PROCS
         REM_NUM_NODE_LPS = K % NUM_PROCS
         
         # For now, just a simple rolling assignment
-        commodity_mapping = dict()
         commodity_slices = dict()
         commodity_counter = 0
         for node_index in range(self._solver_params.NumberOfNodeProcesses):
             n = BASE_NUM_NODE_LPS+1 if node_index+1 <= REM_NUM_NODE_LPS else BASE_NUM_NODE_LPS
-            commodity_mapping[node_index] = {commodity_counter + i: i for i in range(n)} 
+            commodity_slices[node_index] = [commodity_counter + i for i in range(n)]
             commodity_counter += n
-            commodity_slices[node_index] = list(range(n))
+
+        print(f"Total number of commodities: {K}")
+        print(f"Number of node processes: {NUM_PROCS}")
+        print(f"BASE / REM: {BASE_NUM_NODE_LPS}: {REM_NUM_NODE_LPS}")
 
         self._BASE_NUM_NODE_LPS = BASE_NUM_NODE_LPS
         self._REM_NUM_NODE_LPS = REM_NUM_NODE_LPS
-        self._commodity_mapping = commodity_mapping
         self._commodity_slices = commodity_slices
     
     def _make_models(self):
         assert self._controller_lp is None and self._node_lps is None
         K = len(self._commodity_list)
-        K_MAP = self._commodity_mapping
         K_SLICES = self._commodity_slices
         NUM_PROCS = self._solver_params.NumberOfNodeProcesses
         NULL_M = self._NULL_M
-        self._controller_lp = ControllerModel(self._graph, self._solver_params)
+        self._controller_lp = ControllerModel(self._graph, self._solver_params, np.sum(self._X_ek_start, axis=1))
         self._node_lps = [
-            NodeModel(K, K_MAP[node_index], K_SLICES[node_index], self._X_ek_start[:, K_SLICES[node_index]], NULL_M, self._solver_params)
+            NodeModel(K=K, commodities=K_SLICES[node_index], 
+                      X_ek_start=self._X_ek_start[:, K_SLICES[node_index]], 
+                      NULL_M=NULL_M, solver_params=self._solver_params)
             for node_index in range(NUM_PROCS)
         ]
     
@@ -711,7 +707,7 @@ class MultiProcessorRegularizedADMMLP(TrafficEngineeringLP):
         Zo_e = np.zeros((NUM_EDGES,))
         for e in range(NUM_EDGES):
             Zo_e[e] = (XO_E[e].X + X_KE_SUM_E[e]) / 2
-        self._Zo_e = Zo_e
+        self._controller_lp._Zo_e = Zo_e
     
     def _update_r_e(self):
         assert self._controller_lp is not None and \
@@ -722,14 +718,14 @@ class MultiProcessorRegularizedADMMLP(TrafficEngineeringLP):
             r_e \gets r_e + (X_oe - \sum_k X_ke)/2
         """
 
-        R_E = self._r_e
+        R_E = self._controller_lp._r_e
         XO_E = self._controller_lp._Xo_e
         NUM_EDGES = self._NUM_EDGES
         X_KE_SUM_E = self._X_k_sum_e
         r_e = np.zeros((NUM_EDGES,))
         for e in range(NUM_EDGES):
             r_e[e] = R_E[e] + (XO_E[e].X - X_KE_SUM_E[e]) / 2
-        self._r_e = r_e
+        self._controller_lp._r_e = r_e
     
     def close(self):
         if self._controller_lp:
@@ -741,6 +737,7 @@ class MultiProcessorRegularizedADMMLP(TrafficEngineeringLP):
     def make_lp(self):
         t_start = time.time()
         print("Starting to create the model")
+        self._make_models()
         self._make_variables()
         self._add_constraints()
         self._add_objective()
@@ -795,7 +792,8 @@ class MultiProcessorRegularizedADMMLP(TrafficEngineeringLP):
 
                 # Houskeeping
                 self._objective_trace.append(self._controller_lp._utility.X)
-                total_runtime += t_controller + max(sum(t_nodes[node_index]) for node_index in range(NUM_PROCS))
+                max_node_time = max(sum(t_nodes[node_index]) for node_index in range(NUM_PROCS))
+                total_runtime += t_controller + max_node_time
             
             # Build flow assignments
             self._gather_X_ek()
