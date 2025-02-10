@@ -2,11 +2,15 @@ syntax = "proto3";
 import "google/protobuf/empty.proto";
 
 service RegularizedADMMSolver {
-    rpc Optimize (google.protobuf.Empty) returns (OptimizationRuntime) {}
-    rpc GatherXEK (google.protobuf.Empty) returns (SerializedNumpyArrayMessage) {}
-    rpc GatherYSum (google.protobuf.Empty) returns (SerializedNumpyArrayMessage) {}
-    rpc GatherXKSum (google.protobuf.Empty) returns (SerializedNumpyArrayMessage) {}
+    rpc MakeProblem(google.protobuf.Empty) returns (google.protobuf.Empty) {}
+    rpc Optimize(google.protobuf.Empty) returns (OptimizationRuntime) {}
+    rpc GatherXEK(google.protobuf.Empty) returns (SerializedNumpyArrayMessage) {}
+    rpc GatherYSum(google.protobuf.Empty) returns (SerializedNumpyArrayMessage) {}
+    rpc GatherXKSum(google.protobuf.Empty) returns (SerializedNumpyArrayMessage) {}
     rpc ScatterInnerADMMLoopUpdates (NodeObjectiveUpdateMessage) returns (google.protobuf.Empty) {}
+    rpc Close(CloseMessage) returns (google.protobuf.Empty) {}
+    rpc Reset(ResetMessage) returns (google.protobuf.Empty) {}
+    rpc CheckProblem(ProblemCheckRequest) returns (ProblemCheckResult) {}
 }
 
 message OptimizationRuntime {
@@ -15,10 +19,28 @@ message OptimizationRuntime {
 
 message SerializedNumpyArrayMessage {
     bytes array = 1;
+    repeated int32 dims = 2;
 }
 
 message NodeObjectiveUpdateMessage {
     SerializedNumpyArrayMessage Y_BAR_T = 1;
     SerializedNumpyArrayMessage P_BAR_T = 2;
     SerializedNumpyArrayMessage U_T = 3;
+}
+
+message CloseMessage {
+    bool shutdown = 1;
+}
+
+message ResetMessage {
+    bool with_params = 1;
+}
+
+message ProblemCheckRequest {
+    SerializedNumpyArrayMessage Y_BAR_T = 1;
+    SerializedNumpyArrayMessage P_BAR_T = 2;
+}
+message ProblemCheckResult {
+    bool ok = 1;
+    optional string message = 2;
 }

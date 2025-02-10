@@ -6,16 +6,13 @@ import numpy as np
 import networkx as nx
 import te.constants
 import protos.distributed_lp.distributed_lp_pb2 as lp_messages
+import protos.distributed_lp.distributed_lp_pb2_grpc as lp_rpc
 from typing import List, Dict, Tuple
 from dataclasses import dataclass
 from gurobipy import GRB, GurobiError, quicksum
 from te.algorithms.base import TrafficEngineeringLP, SolverParams, GurobiSolverParams
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
 from topologies.utils import get_node_and_out_edge_index_mapping, get_in_edge_mapping
-from protos.distributed_lp.distributed_lp_pb2_grpc import (
-    NodeLPServicer, NodeLPStub, add_NodeLPServicer_to_server,
-    ControllerLPServicer, ControllerLPStub, add_ControllerLPServicer_to_server
-)
 from google.protobuf.empty_pb2 import Empty
 
 
@@ -371,7 +368,7 @@ class ControllerLP(TrafficEngineeringLP):
         return self._lambda_ve.copy()
 
 
-class MultiNodeLP(NodeLPServicer):
+class MultiNodeLP(lp_rpc.NodeLPServicer):
     def __init__(self, inputs: List[NodeLPInput]) -> None:
         super().__init__()
         self._nodes: Dict[int, NodeLP] = {
@@ -416,7 +413,7 @@ class MultiNodeLP(NodeLPServicer):
         return lp_messages.NodeLPOptimizeResponse(runtime=runtime)
 
 
-class ControllerNodeLP(ControllerLPServicer):
+class ControllerNodeLP(lp_rpc.ControllerLPServicer):
     def __init__(self, inputs: ControllerLPInput) -> None:
         self._inputs = inputs
         self._controller_lp = ControllerLP(inputs)

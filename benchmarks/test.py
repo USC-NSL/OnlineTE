@@ -15,7 +15,8 @@ from te.algorithms.formulations.edge_based_distributed_admm import (
 )
 from te.algorithms.formulations.edge_based_regularized_admm import RegularizedADMMLP, RegularizedADMMSolverParams
 from te.algorithms.formulations.mp_edge_based_regularized_admm import (
-    MultiProcessorRegularizedADMMLP, MultiProcessesorRegularizedADMMSolverParams
+    MultiProcessorRegularizedADMMLP, MultiProcessesorRegularizedADMMSolverParams,
+    RegularizedADMMRPCParams
 )
 from te.algorithms.utils import report_commodity_assignments, check_centralized_flow_conservation
 from topologies.utils import (
@@ -355,7 +356,8 @@ def regularized_admm_test_small():
 
 
 def mp_regularized_admm_test_small():
-    graph = load_zoo_topology('Claranet')
+    # graph = load_zoo_topology('Claranet')
+    graph = load_zoo_topology('Interoute')
     
     tm_params = UniformTrafficMatrixParams(
         n = len(graph.nodes), min = 0.0, max = 1.0
@@ -367,14 +369,15 @@ def mp_regularized_admm_test_small():
     print(f"Capacity lower bound is: {c_min}")
 
     solver_params = MultiProcessesorRegularizedADMMSolverParams(
-        NumberOfNodeProcesses=10,
-        NumberOfEpochs=50,
+        NumberOfNodeProcesses=5,
+        NumberOfEpochs=5,
         NumberOfNetworkUpdates=3,
         Epsilon=1e-4,
         Eta=1e-3,
         Rho=1e-3
     )
-    with contextlib.closing(MultiProcessorRegularizedADMMLP(graph, tm, solver_params)) as lp:
+    rpc_params = RegularizedADMMRPCParams(number_of_controller_workers=5)
+    with contextlib.closing(MultiProcessorRegularizedADMMLP(graph, tm, solver_params, rpc_params)) as lp:
         lp.make_lp()
         t = lp.solve()
         if t > 0:

@@ -1,13 +1,16 @@
+import grpc
 import time
 import tqdm
+import signal
 import gurobipy
 import numpy as np
 import networkx as nx
 import te.constants
 import multiprocessing
-import protos.regularized_admm.regularized_admm_pb2 as lp_messages
+import protos.regularized_admm.regularized_admm_pb2 as regularized_admm_messages
 from collections import defaultdict
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Union
+from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from gurobipy import GRB, GurobiError
 from te.algorithms.base import TrafficEngineeringLP, GurobiSolverParams, SolverParams
@@ -16,6 +19,11 @@ from topologies.utils import (get_edge_indexing, get_graph_M_matrix,
                               get_adjacency_null_space, get_feasible_flow_assignment)
 from te.algorithms.utils import (check_centralized_flow_conservation,
                                  optimize_or_scream)
+from protos.regularized_admm.regularized_admm_pb2_grpc import (
+    RegularizedADMMSolverServicer, RegularizedADMMSolverStub, 
+    add_RegularizedADMMSolverServicer_to_server
+)
+from google.protobuf.empty_pb2 import Empty
 
 
 @dataclass
@@ -27,6 +35,27 @@ class MultiProcessesorRegularizedADMMSolverParams(GurobiSolverParams):
     Eta: float = te.constants.DEFAULT_ETA
     Epsilon: float = te.constants.DEFAULT_EPSILON_KE
     Seed: int = te.constants.DEFAULT_SEED
+
+
+@dataclass
+class RegularizedADMMNodeModelRPCParams:
+    ip: str
+    port: int
+    number_of_workers: int
+
+
+@dataclass
+class RegularizedADMMRPCParams:
+    ip_list: Union[str, List[str]] = "localhost"
+    port_list: Union[int, List[int]] = 13000
+    number_of_workers_per_node: int = 1
+    number_of_controller_workers: int = 1
+
+
+def array_to_serialized_message(array: np.ndarray) -> regularized_admm_messages.SerializedNumpyArrayMessage:
+    return regularized_admm_messages.SerializedNumpyArrayMessage(array=array.tobytes(), dims=list(array.shape))
+def serialized_message_to_array(message: regularized_admm_messages.SerializedNumpyArrayMessage) -> np.ndarray:
+    return np.reshape(np.frombuffer(message.array), tuple(message.dims))
 
 
 class ControllerModel(TrafficEngineeringLP):
@@ -219,12 +248,15 @@ class ControllerModel(TrafficEngineeringLP):
 
 
 class NodeModel(TrafficEngineeringLP):
-    def __init__(self, K: int, commodities: List[Commodity], X_ek_start: np.ndarray, 
-                 NULL_M: np.ndarray, solver_params: MultiProcessesorRegularizedADMMSolverParams):
+    def __init__(self, index: int, K: int, commodities: List[Commodity], X_ek_start: np.ndarray, 
+                 NULL_M: np.ndarray, solver_params: MultiProcessesorRegularizedADMMSolverParams,
+                 rpc_params: RegularizedADMMNodeModelRPCParams):
         super().__init__()
+        self.index = index
         self._commodity_list = commodities
         self._NULL_M: np.ndarray = NULL_M
         self._solver_params = solver_params
+        self._rpc_params = rpc_params
 
         self._K = K
         self._T: Optional[int] = None
@@ -235,12 +267,46 @@ class NodeModel(TrafficEngineeringLP):
         self._model_nodes: Optional[List[gurobipy.Model]] = None
         self._objective_nodes: Optional[List[gurobipy.QuadExpr]] = None
 
-        # This need not be managed by Gurobi
+        # These need not be managed by Gurobi
         self._X_ek_start: np.ndarray = X_ek_start
+        self._u_t_scattered: Optional[np.ndarray] = None
+        self._P_bar_t_scattered: Optional[np.ndarray] = None
+        self._Y_bar_t_scattered: Optional[np.ndarray] = None
+
         # Slice of global value. A `T x K` matrix that we treat as a list of `K` vectors of length `T`
         self._Y_tk: Optional[List[gurobipy.tupledict]] = None
 
+        # The gRPC server
+        self._is_active: bool = False
+        self._server: Optional[grpc.Server] = None
+        self._listener: Optional[NodeModelListener] = None
+
         self._initialize_variables_and_residuals()
+        self._initialize_listener()
+
+        for sig in ('TERM', 'INT'):
+            signal.signal(getattr(signal, 'SIG'+sig), self.int_handler)
+        
+        self._start_listener()
+    
+    @staticmethod
+    def spawn_and_wait(index: int, K: int, commodities: List[Commodity], X_ek_start: np.ndarray, 
+                       NULL_M: np.ndarray, solver_params: MultiProcessesorRegularizedADMMSolverParams,
+                       rpc_params: RegularizedADMMNodeModelRPCParams):
+        node_model = NodeModel(index, K, commodities, X_ek_start, NULL_M, solver_params, rpc_params)
+        node_model.wait()
+    
+    @classmethod
+    def spawn(cls, index: int, K: int, commodities: List[Commodity], X_ek_start: np.ndarray, 
+                   NULL_M: np.ndarray, solver_params: MultiProcessesorRegularizedADMMSolverParams,
+                   rpc_params: RegularizedADMMNodeModelRPCParams) -> multiprocessing.Process:
+        proc = multiprocessing.Process(target=cls.spawn_and_wait, args=(index, K, commodities, X_ek_start, NULL_M, solver_params, rpc_params))
+        proc.start()
+        return proc
+
+    @property
+    def rpc_params(self) -> RegularizedADMMNodeModelRPCParams:
+        return self._rpc_params
 
     @property
     def graph(self) -> nx.DiGraph:
@@ -262,18 +328,63 @@ class NodeModel(TrafficEngineeringLP):
         raise NotImplementedError
 
     def _initialize_variables_and_residuals(self):
+        assert self._u_t_scattered is None
+        assert self._P_bar_t_scattered is None
+        assert self._Y_bar_t_scattered is None
+        
         NUM_EDGES, T = np.shape(self._NULL_M)
         self._T = T
         self._NUM_EDGES = NUM_EDGES
         
         self._u_t_scattered = np.zeros(shape=(T,))
-        self._P_bar_t_scattered = np.zeros((T,))
+        self._P_bar_t_scattered = np.zeros(shape=(T,))
+        self._Y_bar_t_scattered = np.zeros(shape=(T,))
+
+    def _initialize_listener(self):
+        assert self._server is None and self._listener is None
+
+        IP = self._rpc_params.ip
+        PORT = self._rpc_params.port
+        NUM_WORKERS = self._rpc_params.number_of_workers
+        self._server = grpc.server(thread_pool=ThreadPoolExecutor(max_workers=NUM_WORKERS))
+        self._listener = NodeModelListener(self)
+        add_RegularizedADMMSolverServicer_to_server(self._listener, self._server)
+        addr = ":".join([IP, str(PORT)])
+        self._server.add_insecure_port(addr)
+
+        print(f"[NODE {self.index}] Initialized listener at address {addr}")
     
-    def _update_u_t(self, new_u_t: np.ndarray):
+    def _start_listener(self):
+        assert self._server is not None and self._listener is not None
+        self._server.start()
+        self._is_active = True
+
+        print(f"[NODE {self.index}] Listener started")
+    
+    def _stop_listener(self):
+        self._is_active = False
+        if self._server is not None:
+            self._server.stop(1)
+    
+    def wait(self):
+        if self._server is not None:
+            print(f"[NODE {self.index}] Will now wait for termination.")
+            self._server.wait_for_termination()
+        print(f"[NODE {self.index}] Will soon terminate")
+    
+    def int_handler(self, _, __):
+        self._stop_listener()
+        try:
+            self.close()
+        finally:
+            pass
+    
+    def _update_u_t_scattered(self, new_u_t: np.ndarray):
         self._u_t_scattered = new_u_t
-    
     def _update_P_bar_t_scattered(self, new_P_bar_t: np.ndarray):
         self._P_bar_t_scattered = new_P_bar_t
+    def _update_Y_bar_t_scattered(self, new_Y_bar_t: np.ndarray):
+        self._Y_bar_t_scattered = new_Y_bar_t
     
     def _make_variables(self):
         assert self._model_nodes is None
@@ -330,6 +441,7 @@ class NodeModel(TrafficEngineeringLP):
 
     def _add_constraints(self):
         assert self._model_nodes is not None
+        print(f"[NODE {self.index}] Adding constraints to models")
 
         NUM_EDGES = self._NUM_EDGES
         MODEL_NODES = self._model_nodes
@@ -343,6 +455,12 @@ class NodeModel(TrafficEngineeringLP):
         assert Y_BAR_T_scattered is not None
         assert P_BAR_T_scattered is not None
         assert U_T_scattered is not None
+
+        print(f"[NODE {self.index}] Updating objectives")
+
+        self._update_P_bar_t_scattered(P_BAR_T_scattered)
+        self._update_Y_bar_t_scattered(Y_BAR_T_scattered)
+        self._update_u_t_scattered(U_T_scattered)
 
         T = self._T
         K_SLICE = len(self._commodity_list)
@@ -376,7 +494,7 @@ class NodeModel(TrafficEngineeringLP):
         """
 
         OBJECTIVE_NODES = [gurobipy.QuadExpr() for _ in range(K_SLICE)]
-        for k, obj in enumerate(OBJECTIVE_NODES):
+        for k, obj in tqdm.tqdm(enumerate(OBJECTIVE_NODES)):
             for t in range(T):
                 y = Y_TK[k][t]
                 c = U_T_scattered[t] - P_BAR_T_scattered[t] + Y_BAR_T_scattered[t] - Y_TK_old[k][t]
@@ -394,7 +512,9 @@ class NodeModel(TrafficEngineeringLP):
 
     def _add_objective(self):
         assert self._model_nodes is not None
-        self._update_node_objective()
+        # For this first call, we can just pass in zero arrays
+        zero = np.zeros((self._T,))
+        self._update_node_objective(zero, zero, zero)
 
     def close(self):
         if self._model_nodes:
@@ -404,6 +524,7 @@ class NodeModel(TrafficEngineeringLP):
             self._env.close()
     
     def make_lp(self):
+        print(f"[NODE {self.index}] Making problem model")
         self._make_variables()
         self._add_constraints()
         self._add_objective()
@@ -448,13 +569,67 @@ class NodeModel(TrafficEngineeringLP):
                 f"Axis {t} --> Inner ADMM pairing is not in consensus with primal variable: {primal_str} vs {pair_str}"
 
 
+class NodeModelListener(RegularizedADMMSolverServicer):
+    def __init__(self, model: NodeModel):
+        super().__init__()
+        self._model = model
+    
+    def Optimize(self, request, context):
+        runtime = self._model.solve()
+        return regularized_admm_messages.OptimizationRuntime(runtime=runtime)
+
+    def GatherXEK(self, request, context):
+        return array_to_serialized_message(self._model._make_X_ek())
+    
+    def GatherYSum(self, request, context):
+        return array_to_serialized_message(self._model._get_Y_sum_local())
+    
+    def GatherXKSum(self, request, context):
+        return array_to_serialized_message(self._model._get_X_k_sum())
+    
+    def ScatterInnerADMMLoopUpdates(self, request: regularized_admm_messages.NodeObjectiveUpdateMessage, context):
+        Y_BAR_T = serialized_message_to_array(request.Y_BAR_T)
+        P_BAR_T = serialized_message_to_array(request.P_BAR_T)
+        U_T = serialized_message_to_array(request.U_T)
+        self._model._update_node_objective(Y_BAR_T, P_BAR_T, U_T)
+        return Empty()
+    
+    def Close(self, request: regularized_admm_messages.CloseMessage, context):
+        if request.shutdown:
+            self._model._stop_listener()
+        self._model.close()
+        return Empty()
+    
+    def MakeProblem(self, request, context):
+        self._model.make_lp()
+        return Empty()
+    
+    def Reset(self, request: regularized_admm_messages.ResetMessage, context):
+        self._model.reset(request.with_params)
+        return Empty()
+    
+    def CheckProblem(self, request: regularized_admm_messages.ProblemCheckRequest, context):
+        Y_BAR_T = serialized_message_to_array(request.Y_BAR_T)
+        P_BAR_T = serialized_message_to_array(request.P_BAR_T)
+        try:
+            self._model.check(Y_BAR_T, P_BAR_T)
+            result = regularized_admm_messages.ProblemCheckResult(ok=True)
+        except AssertionError as e:
+            result = regularized_admm_messages.ProblemCheckResult(ok=False, message=str(e))
+        finally:
+            return result
+
+
 class MultiProcessorRegularizedADMMLP(TrafficEngineeringLP):
-    def __init__(self, graph: nx.DiGraph, traffic: TrafficMatrixBase, solver_params: MultiProcessesorRegularizedADMMSolverParams) -> None:
+    def __init__(self, graph: nx.DiGraph, traffic: TrafficMatrixBase, 
+                 solver_params: MultiProcessesorRegularizedADMMSolverParams,
+                 rpc_params: RegularizedADMMRPCParams) -> None:
         super().__init__()
         self._graph = graph
         self._M = get_graph_M_matrix(graph)
         self._traffic = traffic
         self._solver_params = solver_params
+        self._rpc_params = rpc_params
         self._rng = np.random.default_rng(seed=solver_params.Seed)
         self._commodity_list = traffic_to_commodity(self._traffic)
 
@@ -479,7 +654,12 @@ class MultiProcessorRegularizedADMMLP(TrafficEngineeringLP):
         self._u_t: Optional[np.ndarray] = None
 
         self._controller_lp: Optional[ControllerModel] = None
-        self._node_lps: Optional[List[NodeModel]] = None
+        self._node_lps: Optional[List[multiprocessing.Process]] = None
+        self._node_channels: Optional[List[grpc.Channel]] = None
+        self._node_stubs: Optional[List[RegularizedADMMSolverStub]] = None
+
+        # Thread pool for handling broadcasts
+        self._broadcast_thread_pool = ThreadPoolExecutor(max_workers=rpc_params.number_of_controller_workers)
 
         self._X_ek: Optional[np.ndarray] = None
 
@@ -517,7 +697,7 @@ class MultiProcessorRegularizedADMMLP(TrafficEngineeringLP):
 
     def _set_initial_feasible_solution(self):
         self._X_ek_start = get_feasible_flow_assignment(self._graph, self._commodity_list)
-        check_centralized_flow_conservation(self._X_ek_start, self._graph, self._commodity_list, self._solver_params.FeasibilityTol)
+        # check_centralized_flow_conservation(self._X_ek_start, self._graph, self._commodity_list, self._solver_params.FeasibilityTol)
     
     def _set_NULL_M(self):
         M = self._M
@@ -569,13 +749,27 @@ class MultiProcessorRegularizedADMMLP(TrafficEngineeringLP):
         K_SLICES = self._commodity_slices
         NUM_PROCS = self._solver_params.NumberOfNodeProcesses
         NULL_M = self._NULL_M
+        RPC_PARAMS = self._rpc_params
         self._controller_lp = ControllerModel(self._graph, self._solver_params, np.sum(self._X_ek_start, axis=1))
+        node_rpc_params = [
+            RegularizedADMMNodeModelRPCParams(
+                ip = (RPC_PARAMS.ip_list if isinstance(RPC_PARAMS.ip_list, str) else RPC_PARAMS.ip_list[node_index]),
+                port = (RPC_PARAMS.port_list + node_index if isinstance(RPC_PARAMS.port_list, int) else RPC_PARAMS.port_list[node_index]),
+                number_of_workers = RPC_PARAMS.number_of_workers_per_node
+            ) for node_index in range(NUM_PROCS)
+        ]
         self._node_lps = [
-            NodeModel(K=K, commodities=K_SLICES[node_index], 
-                      X_ek_start=self._X_ek_start[:, K_SLICES[node_index]], 
-                      NULL_M=NULL_M, solver_params=self._solver_params)
+            NodeModel.spawn(
+                index=node_index, K=K, commodities=K_SLICES[node_index], 
+                X_ek_start=self._X_ek_start[:, K_SLICES[node_index]], NULL_M=NULL_M, 
+                solver_params=self._solver_params, rpc_params=node_rpc_params[node_index])
             for node_index in range(NUM_PROCS)
         ]
+        self._node_channels = [
+            grpc.insecure_channel(target=":".join([rpc_param.ip, str(rpc_param.port)]))
+            for rpc_param in node_rpc_params
+        ]
+        self._node_stubs = [RegularizedADMMSolverStub(ch) for ch in self._node_channels]
     
     def _report_problem_size(self):
         M = len(self._graph.nodes)
@@ -592,7 +786,7 @@ class MultiProcessorRegularizedADMMLP(TrafficEngineeringLP):
               f"\t TOTAL NUMBER OF CONSTRAINTS: {N + 1}\n")
         print("-"*60)
         print("NODE PROBLEM:\n" +
-              f"\t NUMBER OF INDEPENDENT QPs PER NODE: {M - 1}\n"
+              f"\t NUMBER OF INDEPENDENT QPs PER NODE: {K // M}\n"
               f"\t NUMBER OF VARIABLES PER QP PER NODE: {T}\n"
               f"\t NUMBER CONSTRAINTS PER QP PER NODE: {T}\n")
         
@@ -601,8 +795,7 @@ class MultiProcessorRegularizedADMMLP(TrafficEngineeringLP):
                self._node_lps is not None
         
         self._controller_lp._make_variables()
-        for node_lp in self._node_lps:
-            node_lp._make_variables()
+        # make node variables later
     
     def _get_node_index_for_commodity(self, k: int) -> int:
         BASE_NUM_NODE_LPS = self._BASE_NUM_NODE_LPS
@@ -617,8 +810,7 @@ class MultiProcessorRegularizedADMMLP(TrafficEngineeringLP):
                self._node_lps is not None
 
         self._controller_lp._add_constraints()
-        for node_lp in self._node_lps:
-            node_lp._add_constraints()
+        # make node constraints later
     
     def _update_controller_objective(self):
         assert self._controller_lp is not None
@@ -626,33 +818,52 @@ class MultiProcessorRegularizedADMMLP(TrafficEngineeringLP):
     
     def _update_node_objectives(self):
         assert self._node_lps is not None
-        Y_BAR_T = self._Y_bar_t
-        P_BAR_T = self._P_bar_t
-        U_T = self._u_t
-        for node_lp in self._node_lps:
-            node_lp._update_node_objective(Y_BAR_T, P_BAR_T, U_T)
+        Y_BAR_T = array_to_serialized_message(self._Y_bar_t)
+        P_BAR_T = array_to_serialized_message(self._P_bar_t)
+        U_T = array_to_serialized_message(self._u_t)
+        update_request = regularized_admm_messages.NodeObjectiveUpdateMessage(
+            Y_BAR_T=Y_BAR_T, P_BAR_T=P_BAR_T, U_T=U_T
+        )
+        # TODO: Make async
+        wait([
+            self._broadcast_thread_pool.submit(node_stub.ScatterInnerADMMLoopUpdates, update_request) 
+            for node_stub in self._node_stubs
+        ])
+        
     
     def _add_objective(self):
         assert self._controller_lp is not None and \
                self._node_lps is not None
 
         self._update_controller_objective()
-        self._update_node_objectives()
+        # Make objective for nodes later
     
     def _gather_Y_bar(self):
         assert self._node_lps is not None
         K = len(self._commodity_list)
 
-        self._Y_bar_t = np.sum([
-            node_lp._get_Y_sum_local()
-            for node_lp in self._node_lps
-        ], axis=0) / K
+        # TODO: Make async
+        # Y_SUM_gathered = [
+        #     serialized_message_to_array(node_stub.GatherYSum(Empty()))
+        #     for node_stub in self._node_stubs
+        # ]
+        Y_SUM_gathered = self._broadcast_thread_pool.map(
+            lambda node_stub: serialized_message_to_array(node_stub.GatherYSum(Empty())), self._node_stubs
+        )
+        self._Y_bar_t = np.sum(Y_SUM_gathered, axis=0) / K
     
     def _gather_X_k_sum(self):
         assert self._node_lps is not None
-        self._X_k_sum_e = np.sum([
-            node_lp._get_X_k_sum() for node_lp in self._node_lps
-        ], axis=0)
+
+        # TODO: Make async
+        # X_k_sum_gathered = [
+        #     serialized_message_to_array(node_stub.GatherXKSum(Empty()))
+        #     for node_stub in self._node_stubs
+        # ]
+        X_k_sum_gathered = self._broadcast_thread_pool.map(
+            lambda node_stub: serialized_message_to_array(node_stub.GatherXKSum(Empty())), self._node_stubs
+        )
+        self._X_k_sum_e = np.sum(X_k_sum_gathered, axis=0)
     
     def _update_P_bar(self):
         assert self._controller_lp is not None and \
@@ -731,35 +942,48 @@ class MultiProcessorRegularizedADMMLP(TrafficEngineeringLP):
         if self._controller_lp:
             self._controller_lp.close()
         if self._node_lps:
-            for node_model in self._node_lps:
-                node_model.close()
+            for node_stub in self._node_stubs:
+                node_stub.Close(regularized_admm_messages.CloseMessage(shutdown=True))
+            for node_proc in self._node_lps:
+                node_proc.join()
     
     def make_lp(self):
         t_start = time.time()
-        print("Starting to create the model")
+        print("Spawning processes ...")
         self._make_models()
+        print("Starting to create the model")
         self._make_variables()
         self._add_constraints()
         self._add_objective()
+        # TODO: Make async
+        # for node_stub in self._node_stubs:
+        #     node_stub.MakeProblem(Empty())
+        wait([
+            self._broadcast_thread_pool.submit(node_stub.MakeProblem, Empty()) 
+            for node_stub in self._node_stubs
+        ])
         print(f"Built model in {str(np.round(time.time() - t_start, 2))} seconds.")
     
     def reset(self, with_params: False):
         self._controller_lp.reset(with_params=with_params)
-        for node_model in self._node_lps:
-            node_model.reset(with_params=with_params)
+        for node_stub in self._node_stubs:
+            node_stub.Reset(regularized_admm_messages.ResetMessage(with_params=with_params))
 
     def _gather_X_ek(self):
-        self._X_ek = np.hstack([
-            node_lp._make_X_ek()
-            for node_lp in self._node_lps
-        ])
+        # TODO: Make async
+        # stack = [serialized_message_to_array(node_stub.GatherXEK(Empty())) for node_stub in self._node_stubs]
+        stack = self._broadcast_thread_pool.map(
+            lambda node_stub: serialized_message_to_array(node_stub.GatherXEK(Empty())),
+            self._node_stubs
+        )
+        self._X_ek = np.hstack(stack)
     
     def solve(self, params: SolverParams = None) -> float:
         assert params is None
         
         MODEL_CONTROLLER = self._controller_lp
-        MODEL_NODES = self._node_lps
-        NUM_PROCS = len(MODEL_NODES)
+        NODE_STUBS = self._node_stubs
+        NUM_PROCS = len(NODE_STUBS)
         PARAMS = self._solver_params
 
         total_runtime = 0
@@ -772,8 +996,8 @@ class MultiProcessorRegularizedADMMLP(TrafficEngineeringLP):
                 t_controller = MODEL_CONTROLLER.solve()
                 # Now, do in-network optimization
                 for _ in range(PARAMS.NumberOfNetworkUpdates):
-                    for node_index, node_model in enumerate(MODEL_NODES):
-                        t_nodes[node_index].append(node_model.solve())
+                    for node_index, node_stub in enumerate(NODE_STUBS):
+                        t_nodes[node_index].append(node_stub.Optimize(Empty()).runtime)
                     # Gather updates for inner ADMM step
                     self._gather_Y_bar()
                     # Finish inner ADMM step
@@ -804,14 +1028,16 @@ class MultiProcessorRegularizedADMMLP(TrafficEngineeringLP):
     
     def check(self):
         PARAMS = self._solver_params
-        Y_BAR_T = self._Y_bar_t
-        P_BAR_T = self._P_bar_t
-
+        Y_BAR_T = array_to_serialized_message(self._Y_bar_t)
+        P_BAR_T = array_to_serialized_message(self._P_bar_t)
+        check_request = regularized_admm_messages.ProblemCheckRequest(Y_BAR_T, P_BAR_T)
         # Check outer ADMM consensus
         self._controller_lp.check()
         # Check inner ADMM consensus
-        for node_lp in self._node_lps:
-            node_lp.check(Y_BAR_T, P_BAR_T)
+        for node_index, node_stub in enumerate(self._node_stubs):
+            result = node_stub.CheckProblem(check_request)
+            if not result.ok:
+                print(f"Node {node_index} has not converged correctly.\n{result.message}")
         # Now, check flow conservation ...
         X_EK = self._X_ek
         check_centralized_flow_conservation(X_EK, self._graph, self._commodity_list, PARAMS.FeasibilityTol)
