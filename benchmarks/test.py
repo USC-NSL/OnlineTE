@@ -14,6 +14,7 @@ from te.algorithms.formulations.edge_based_distributed_admm import (
     DistributedEdgeBasedADMMLP, DistributedADMMSolverParams
 )
 from te.algorithms.formulations.edge_based_regularized_admm import RegularizedADMMLP, RegularizedADMMSolverParams
+from te.algorithms.formulations.edge_based_unregulated_admm import UnregulatedADMMLP, UnregulatedADMMSolverParams
 from te.algorithms.formulations.mp_edge_based_regularized_admm import (
     MultiProcessorRegularizedADMMLP, MultiProcessesorRegularizedADMMSolverParams,
     RegularizedADMMRPCParams
@@ -422,6 +423,42 @@ def regularized_admm_test_medium():
             plt.show()
 
 
+def unregulated_admm_test_small():
+    # graph = load_zoo_topology('Claranet')
+    graph = load_zoo_topology('Interoute')
+    
+    tm_params = UniformTrafficMatrixParams(
+        n = len(graph.nodes), min = 0.0, max = 1.0
+    )
+    tm = get_traffic_model('Uniform')(seed=12345, params=tm_params)
+    
+    c_min = get_capacity_lower_bound(graph, tm)
+    set_edge_capacity_to(graph, c_min*10)
+    print(f"Capacity lower bound is: {c_min}")
+
+    solver_params = UnregulatedADMMSolverParams(
+        NumberOfEpochs=80,
+        NumberOfNetworkUpdates=2,
+        PGDIterations=5,
+        Gamma=5e-1,
+        Eta=1e-3,
+        Rho=1e-3,
+        NumWorkers=8
+    )
+    with contextlib.closing(UnregulatedADMMLP(graph, tm, solver_params)) as lp:
+        lp.make_lp()
+        t = lp.solve()
+        if t > 0:
+            # lp.check()
+            expected = lp.commodity_list
+            result = lp.get_solution_commodity_list()
+            report_commodity_assignments(expected, result, 0.0)
+            print(f"Solved in {t} seconds.")
+            print(f"Final utilization value: {lp._utility.X}")
+            plt.plot(lp.objective_trace)
+            plt.show()
+
+
 if __name__ == '__main__':
     # toy_test_1()
     # zoo_test_1()
@@ -435,9 +472,10 @@ if __name__ == '__main__':
     # zoo_test_1_dist()
     # zoo_test_1_admm()
     # zoo_test_1_dist_parallel()
-    # centralized_test_medium()
+    centralized_test_medium()
     # admm_test_medium()
     # centralized_test_small()
     # regularized_admm_test_small()
     # regularized_admm_test_medium()
-    mp_regularized_admm_test_small()
+    # mp_regularized_admm_test_small()
+    # unregulated_admm_test_small()
