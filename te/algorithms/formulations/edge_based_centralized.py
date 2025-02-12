@@ -1,12 +1,12 @@
 import gurobipy
 import networkx as nx
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 from collections import defaultdict
 from gurobipy import GRB, GurobiError, quicksum
 from te.algorithms.base import TrafficEngineeringLP, SolverParams, GurobiSolverParams
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
 from topologies.utils import get_edge_indexing
-from te.algorithms.utils import check_centralized_flow_conservation
+from te.algorithms.utils import check_centralized_flow_conservation, check_capacity_constraint, make_model
 
 
 class CentralizedEdgeBasedLP(TrafficEngineeringLP):
@@ -40,13 +40,16 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
 
     @property
     def objective_value(self) -> float:
-        if self._objective:
-            return self._objective.X
+        return self._utility.X
+    
+    @property
+    def objective_trace(self) -> Optional[List[float]]:
+        # TODO: Anyway to get this from Gurobi?
         return None
     
     def _make_variables(self):
         assert self._model is None and self._flows is None
-        self._model = gurobipy.Model('EdgeBasedTE')
+        self._model = make_model(name='EdgeBasedTE', params=self._solver_params)
 
         """
         As per our formulation, the commodity matrix is of the form X_{ke},
@@ -167,11 +170,16 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
             print(f'Error code {e.errno}: {e}')
             return -1
 
-    def check(self):
+    def check(self, feasibility_tol: Optional[float] = None, feasibility_ratio: Optional[float] = None):
+        assert (feasibility_tol is None) ^ (feasibility_ratio is None)
         PARAMS: GurobiSolverParams = self._solver_params
         check_centralized_flow_conservation(
             self._flows, self._graph, self._commodity_list,
             PARAMS.FeasibilityTol
+        )
+        check_capacity_constraint(
+            self._flows, self._graph, self._commodity_list,
+            feasibility_tol=feasibility_tol, feasibility_ratio=feasibility_ratio
         )
     
     def get_solution_commodity_list(self) -> List[Tuple[Commodity, Commodity]]:
@@ -201,22 +209,3 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
             )
             for i, commodity in enumerate(COMMODITIES)
         ]
-    
-    def get_ratio_of_unsatisfied_demands(self, params: GurobiSolverParams, solution: List[Tuple[Commodity, Commodity]] = None) -> float:
-        COMMODITIES = self._commodity_list
-        K = len(COMMODITIES)
-        if solution is None:
-            solution = self.get_solution_commodity_list()
-        assert len(solution) == K
-
-        k = 0
-        for actual, ideal in zip(solution, COMMODITIES):
-            assert actual[0].source == ideal.source
-            assert actual[0].destination == ideal.destination
-            assert actual[1].source == ideal.source
-            assert actual[1].destination == ideal.destination
-            if abs(actual[0].demand - ideal.demand) > params.FeasibilityTol * 2:
-                print(f"COULD NOT SATISFY {actual[0].source} -> {actual[0].destination}: {actual[0].demand} vs {ideal.demand}")
-                k += 1
-
-        return k / K

@@ -5,7 +5,7 @@ import numpy as np
 import networkx as nx
 import te.constants
 from collections import defaultdict
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 from dataclasses import dataclass
 from gurobipy import GRB, GurobiError, quicksum
 from te.algorithms.base import TrafficEngineeringLP, GurobiSolverParams, SolverParams
@@ -15,6 +15,7 @@ from topologies.utils import (get_edge_indexing, get_node_and_out_edge_index_map
                               get_adjacency_null_space, get_feasible_flow_assignment)
 from te.algorithms.utils import (check_distributed_flow_conservation,
                                  check_centralized_flow_conservation,
+                                 check_capacity_constraint,
                                  optimize_or_scream)
 
 
@@ -94,10 +95,10 @@ class DistributedEdgeBasedADMMLP(TrafficEngineeringLP):
 
     @property
     def objective_value(self) -> float:
-        raise NotImplementedError
+        return self._utility.X
     
     @property
-    def objective_trace(self) -> List[float]:
+    def objective_trace(self) -> Optional[List[float]]:
         return self._objective_trace
 
     def _set_initial_feasible_solution(self):
@@ -560,7 +561,8 @@ class DistributedEdgeBasedADMMLP(TrafficEngineeringLP):
             print(f'Error code {e.errno}: {e}')
             return -1
     
-    def check(self):
+    def check(self, feasibility_tol: Optional[float] = None, feasibility_ratio: Optional[float] = None):
+        assert (feasibility_tol is None) ^ (feasibility_ratio is None)
         X_OE = self._X_oe
         Z_OE = self._Z_oe
         X_KE = self._X_ke
@@ -579,6 +581,10 @@ class DistributedEdgeBasedADMMLP(TrafficEngineeringLP):
         check_distributed_flow_conservation(
             X_KE, self._graph, self._edge_out_indexing, self._commodity_list,
             PARAMS.FeasibilityTol
+        )
+        check_capacity_constraint(
+            X_KE, self._graph, self._commodity_list,
+            feasibility_tol=feasibility_tol, feasibility_ratio=feasibility_ratio
         )
 
     def get_solution_commodity_list(self) -> List[Commodity]:

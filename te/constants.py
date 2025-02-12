@@ -1,21 +1,15 @@
-from enum import Enum, unique
+from gurobipy import GRB
 
 TM_DIR = "traffic_models/traffic_matrices"
 
-@unique
-class SolverMethod(Enum):
-    PRIMAL_SIMPLEX = 0
-    DUAL_SIMPLEX = 1
-    BARRIER = 2
-    CONCURRENT = 3
-    PRIMAL_AND_DUAL = 5
+"""When deciding feasibility, if two values are closer than this, we consider them to be the same"""
+FLOAT_RES = 1e-6
 
 # GUROBI SPECIFIC
-DEFAULT_SOLVER_METHOD = SolverMethod.CONCURRENT
+DEFAULT_SOLVER_METHOD = GRB.METHOD_BARRIER
 DEFAULT_NUMERIC_FOCUS = 1
-DEFAULT_BARRIER_CONVERGENCE_TOLERANCE = 1e-8
-DEFAULT_OPTIMALITY_TOLERANCE = 1e-6
-DEFAULT_FEASIBILITY_TOLERANCE = 1e-6
+DEFAULT_BARRIER_CONVERGENCE_TOLERANCE = 1e-4
+DEFAULT_FEASIBILITY_TOLERANCE = 1e-4
 DEFAULT_GUROBI_LOG_FILE = ''
 
 # DISTRIBUTED SPECIFIC

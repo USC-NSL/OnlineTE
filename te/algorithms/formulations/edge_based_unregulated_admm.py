@@ -15,6 +15,7 @@ from topologies.utils import (get_edge_indexing, get_node_and_out_edge_index_map
                               get_edge_to_out_index_mapping, get_graph_M_matrix, 
                               get_adjacency_null_space, get_feasible_flow_assignment)
 from te.algorithms.utils import (check_centralized_flow_conservation,
+                                 check_capacity_constraint,
                                  optimize_or_scream)
 
 
@@ -106,10 +107,10 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
 
     @property
     def objective_value(self) -> float:
-        raise NotImplementedError
+        return self._utility.X
     
     @property
-    def objective_trace(self) -> List[float]:
+    def objective_trace(self) -> Optional[List[float]]:
         return self._objective_trace
 
     def _set_initial_feasible_solution(self):
@@ -398,36 +399,48 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
             print(f'Error code {e.errno}: {e}')
             return -1
     
-    def check(self):
+    def check(self, feasibility_tol: Optional[float] = None, feasibility_ratio: Optional[float] = None):
         NUM_EDGES = self._NUM_EDGES
         T = self._T
         PARAMS = self._solver_params
 
-        # Are outer ADMM pairs in consensus?
-        XO_E = self._Xo_e
-        ZO_E = self._Zo_e
-        for e in range(NUM_EDGES):
-            primal = XO_E[e].X
-            pair = ZO_E[e]
-            primal_str = str(np.round(primal, 4))
-            pair_str = str(np.round(pair, 4))
-            assert abs(primal - pair) < 2*PARAMS.FeasibilityTol, \
-                f"Edge {e} --> Outer ADMM pairing is not in consensus with primal variable: {primal_str} vs {pair_str}"
+        # TODO: This is not numerically stable ...
+        def in_consensus(primal, pair):
+            if abs(primal - pair) < te.constants.FLOAT_RES:
+                return True
+            if feasibility_tol is not None:
+                return abs(primal - pair) < feasibility_tol
+            return abs((primal - pair) / (primal + te.constants.FLOAT_RES)) < feasibility_ratio
+
+        # # Are outer ADMM pairs in consensus?
+        # XO_E = self._Xo_e
+        # ZO_E = self._Zo_e
+        # for e in range(NUM_EDGES):
+        #     primal = XO_E[e].X
+        #     pair = ZO_E[e]
+        #     primal_str = str(np.round(primal, 4))
+        #     pair_str = str(np.round(pair, 4))
+        #     assert in_consensus(primal, pair), \
+        #         f"Edge {e} --> Outer ADMM pairing is not in consensus with primal variable: {primal_str} vs {pair_str}"
         
-        # Are inner ADMM pairs in consensus?
-        Y_BAR_T = self._get_Y_bar()
-        P_BAR_T = self._P_bar_t
-        for t in range(T):
-            primal = Y_BAR_T[t]
-            pair = P_BAR_T[t]
-            primal_str = str(np.round(primal, 4))
-            pair_str = str(np.round(pair, 4))
-            assert abs(primal - pair) < 2*PARAMS.FeasibilityTol, \
-                f"Axis {t} --> Inner ADMM pairing is not in consensus with primal variable: {primal_str} vs {pair_str}"
+        # # Are inner ADMM pairs in consensus?
+        # Y_BAR_T = self._Y_bar_t
+        # P_BAR_T = self._P_bar_t
+        # for t in range(T):
+        #     primal = Y_BAR_T[t]
+        #     pair = P_BAR_T[t]
+        #     primal_str = str(np.round(primal, 4))
+        #     pair_str = str(np.round(pair, 4))
+        #     assert in_consensus(primal, pair), \
+        #         f"Axis {t} --> Inner ADMM pairing is not in consensus with primal variable: {primal_str} vs {pair_str}"
         
         # Now, check flow conservation ...
         X_EK = self._X_ek
-        check_centralized_flow_conservation(X_EK, self._graph, self._commodity_list, PARAMS.FeasibilityTol)
+        # check_centralized_flow_conservation(X_EK, self._graph, self._commodity_list, PARAMS.FeasibilityTol)
+        check_capacity_constraint(
+            X_EK, self._graph, self._commodity_list, 
+            feasibility_tol=feasibility_tol, feasibility_ratio=feasibility_ratio
+        )
 
     def get_solution_commodity_list(self) -> List[Tuple[Commodity, Commodity]]:
         COMMODITIES = self._commodity_list

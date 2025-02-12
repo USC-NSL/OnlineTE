@@ -18,6 +18,7 @@ from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Comm
 from topologies.utils import (get_edge_indexing, get_graph_M_matrix, 
                               get_adjacency_null_space, get_feasible_flow_assignment)
 from te.algorithms.utils import (check_centralized_flow_conservation,
+                                 check_capacity_constraint,
                                  optimize_or_scream)
 from protos.regularized_admm.regularized_admm_pb2_grpc import (
     RegularizedADMMSolverServicer, RegularizedADMMSolverStub, 
@@ -88,19 +89,19 @@ class ControllerModel(TrafficEngineeringLP):
         return self._graph
     @property
     def traffic(self) -> TrafficMatrixBase:
-        raise NotImplementedError
+        raise ValueError("Shouldn't be used ...")
     @property
     def params(self) -> SolverParams:
         return self._solver_params
     @property
     def commodity_list(self) -> List[Commodity]:
-        raise NotImplementedError
+        raise ValueError("Shouldn't be used ...")
     @property
     def objective_value(self) -> float:
-        raise NotImplementedError
+        raise ValueError("Shouldn't be used ...")
     @property
-    def objective_trace(self) -> List[float]:
-        raise NotImplementedError
+    def objective_trace(self) -> Optional[List[float]]:
+        raise ValueError("Shouldn't be used ...")
     
     def _initialize_variables_and_residuals(self):
         self._NUM_EDGES = len(self._graph.edges())
@@ -245,6 +246,9 @@ class ControllerModel(TrafficEngineeringLP):
             pair_str = str(np.round(pair, 4))
             assert abs(primal - pair) < 2*PARAMS.FeasibilityTol, \
                 f"Edge {e} --> Outer ADMM pairing is not in consensus with primal variable: {primal_str} vs {pair_str}"
+    
+    def get_solution_commodity_list(self):
+        raise ValueError("Shouldn't be used ...")
 
 
 class NodeModel(TrafficEngineeringLP):
@@ -310,10 +314,10 @@ class NodeModel(TrafficEngineeringLP):
 
     @property
     def graph(self) -> nx.DiGraph:
-        raise NotImplementedError
+        raise ValueError("Shouldn't be used ...")
     @property
     def traffic(self) -> TrafficMatrixBase:
-        raise NotImplementedError
+        raise ValueError("Shouldn't be used ...")
     @property
     def params(self) -> SolverParams:
         return self._solver_params
@@ -322,10 +326,10 @@ class NodeModel(TrafficEngineeringLP):
         return self._commodity_list
     @property
     def objective_value(self) -> float:
-        raise NotImplementedError
+        raise ValueError("Shouldn't be used ...")
     @property
-    def objective_trace(self) -> List[float]:
-        raise NotImplementedError
+    def objective_trace(self) -> Optional[List[float]]:
+        raise ValueError("Shouldn't be used ...")
 
     def _initialize_variables_and_residuals(self):
         assert self._u_t_scattered is None
@@ -441,7 +445,7 @@ class NodeModel(TrafficEngineeringLP):
 
     def _add_constraints(self):
         assert self._model_nodes is not None
-        print(f"[NODE {self.index}] Adding constraints to models")
+        # print(f"[NODE {self.index}] Adding constraints to models")
 
         NUM_EDGES = self._NUM_EDGES
         MODEL_NODES = self._model_nodes
@@ -456,7 +460,7 @@ class NodeModel(TrafficEngineeringLP):
         assert P_BAR_T_scattered is not None
         assert U_T_scattered is not None
 
-        print(f"[NODE {self.index}] Updating objectives")
+        # print(f"[NODE {self.index}] Updating objectives")
 
         self._update_P_bar_t_scattered(P_BAR_T_scattered)
         self._update_Y_bar_t_scattered(Y_BAR_T_scattered)
@@ -494,7 +498,7 @@ class NodeModel(TrafficEngineeringLP):
         """
 
         OBJECTIVE_NODES = [gurobipy.QuadExpr() for _ in range(K_SLICE)]
-        for k, obj in tqdm.tqdm(enumerate(OBJECTIVE_NODES)):
+        for k, obj in enumerate(OBJECTIVE_NODES):
             for t in range(T):
                 y = Y_TK[k][t]
                 c = U_T_scattered[t] - P_BAR_T_scattered[t] + Y_BAR_T_scattered[t] - Y_TK_old[k][t]
@@ -524,7 +528,7 @@ class NodeModel(TrafficEngineeringLP):
             self._env.close()
     
     def make_lp(self):
-        print(f"[NODE {self.index}] Making problem model")
+        # print(f"[NODE {self.index}] Making problem model")
         self._make_variables()
         self._add_constraints()
         self._add_objective()
@@ -567,6 +571,9 @@ class NodeModel(TrafficEngineeringLP):
             pair_str = str(np.round(pair, 4))
             assert abs(primal - pair) < 2*PARAMS.FeasibilityTol, \
                 f"Axis {t} --> Inner ADMM pairing is not in consensus with primal variable: {primal_str} vs {pair_str}"
+
+    def get_solution_commodity_list(self):
+        raise ValueError("Shouldn't be used ...")
 
 
 class NodeModelListener(RegularizedADMMSolverServicer):
@@ -689,10 +696,10 @@ class MultiProcessorRegularizedADMMLP(TrafficEngineeringLP):
 
     @property
     def objective_value(self) -> float:
-        raise NotImplementedError
+        return self._controller_lp._utility.X
     
     @property
-    def objective_trace(self) -> List[float]:
+    def objective_trace(self) -> Optional[List[float]]:
         return self._objective_trace
 
     def _set_initial_feasible_solution(self):
@@ -955,9 +962,6 @@ class MultiProcessorRegularizedADMMLP(TrafficEngineeringLP):
         self._make_variables()
         self._add_constraints()
         self._add_objective()
-        # TODO: Make async
-        # for node_stub in self._node_stubs:
-        #     node_stub.MakeProblem(Empty())
         wait([
             self._broadcast_thread_pool.submit(node_stub.MakeProblem, Empty()) 
             for node_stub in self._node_stubs
@@ -1026,7 +1030,7 @@ class MultiProcessorRegularizedADMMLP(TrafficEngineeringLP):
             print(f'Error code {e.errno}: {e}')
             return -1
     
-    def check(self):
+    def check(self, feasibility_tol: Optional[float] = None, feasibility_ratio: Optional[float] = None):
         PARAMS = self._solver_params
         Y_BAR_T = array_to_serialized_message(self._Y_bar_t)
         P_BAR_T = array_to_serialized_message(self._P_bar_t)
@@ -1041,6 +1045,10 @@ class MultiProcessorRegularizedADMMLP(TrafficEngineeringLP):
         # Now, check flow conservation ...
         X_EK = self._X_ek
         check_centralized_flow_conservation(X_EK, self._graph, self._commodity_list, PARAMS.FeasibilityTol)
+        check_capacity_constraint(
+            X_EK, self._graph, self._commodity_list, 
+            feasibility_tol=feasibility_tol, feasibility_ratio=feasibility_ratio
+        )
 
     def get_solution_commodity_list(self) -> List[Tuple[Commodity, Commodity]]:
         COMMODITIES = self._commodity_list

@@ -3,7 +3,7 @@ import gurobipy
 import numpy as np
 import networkx as nx
 import te.constants
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 from dataclasses import dataclass
 from gurobipy import GRB, GurobiError, quicksum
 from te.algorithms.base import TrafficEngineeringLP, GurobiSolverParams, SolverParams
@@ -66,14 +66,10 @@ class DistributedEdgeBasedLP(TrafficEngineeringLP):
 
     @property
     def objective_value(self) -> float:
-        if self._objective_controller and self._objectives_nodes:
-            return self._objective_controller.getValue() + sum([
-                obj.getValue() for obj in self._objectives_nodes
-            ])
-        return None
+        return self._utility.X
     
     @property
-    def objective_trace(self) -> List[float]:
+    def objective_trace(self) -> Optional[List[float]]:
         return self._objective_trace
     
     def _prepare_in_edge_mapping(self):
@@ -374,20 +370,3 @@ class DistributedEdgeBasedLP(TrafficEngineeringLP):
             )
             for i, commodity in enumerate(COMMODITIES)
         ]
-    
-    # def get_ratio_of_unsatisfied_demands(self, params: DistributedSolverParams, solution: List[Commodity] = None) -> float:
-    #     COMMODITIES = self._commodity_list
-    #     K = len(COMMODITIES)
-    #     if solution is None:
-    #         solution = self.get_solution_commodity_list()
-    #     assert len(solution) == K
-
-    #     k = 0
-    #     for actual, ideal in zip(solution, COMMODITIES):
-    #         assert actual.source == ideal.source
-    #         assert actual.destination == ideal.destination
-    #         if abs(actual.demand - ideal.demand) > params.FeasibilityTol * 2:
-    #             print(f"COULD NOT SATISFY {actual.source} -> {actual.destination}: {actual.demand} vs {ideal.demand}")
-    #             k += 1
-
-    #     return k / K

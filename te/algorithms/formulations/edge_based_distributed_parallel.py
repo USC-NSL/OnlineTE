@@ -7,7 +7,7 @@ import networkx as nx
 import te.constants
 import protos.distributed_lp.distributed_lp_pb2 as lp_messages
 import protos.distributed_lp.distributed_lp_pb2_grpc as lp_rpc
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 from dataclasses import dataclass
 from gurobipy import GRB, GurobiError, quicksum
 from te.algorithms.base import TrafficEngineeringLP, SolverParams, GurobiSolverParams
@@ -74,7 +74,7 @@ class NodeLP(TrafficEngineeringLP):
     def commodity_list(self) -> List[Commodity]:
         return self._commodity_list
     @property
-    def objective_trace(self) -> List[float]:
+    def objective_trace(self) -> Optional[List[float]]:
         raise ValueError("Shouldn't be used ...")
     @property
     def objective_value(self) -> float:
@@ -242,7 +242,7 @@ class ControllerLP(TrafficEngineeringLP):
     def commodity_list(self) -> List[Commodity]:
         return self._commodity_list
     @property
-    def objective_trace(self) -> List[float]:
+    def objective_trace(self) -> Optional[List[float]]:
         raise ValueError("Shouldn't be used ...")
     @property
     def objective_value(self) -> float:
@@ -480,11 +480,10 @@ class DistributedParallelEdgeBasedLP(TrafficEngineeringLP):
 
     @property
     def objective_value(self) -> float:
-        return self._controller_lp.objective_value + \
-            sum([node_lp.objective_value for node_lp in self._node_lps])
+        return self._controller_lp._utility.X
     
     @property
-    def objective_trace(self) -> List[float]:
+    def objective_trace(self) -> Optional[List[float]]:
         return self._objective_trace
 
     def _initiate_dual_weights(self):

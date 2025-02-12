@@ -19,10 +19,10 @@ from te.algorithms.formulations.mp_edge_based_regularized_admm import (
     MultiProcessorRegularizedADMMLP, MultiProcessesorRegularizedADMMSolverParams,
     RegularizedADMMRPCParams
 )
-from te.algorithms.utils import report_commodity_assignments, check_centralized_flow_conservation
+from te.algorithms.utils import check_centralized_flow_conservation, get_solution_confusion_matrix
 from topologies.utils import (
     load_zoo_topology, get_capacity_lower_bound,
-    set_edge_capacity_to, make_graph_from_dict
+    set_edge_capacity_to, make_graph_from_dict,
 )
 
 
@@ -48,10 +48,7 @@ def toy_test_1():
         lp.make_lp()
         t = lp.solve()
         if t > 0:
-            expected = lp.commodity_list
-            result = lp.get_solution_commodity_list()
-            unsatisfied = lp.get_ratio_of_unsatisfied_demands(solver_params)
-            report_commodity_assignments(expected, result, unsatisfied)
+            get_solution_confusion_matrix(lp, solver_params.FeasibilityTol)
             print(f"Solved in {t} seconds. Final objective value: {lp.objective_value}")
 
 
@@ -76,14 +73,9 @@ def toy_test_2():
     with contextlib.closing(DistributedEdgeBasedLP(graph, tm, solver_params)) as lp:
         lp.make_lp()
         t = lp.solve()
-        # if t > 0:
-        expected = lp.commodity_list
-        result = lp.get_solution_commodity_list()
-        # unsatisfied = lp.get_ratio_of_unsatisfied_demands(solver_params)
-        report_commodity_assignments(expected, result, 0)
-        print(f"Solved in {t} seconds. Final objective value: {lp.objective_value}")
-        plt.plot(lp.objective_trace)
-        plt.show()
+        if t > 0:
+            get_solution_confusion_matrix(lp, solver_params.FeasibilityTol)
+            print(f"Solved in {t} seconds. Final objective value: {lp.objective_value}")
 
 
 def zoo_test_1():
@@ -102,14 +94,10 @@ def zoo_test_1():
     with contextlib.closing(CentralizedEdgeBasedLP(graph, tm, solver_params)) as lp:
         lp.make_lp()
         t = lp.solve()
-        if t >= 0:
-            lp.check()
-            expected = lp.commodity_list
-            result = lp.get_solution_commodity_list()
-            unsatisfied = lp.get_ratio_of_unsatisfied_demands(solver_params)
-            report_commodity_assignments(expected, result, unsatisfied)
+        if t > 0:
+            lp.check(feasibility_ratio=1e-2)
+            get_solution_confusion_matrix(lp, solver_params.FeasibilityTol)
             print(f"Solved in {t} seconds. Final objective value: {lp.objective_value}")
-            print(f"Final utilization value: {lp._utility.X}")
 
 
 def zoo_test_1_dist():
@@ -131,14 +119,10 @@ def zoo_test_1_dist():
     with contextlib.closing(DistributedEdgeBasedLP(graph, tm, solver_params)) as lp:
         lp.make_lp()
         t = lp.solve()
-        expected = lp.commodity_list
-        result = lp.get_solution_commodity_list()
-        # unsatisfied = lp.get_ratio_of_unsatisfied_demands(solver_params)
-        report_commodity_assignments(expected, result, 0.0)
-        print(f"Solved in {t} seconds. Final objective value: {lp.objective_value}")
-        print(f"Final utilization value: {lp._utility.X}")
-        plt.plot(lp.objective_trace)
-        plt.show()
+        if t > 0:
+            lp.check(feasibility_ratio=1e-2)
+            get_solution_confusion_matrix(lp, solver_params.FeasibilityTol)
+            print(f"Solved in {t} seconds. Final objective value: {lp.objective_value}")
 
 
 def zoo_test_1_dist_parallel():
@@ -159,13 +143,10 @@ def zoo_test_1_dist_parallel():
     with contextlib.closing(DistributedParallelEdgeBasedLP(graph, tm, solver_params, controller_params, node_params)) as lp:
         lp.make_lp()
         t = lp.solve()
-        expected = lp.commodity_list
-        result = lp.get_solution_commodity_list()
-        # unsatisfied = lp.get_ratio_of_unsatisfied_demands(solver_params)
-        report_commodity_assignments(expected, result, 0.0)
-        print(f"Solved in {t} seconds. Final objective value: {lp.objective_value}")
-        plt.plot(lp.objective_trace)
-        plt.show()
+        if t > 0:
+            lp.check(feasibility_ratio=1e-2)
+            get_solution_confusion_matrix(lp, solver_params.FeasibilityTol)
+            print(f"Solved in {t} seconds. Final objective value: {lp.objective_value}")
 
 
 def zoo_test_1_admm():
@@ -187,13 +168,10 @@ def zoo_test_1_admm():
     with contextlib.closing(DistributedEdgeBasedADMMLP(graph, tm, solver_params)) as lp:
         lp.make_lp()
         t = lp.solve()
-        expected = lp.commodity_list
-        result = lp.get_solution_commodity_list()
-        report_commodity_assignments(expected, result, 0.0)
-        print(f"Solved in {t} seconds.")
-        print(f"Final utilization value: {lp._utility.X}")
-        plt.plot(lp.objective_trace)
-        plt.show()
+        if t > 0:
+            lp.check(feasibility_ratio=1e-2)
+            get_solution_confusion_matrix(lp, solver_params.FeasibilityTol)
+            print(f"Solved in {t} seconds. Final objective value: {lp.objective_value}")
 
 
 def zoo_test_2():
@@ -213,10 +191,8 @@ def zoo_test_2():
         lp.make_lp()
         t = lp.solve()
         if t > 0:
-            expected = lp.commodity_list
-            result = lp.get_solution_commodity_list()
-            unsatisfied = lp.get_ratio_of_unsatisfied_demands(solver_params)
-            report_commodity_assignments(expected, result, unsatisfied)
+            lp.check(feasibility_ratio=1e-2)
+            get_solution_confusion_matrix(lp, solver_params.FeasibilityTol)
             print(f"Solved in {t} seconds. Final objective value: {lp.objective_value}")
 
 
@@ -239,10 +215,8 @@ def zoo_test_3():
         lp.make_lp()
         t = lp.solve()
         if t > 0:
-            expected = lp.commodity_list
-            result = lp.get_solution_commodity_list()
-            unsatisfied = lp.get_ratio_of_unsatisfied_demands(solver_params)
-            report_commodity_assignments(expected, result, unsatisfied, verbose=False)
+            lp.check(feasibility_ratio=1e-2)
+            get_solution_confusion_matrix(lp, solver_params.FeasibilityTol)
             print(f"Solved in {t} seconds. Final objective value: {lp.objective_value}")
 
 
@@ -263,12 +237,9 @@ def centralized_test_small():
         lp.make_lp()
         t = lp.solve()
         if t > 0:
-            lp.check()
-            expected = lp.commodity_list
-            result = lp.get_solution_commodity_list()
-            unsatisfied = lp.get_ratio_of_unsatisfied_demands(solver_params)
-            report_commodity_assignments(expected, result, unsatisfied)
-            print(f"Solved in {t} seconds. Final objective value: {lp.objective_value}")
+            lp.check(feasibility_ratio=1e-2)
+            get_solution_confusion_matrix(lp, solver_params.FeasibilityTol)
+            print(f"Solved in {str(round(t, 4))} seconds. Final objective value: {str(round(lp.objective_value, 4))}")
 
 
 def centralized_test_medium():
@@ -288,10 +259,8 @@ def centralized_test_medium():
         lp.make_lp()
         t = lp.solve()
         if t > 0:
-            expected = lp.commodity_list
-            result = lp.get_solution_commodity_list()
-            unsatisfied = lp.get_ratio_of_unsatisfied_demands(solver_params)
-            report_commodity_assignments(expected, result, unsatisfied)
+            lp.check(feasibility_ratio=1e-2)
+            get_solution_confusion_matrix(lp, solver_params.FeasibilityTol)
             print(f"Solved in {t} seconds. Final objective value: {lp.objective_value}")
 
 
@@ -314,13 +283,10 @@ def admm_test_medium():
     with contextlib.closing(DistributedEdgeBasedADMMLP(graph, tm, solver_params)) as lp:
         lp.make_lp()
         t = lp.solve()
-        expected = lp.commodity_list
-        result = lp.get_solution_commodity_list()
-        report_commodity_assignments(expected, result, 0.0)
-        print(f"Solved in {t} seconds.")
-        print(f"Final utilization value: {lp._utility.X}")
-        plt.plot(lp.objective_trace)
-        plt.show()
+        if t > 0:
+            lp.check(feasibility_ratio=1e-2)
+            get_solution_confusion_matrix(lp, solver_params.FeasibilityTol)
+            print(f"Solved in {t} seconds. Final objective value: {lp.objective_value}")
 
 
 def regularized_admm_test_small():
@@ -336,8 +302,8 @@ def regularized_admm_test_small():
     print(f"Capacity lower bound is: {c_min}")
 
     solver_params = RegularizedADMMSolverParams(
-        NumberOfEpochs=50,
-        NumberOfNetworkUpdates=10,
+        NumberOfEpochs=5,
+        NumberOfNetworkUpdates=2,
         Epsilon=1e-4,
         Eta=1e-3,
         Rho=1e-3
@@ -346,19 +312,14 @@ def regularized_admm_test_small():
         lp.make_lp()
         t = lp.solve()
         if t > 0:
-            # lp.check()
-            expected = lp.commodity_list
-            result = lp.get_solution_commodity_list()
-            report_commodity_assignments(expected, result, 0.0)
-            print(f"Solved in {t} seconds.")
-            print(f"Final utilization value: {lp._utility.X}")
-            plt.plot(lp.objective_trace)
-            plt.show()
+            lp.check(feasibility_ratio=1e-2)
+            get_solution_confusion_matrix(lp, solver_params.FeasibilityTol)
+            print(f"Solved in {t} seconds. Final objective value: {lp.objective_value}")
 
 
 def mp_regularized_admm_test_small():
-    # graph = load_zoo_topology('Claranet')
-    graph = load_zoo_topology('Interoute')
+    graph = load_zoo_topology('Claranet')
+    # graph = load_zoo_topology('Interoute')
     
     tm_params = UniformTrafficMatrixParams(
         n = len(graph.nodes), min = 0.0, max = 1.0
@@ -371,9 +332,9 @@ def mp_regularized_admm_test_small():
 
     solver_params = MultiProcessesorRegularizedADMMSolverParams(
         NumberOfNodeProcesses=5,
-        NumberOfEpochs=5,
-        NumberOfNetworkUpdates=3,
-        Epsilon=1e-4,
+        NumberOfEpochs=50,
+        NumberOfNetworkUpdates=10,
+        Epsilon=1e-5,
         Eta=1e-3,
         Rho=1e-3
     )
@@ -382,14 +343,9 @@ def mp_regularized_admm_test_small():
         lp.make_lp()
         t = lp.solve()
         if t > 0:
-            # lp.check()
-            expected = lp.commodity_list
-            result = lp.get_solution_commodity_list()
-            report_commodity_assignments(expected, result, 0.0)
-            print(f"Solved in {t} seconds.")
-            print(f"Final utilization value: {lp._controller_lp._utility.X}")
-            plt.plot(lp.objective_trace)
-            plt.show()
+            lp.check(feasibility_ratio=1e-2)
+            get_solution_confusion_matrix(lp, feasibility_ratio=1e-2)
+            print(f"Solved in {t} seconds. Final objective value: {lp.objective_value}")
 
 
 def regularized_admm_test_medium():
@@ -414,13 +370,9 @@ def regularized_admm_test_medium():
         lp.make_lp()
         t = lp.solve()
         if t > 0:
-            expected = lp.commodity_list
-            result = lp.get_solution_commodity_list()
-            report_commodity_assignments(expected, result, 0.0)
-            print(f"Solved in {t} seconds.")
-            print(f"Final utilization value: {lp._utility.X}")
-            plt.plot(lp.objective_trace)
-            plt.show()
+            lp.check(feasibility_ratio=1e-2)
+            get_solution_confusion_matrix(lp, solver_params.FeasibilityTol)
+            print(f"Solved in {t} seconds. Final objective value: {lp.objective_value}")
 
 
 def unregulated_admm_test_small():
@@ -437,26 +389,21 @@ def unregulated_admm_test_small():
     print(f"Capacity lower bound is: {c_min}")
 
     solver_params = UnregulatedADMMSolverParams(
-        NumberOfEpochs=80,
-        NumberOfNetworkUpdates=2,
-        PGDIterations=5,
-        Gamma=5e-1,
-        Eta=1e-3,
-        Rho=1e-3,
+        NumberOfEpochs=240,
+        NumberOfNetworkUpdates=1,
+        PGDIterations=2,
+        Gamma=0.5,
+        Eta=1e-4,
+        Rho=1e-4,
         NumWorkers=8
     )
     with contextlib.closing(UnregulatedADMMLP(graph, tm, solver_params)) as lp:
         lp.make_lp()
         t = lp.solve()
         if t > 0:
-            # lp.check()
-            expected = lp.commodity_list
-            result = lp.get_solution_commodity_list()
-            report_commodity_assignments(expected, result, 0.0)
-            print(f"Solved in {t} seconds.")
-            print(f"Final utilization value: {lp._utility.X}")
-            plt.plot(lp.objective_trace)
-            plt.show()
+            lp.check(feasibility_ratio=1e-2)
+            get_solution_confusion_matrix(lp, solver_params.FeasibilityTol)
+            print(f"Solved in {t} seconds. Final objective value: {lp.objective_value}")
 
 
 if __name__ == '__main__':
@@ -472,10 +419,10 @@ if __name__ == '__main__':
     # zoo_test_1_dist()
     # zoo_test_1_admm()
     # zoo_test_1_dist_parallel()
-    centralized_test_medium()
-    # admm_test_medium()
     # centralized_test_small()
+    # centralized_test_medium()
+    # admm_test_medium()
     # regularized_admm_test_small()
     # regularized_admm_test_medium()
     # mp_regularized_admm_test_small()
-    # unregulated_admm_test_small()
+    unregulated_admm_test_small()
