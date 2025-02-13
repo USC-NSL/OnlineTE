@@ -29,6 +29,10 @@ class UnregulatedADMMSolverParams(GurobiSolverParams):
     PGDIterations: int = 5
     NumWorkers: int = 1
     Seed: int = te.constants.DEFAULT_SEED
+    UseVariableRho: bool = True
+    Mu: float = te.constants.DEFAULT_MU
+    TauIncrease: float = te.constants.DEFAULT_TAU_INC
+    TauDecrease: float = te.constants.DEFAULT_TAU_DEC
 
 
 class UnregulatedADMMLP(TrafficEngineeringLP):
@@ -60,6 +64,7 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         self._Xo_e_start: Optional[np.ndarray] = None
         self._Xo_e: Optional[gurobipy.tupledict] = None
         self._Zo_e: Optional[np.ndarray] = None
+        self._Zo_e_old: Optional[np.ndarray] = None
         # Just a variable between 0 and 1
         self._utility: Optional[gurobipy.Var] = None
 
@@ -79,8 +84,13 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
 
         # Residual of outer ADMM. A vector of length `n`.
         self._r_e: Optional[np.ndarray] = None
+        self._outer_primal_residual_norm: float = None
+        self._outer_dual_residual_norm: float = None
         # Residual of inner ADMM. A vector of length `T`.
         self._u_t: Optional[np.ndarray] = None
+
+        self._rho_coeff: float = 1.0
+        self._rho_coeff_trace: List[float] = []
 
         self._objective_trace = []
 
@@ -104,6 +114,10 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
     @property
     def commodity_list(self) -> List[Commodity]:
         return self._commodity_list
+    
+    @property
+    def rho_coeff_trace(self) -> List[float]:
+        return self._rho_coeff_trace
 
     @property
     def objective_value(self) -> float:
@@ -215,7 +229,7 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         XO_E = self._Xo_e
         ZO_E = self._Zo_e
         R_E = self._r_e
-        RHO = self._solver_params.Rho
+        RHO = self._solver_params.Rho * self._rho_coeff
         MODEL_CONTROLLER = self._model_controller
 
         """
@@ -281,7 +295,7 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
 
         K = len(self._commodity_list)
         ETA = self._solver_params.Eta
-        RHO = self._solver_params.Rho
+        RHO = self._solver_params.Rho * self._rho_coeff
         U_T = self._u_t
         Y_BAR_T = self._Y_bar_t
         F_E = self._get_F()
@@ -311,14 +325,30 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         The update rule for Zo_e is:
             Zo_e \gets (X_oe + \sum_k X_ke)/2
         """
-
-        XO_E = self._Xo_e
+        
+        RHO = self._solver_params.Rho * self._rho_coeff
         NUM_EDGES = self._NUM_EDGES
+        XO_E = self._Xo_e
+        XO_E_ = np.array([XO_E[e].X for e in range(NUM_EDGES)])
         X_KE_SUM_E = self._get_X_k_sum()
-        Zo_e = np.zeros((NUM_EDGES,))
-        for e in range(NUM_EDGES):
-            Zo_e[e] = (XO_E[e].X + X_KE_SUM_E[e]) / 2
+        Zo_e = (XO_E_ + X_KE_SUM_E) / 2
+        self._Zo_e_old = np.copy(self._Zo_e)
         self._Zo_e = Zo_e
+        self._outer_primal_residual_norm = np.linalg.norm((self._Zo_e_old - XO_E_)) + np.linalg.norm(self._Zo_e_old - X_KE_SUM_E)
+        self._outer_dual_residual_norm = RHO * np.linalg.norm((Zo_e - self._Zo_e_old))
+    
+    def _update_rho_coeff(self):
+        PARAMS = self._solver_params
+        primal_norm = self._outer_primal_residual_norm
+        dual_norm = self._outer_dual_residual_norm
+        if PARAMS.UseVariableRho:
+            self._rho_coeff_trace.append(self._rho_coeff)
+            if primal_norm > PARAMS.Mu * dual_norm:
+                self._rho_coeff *= PARAMS.TauIncrease
+                self._r_e = (self._r_e / PARAMS.TauIncrease)
+            elif dual_norm > PARAMS.Mu * primal_norm:
+                self._rho_coeff /= PARAMS.TauDecrease
+                self._r_e = (self._r_e * PARAMS.TauDecrease)
     
     def _update_r_e(self):
         assert self._model_controller is not None
@@ -384,6 +414,7 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
 
                 # Now that we have non-zero flow assignments, inform the controller
                 self._update_Zo_e()
+                self._update_rho_coeff()
                 self._update_r_e()
 
                 # Update the objectives and start again

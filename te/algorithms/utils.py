@@ -4,6 +4,7 @@ import seaborn as sns
 import networkx as nx
 import te.constants
 import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
 from typing import List, Tuple, Dict, Union, Optional
 from collections import defaultdict
 from te.traffic_models.base import Commodity
@@ -42,7 +43,7 @@ def optimize_or_scream(model: gurobipy.Model):
 
 
 def get_solution_confusion_matrix(lp: TrafficEngineeringLP, feasibility_tol: Optional[float] = None, feasibility_ratio: Optional[float] = None, 
-                                  report: bool = False, show: bool = True) -> Tuple[float, np.ndarray]:
+                                  report: bool = False, show: bool = True, save_fig: bool = True) -> Tuple[float, np.ndarray]:
     """
     Check how many of the demands are not satisfied and report the solution.
     To check feasibility:
@@ -55,7 +56,37 @@ def get_solution_confusion_matrix(lp: TrafficEngineeringLP, feasibility_tol: Opt
         if feasibility_tol is not None:
             return abs(optim - actual) < feasibility_tol
         return abs((optim - actual) / optim) < feasibility_ratio
-    
+
+    def make_fig(_cm: np.ndarray, _lp: TrafficEngineeringLP) -> Figure:
+        _objective_trace = _lp.objective_trace
+        _solver_params = _lp.params
+        rho_coeff_trace = None
+        if hasattr(_solver_params, 'UseVariableRho'):
+            if _solver_params.UseVariableRho:
+                print(f"{ANSIColors.BOLD}{ANSIColors.OKBLUE}ADMM algorithm used variable step sizes. Will plot that too{ANSIColors.ENDC}")
+                rho_coeff_trace = _lp.rho_coeff_trace
+        if _objective_trace is None:
+            print(f"{ANSIColors.BOLD}{ANSIColors.WARNING}WARNING: No trace of objective value is available{ANSIColors.ENDC}")
+            sns.heatmap(cm)
+        else:
+            if rho_coeff_trace is None:
+                _fig = plt.figure(figsize=(7, 3))
+                plt.subplot(1, 2, 1)
+                plt.plot(_objective_trace)
+                plt.subplot(1, 2, 2)
+                sns.heatmap(_cm, vmin=0, vmax=1)
+            else:
+                _fig = plt.figure(figsize=(10, 3))
+                plt.subplot(1, 3, 1)
+                plt.plot(_objective_trace)
+                plt.subplot(1, 3, 2)
+                sns.heatmap(_cm, vmin=0, vmax=1)
+                ax = plt.subplot(1, 3, 3)
+                plt.plot(rho_coeff_trace)
+                ax.set_yscale('log')
+            return _fig
+
+
     commodities = lp.commodity_list
     topology_size = len(lp.graph.nodes)
     solution = lp.get_solution_commodity_list()
@@ -93,18 +124,13 @@ def get_solution_confusion_matrix(lp: TrafficEngineeringLP, feasibility_tol: Opt
     else:
         print(f"{ANSIColors.BOLD}{ANSIColors.FAIL}" + "{:.1f}% OF DEMANDS WERE NOT SATISFIED".format(unsatisfied*100) + f"{ANSIColors.ENDC}")
     
-    if show:
-        plt.figure()
-        objective_trace = lp.objective_trace
-        if objective_trace is None:
-            print(f"{ANSIColors.BOLD}{ANSIColors.WARNING}WARNING: No trace of objective value is available{ANSIColors.ENDC}")
-            sns.heatmap(cm)
-        else:
-            plt.subplot(1, 2, 1)
-            plt.plot(objective_trace)
-            plt.subplot(1, 2, 2)
-            sns.heatmap(cm, vmin=0, vmax=1)
-        plt.show()
+    if show or save_fig:
+        fig = make_fig(cm, lp)
+        if fig is not None:
+            if show:
+                plt.show()
+            if save_fig:
+                fig.savefig('res.png')
 
     return (unsatisfied, cm)
 

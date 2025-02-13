@@ -389,13 +389,14 @@ def unregulated_admm_test_small():
     print(f"Capacity lower bound is: {c_min}")
 
     solver_params = UnregulatedADMMSolverParams(
-        NumberOfEpochs=240,
-        NumberOfNetworkUpdates=1,
-        PGDIterations=2,
+        NumberOfEpochs=20,
+        NumberOfNetworkUpdates=3,
+        PGDIterations=5,
         Gamma=0.5,
         Eta=1e-4,
         Rho=1e-4,
-        NumWorkers=8
+        NumWorkers=8,
+        UseVariableRho=True
     )
     with contextlib.closing(UnregulatedADMMLP(graph, tm, solver_params)) as lp:
         lp.make_lp()
