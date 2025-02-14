@@ -65,6 +65,7 @@ def get_solution_confusion_matrix(lp: TrafficEngineeringLP, feasibility_tol: Opt
             if _solver_params.UseVariableRho:
                 print(f"{ANSIColors.BOLD}{ANSIColors.OKBLUE}ADMM algorithm used variable step sizes. Will plot that too{ANSIColors.ENDC}")
                 rho_coeff_trace = _lp.rho_coeff_trace
+                eta_coeff_trace = _lp.eta_coeff_trace
         if _objective_trace is None:
             print(f"{ANSIColors.BOLD}{ANSIColors.WARNING}WARNING: No trace of objective value is available{ANSIColors.ENDC}")
             sns.heatmap(cm)
@@ -76,13 +77,16 @@ def get_solution_confusion_matrix(lp: TrafficEngineeringLP, feasibility_tol: Opt
                 plt.subplot(1, 2, 2)
                 sns.heatmap(_cm, vmin=0, vmax=1)
             else:
-                _fig = plt.figure(figsize=(10, 3))
-                plt.subplot(1, 3, 1)
+                _fig = plt.figure(figsize=(7, 6))
+                plt.subplot(2, 2, 1)
                 plt.plot(_objective_trace)
-                plt.subplot(1, 3, 2)
+                plt.subplot(2, 2, 2)
                 sns.heatmap(_cm, vmin=0, vmax=1)
-                ax = plt.subplot(1, 3, 3)
+                ax = plt.subplot(2, 2, 3)
                 plt.plot(rho_coeff_trace)
+                ax.set_yscale('log')
+                ax = plt.subplot(2, 2, 4)
+                plt.plot(eta_coeff_trace)
                 ax.set_yscale('log')
             return _fig
 

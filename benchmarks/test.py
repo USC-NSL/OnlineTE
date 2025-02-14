@@ -376,8 +376,8 @@ def regularized_admm_test_medium():
 
 
 def unregulated_admm_test_small():
-    # graph = load_zoo_topology('Claranet')
-    graph = load_zoo_topology('Interoute')
+    graph = load_zoo_topology('Claranet')
+    # graph = load_zoo_topology('Interoute')
     
     tm_params = UniformTrafficMatrixParams(
         n = len(graph.nodes), min = 0.0, max = 1.0
@@ -389,10 +389,10 @@ def unregulated_admm_test_small():
     print(f"Capacity lower bound is: {c_min}")
 
     solver_params = UnregulatedADMMSolverParams(
-        NumberOfEpochs=20,
-        NumberOfNetworkUpdates=3,
-        PGDIterations=5,
-        Gamma=0.5,
+        NumberOfEpochs=40,
+        NumberOfNetworkUpdates=2,
+        PGDIterations=1000,
+        Gamma=1e-1,
         Eta=1e-4,
         Rho=1e-4,
         NumWorkers=8,

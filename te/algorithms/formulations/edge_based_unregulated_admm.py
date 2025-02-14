@@ -73,10 +73,12 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         self._X_ek: Optional[np.ndarray] = None
         # Global value. A `T x K` matrix
         self._Y_tk: Optional[np.ndarray] = None
+        self._Y_tk_old: Optional[np.ndarray] = None
         # ADMM running average variable. A vector of length `T`.
         self._P_bar_t: Optional[np.ndarray] = None
         self._P_bar_t_old: Optional[np.ndarray] = None
         self._Y_bar_t: Optional[np.ndarray] = None
+        self._Y_bar_t_old: Optional[np.ndarray] = None
 
         # For PGD, an `N x K` matrix
         self._lambda_ek: Optional[np.ndarray] = None
@@ -124,6 +126,10 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
     @property
     def rho_coeff_trace(self) -> List[float]:
         return self._rho_coeff_trace
+
+    @property
+    def eta_coeff_trace(self) -> List[float]:
+        return self._eta_coeff_trace
 
     @property
     def objective_value(self) -> float:
@@ -288,6 +294,8 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
             self._Y_tk[:, k] = y_k
     
     def _update_Y_bar(self):
+        self._Y_bar_t_old = np.copy(self._Y_bar_t)
+        self._Y_tk_old = np.copy(self._Y_tk)
         self._Y_bar_t = np.average(self._Y_tk, axis=1)
     
     def _update_P_bar(self):
@@ -299,6 +307,7 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
             P_bar \gets (NULL_M^T F + (\eta/\rho) (u + Y_bar)) / (K + (\eta/\rho))
         """
 
+        T = self._T
         K = len(self._commodity_list)
         ETA = self._solver_params.Eta * self._eta_coeff
         RHO = self._solver_params.Rho * self._rho_coeff
@@ -307,9 +316,15 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         F_E = self._get_F()
         NULL_M = self._NULL_M
         self._P_bar_t_old = np.copy(self._P_bar_t)
-        self._P_bar_t = (NULL_M.T @ F_E + (ETA/RHO) * (U_T + Y_BAR_T)) / (K + (ETA/RHO))
-        self._inner_primal_residual_norm = np.linalg.norm((self._P_bar_t_old - Y_BAR_T))
-        self._inner_dual_residual_norm = np.linalg.norm((self._P_bar_t - self._P_bar_t_old)) * self._eta_coeff
+        P_BAR_T = (NULL_M.T @ F_E + (ETA/RHO) * (U_T + Y_BAR_T)) / (K + (ETA/RHO))
+        self._P_bar_t = P_BAR_T
+
+        self._inner_primal_residual_norm = np.linalg.norm((P_BAR_T - Y_BAR_T)) / T
+        self._inner_dual_residual_norm = np.linalg.norm(
+            (self._Y_tk - self._Y_tk_old) + 
+            (P_BAR_T - self._P_bar_t_old)[:, np.newaxis] +
+            (self._Y_bar_t_old - Y_BAR_T)[:, np.newaxis]
+        ) * self._eta_coeff / (T * K)
     
     def _update_u_t(self):
         assert self._model_controller is not None
@@ -341,8 +356,8 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         Zo_e = (XO_E_ + X_KE_SUM_E) / 2
         self._Zo_e_old = np.copy(self._Zo_e)
         self._Zo_e = Zo_e
-        self._outer_primal_residual_norm = np.linalg.norm((self._Zo_e_old - XO_E_)) + np.linalg.norm(self._Zo_e_old - X_KE_SUM_E)
-        self._outer_dual_residual_norm = np.linalg.norm((Zo_e - self._Zo_e_old)) * self._rho_coeff
+        self._outer_primal_residual_norm = np.linalg.norm((Zo_e - XO_E_)) / NUM_EDGES + np.linalg.norm((Zo_e - X_KE_SUM_E)) / NUM_EDGES
+        self._outer_dual_residual_norm = np.linalg.norm((Zo_e - self._Zo_e_old)) * self._rho_coeff / NUM_EDGES
     
     def _update_rho_coeff(self):
         PARAMS = self._solver_params
@@ -356,7 +371,7 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
             elif dual_norm > PARAMS.Mu * primal_norm:
                 self._rho_coeff /= PARAMS.TauDecrease
                 self._r_e = (self._r_e * PARAMS.TauDecrease)
-            print(f"OUTER PRIMAL = {str(round(primal_norm, 4))} | OUTER DUAL = {str(round(dual_norm, 4))}")
+            # print(f"OUTER PRIMAL = {str(round(primal_norm, 4))} | OUTER DUAL = {str(round(dual_norm, 4))}")
     
     def _update_eta_coeff(self):
         PARAMS = self._solver_params
@@ -370,7 +385,7 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
             elif dual_norm > PARAMS.Mu * primal_norm:
                 self._eta_coeff /= PARAMS.TauDecrease
                 self._u_t = (self._u_t * PARAMS.TauDecrease)
-            print(f"\tINNER PRIMAL = {str(round(primal_norm, 4))} | INNER DUAL = {str(round(dual_norm, 4))}")
+            # print(f"\tINNER PRIMAL = {str(round(primal_norm, 4))} | INNER DUAL = {str(round(dual_norm, 4))}")
     
     def _update_r_e(self):
         assert self._model_controller is not None
@@ -420,8 +435,7 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         total_runtime = 0
 
         try:
-            # for _ in tqdm.tqdm(range(PARAMS.NumberOfEpochs)):
-            for _ in range(PARAMS.NumberOfEpochs):
+            for _ in tqdm.tqdm(range(PARAMS.NumberOfEpochs)):
                 t_commodities: Dict[int, List] = defaultdict(list)
 
                 # First, let the controller decide what the utilization is
