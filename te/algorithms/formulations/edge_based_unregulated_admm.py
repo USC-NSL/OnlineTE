@@ -166,8 +166,10 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         self._NUM_EDGES = n
 
         # We should scale the ADMM step sizes by the size of these values as well ...
-        self._rho_coeff = 1/(n**2)
-        self._eta_coeff = 1/(T**2)
+        # self._rho_coeff = 1/(n**2)
+        # self._eta_coeff = 1/(T**2)
+        self._rho_coeff = 1
+        self._eta_coeff = 1
     
     def _initialize_variables_and_residuals(self):
         T = self._T
