@@ -266,13 +266,16 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         self._update_controller_objective()
     
     @staticmethod
-    def do_pgd(lambda_k: np.ndarray, x_k_0: np.ndarray, nnt: np.ndarray, n: np.ndarray, c: np.ndarray, gamma: float, n_iter: int):
+    def do_pgd(lambda_k: np.ndarray, x_k_0: np.ndarray, nnt: np.ndarray, n: np.ndarray, c: np.ndarray, gamma: float, thresh: float, n_iter: int):
         _c = x_k_0 + n @ c
         for i in range(n_iter):
+            lambda_k_old = lambda_k
             lambda_k = np.clip(lambda_k - gamma * (nnt @ lambda_k + _c), a_min=0, a_max=None)
+            if (np.linalg.norm(lambda_k - lambda_k_old) / np.sqrt(lambda_k.shape[0])) < thresh:
+                break
         return (lambda_k, c + n.T @ lambda_k)
     
-    def _do_network_update(self):
+    def _do_network_update(self) -> float:
         def pgd_iterator():
             K = len(self._commodity_list)
             PGD_ITERS = self._solver_params.PGDIterations
@@ -287,11 +290,14 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
             LAMBDA_EK = self._lambda_ek
             for k in range(K):
                 C_K = Y_TK[:, k] - Y_BAR + P_BAR - U_T
-                yield (LAMBDA_EK[:, k], X_EK_START[:, k], NNT_M, NULL_M, C_K, GAMMA, PGD_ITERS)
+                # TODO: Make threshold parameter a solver parameter input ...
+                yield (LAMBDA_EK[:, k], X_EK_START[:, k], NNT_M, NULL_M, C_K, GAMMA, 1e-8, PGD_ITERS)
+        t_start = time.time()
         for k, item in enumerate(self.proc_pool.starmap(self.do_pgd, pgd_iterator())):
             lambda_k, y_k = item
             self._lambda_ek[:, k] = lambda_k
             self._Y_tk[:, k] = y_k
+        return time.time() - t_start
     
     def _update_Y_bar(self):
         self._Y_bar_t_old = np.copy(self._Y_bar_t)
@@ -319,12 +325,12 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         P_BAR_T = (NULL_M.T @ F_E + (ETA/RHO) * (U_T + Y_BAR_T)) / (K + (ETA/RHO))
         self._P_bar_t = P_BAR_T
 
-        self._inner_primal_residual_norm = np.linalg.norm((P_BAR_T - Y_BAR_T)) / T
+        self._inner_primal_residual_norm = np.linalg.norm((P_BAR_T - Y_BAR_T)) / np.sqrt(T)
         self._inner_dual_residual_norm = np.linalg.norm(
             (self._Y_tk - self._Y_tk_old) + 
             (P_BAR_T - self._P_bar_t_old)[:, np.newaxis] +
             (self._Y_bar_t_old - Y_BAR_T)[:, np.newaxis]
-        ) * self._eta_coeff / (T * K)
+        ) * self._eta_coeff / np.sqrt(T * K)
     
     def _update_u_t(self):
         assert self._model_controller is not None
@@ -356,8 +362,9 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         Zo_e = (XO_E_ + X_KE_SUM_E) / 2
         self._Zo_e_old = np.copy(self._Zo_e)
         self._Zo_e = Zo_e
-        self._outer_primal_residual_norm = np.linalg.norm((Zo_e - XO_E_)) / NUM_EDGES + np.linalg.norm((Zo_e - X_KE_SUM_E)) / NUM_EDGES
-        self._outer_dual_residual_norm = np.linalg.norm((Zo_e - self._Zo_e_old)) * self._rho_coeff / NUM_EDGES
+        scaling = np.sqrt(NUM_EDGES)
+        self._outer_primal_residual_norm = np.linalg.norm((Zo_e - XO_E_)) / scaling + np.linalg.norm((Zo_e - X_KE_SUM_E)) / scaling
+        self._outer_dual_residual_norm = np.linalg.norm((Zo_e - self._Zo_e_old)) * self._rho_coeff / scaling
     
     def _update_rho_coeff(self):
         PARAMS = self._solver_params
@@ -371,7 +378,7 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
             elif dual_norm > PARAMS.Mu * primal_norm:
                 self._rho_coeff /= PARAMS.TauDecrease
                 self._r_e = (self._r_e * PARAMS.TauDecrease)
-            # print(f"OUTER PRIMAL = {str(round(primal_norm, 4))} | OUTER DUAL = {str(round(dual_norm, 4))}")
+            print(f"OUTER PRIMAL = {str(round(primal_norm, 4))} | OUTER DUAL = {str(round(dual_norm, 4))}")
     
     def _update_eta_coeff(self):
         PARAMS = self._solver_params
@@ -385,7 +392,7 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
             elif dual_norm > PARAMS.Mu * primal_norm:
                 self._eta_coeff /= PARAMS.TauDecrease
                 self._u_t = (self._u_t * PARAMS.TauDecrease)
-            # print(f"\tINNER PRIMAL = {str(round(primal_norm, 4))} | INNER DUAL = {str(round(dual_norm, 4))}")
+            print(f"\tINNER PRIMAL = {str(round(primal_norm, 4))} | INNER DUAL = {str(round(dual_norm, 4))}")
     
     def _update_r_e(self):
         assert self._model_controller is not None
@@ -435,15 +442,16 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         total_runtime = 0
 
         try:
-            for _ in tqdm.tqdm(range(PARAMS.NumberOfEpochs)):
-                t_commodities: Dict[int, List] = defaultdict(list)
+            # for _ in tqdm.tqdm(range(PARAMS.NumberOfEpochs)):
+            for _ in range(PARAMS.NumberOfEpochs):
+                t_network = 0
 
                 # First, let the controller decide what the utilization is
                 optimize_or_scream(MODEL_CONTROLLER)
 
                 # Now, do in-network optimization
                 for _ in range(PARAMS.NumberOfNetworkUpdates):
-                    self._do_network_update()
+                    t_network += self._do_network_update()
                     self._update_Y_bar()
                     self._update_P_bar()
                     self._update_eta_coeff()
@@ -460,8 +468,7 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
 
                 # Houskeeping
                 self._objective_trace.append(self._utility.X)
-                # total_runtime += MODEL_CONTROLLER.Runtime + max(sum(t_commodities[v]) for v in range(M))
-                total_runtime += MODEL_CONTROLLER.Runtime
+                total_runtime += MODEL_CONTROLLER.Runtime + t_network
 
             return total_runtime
         except GurobiError as e:
