@@ -95,9 +95,9 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         self._inner_primal_residual_norm: float = None
         self._inner_dual_residual_norm: float = None
 
-        self._rho_coeff: float = 1.0
+        self._rho_coeff: Optional[float] = None
         self._rho_coeff_trace: List[float] = []
-        self._eta_coeff: float = 1.0
+        self._eta_coeff: Optional[float] = None
         self._eta_coeff_trace: List[float] = []
 
         self._objective_trace = []
@@ -138,6 +138,11 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
     @property
     def objective_trace(self) -> Optional[List[float]]:
         return self._objective_trace
+    
+    @property
+    def assignments(self) -> np.ndarray:
+        assert self._X_ek is not None
+        return self._X_ek
 
     def _set_initial_feasible_solution(self):
         self._X_ek_start = get_feasible_flow_assignment(self._graph, self._commodity_list)
@@ -159,6 +164,10 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         self._NNT_M = N @ N.T
         self._T = T
         self._NUM_EDGES = n
+
+        # We should scale the ADMM step sizes by the size of these values as well ...
+        self._rho_coeff = 1/(n**2)
+        self._eta_coeff = 1/(T**2)
     
     def _initialize_variables_and_residuals(self):
         T = self._T

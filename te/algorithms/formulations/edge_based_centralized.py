@@ -17,7 +17,7 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
         self._traffic = traffic
         self._solver_params: GurobiSolverParams = solver_params
         self._model: gurobipy.Model = None
-        self._flows: gurobipy.MVar = None
+        self._flows: gurobipy.tupledict = None
         self._utility: gurobipy.Var = None
         self._objective: gurobipy.LinExpr = None
         self._commodity_list: List[Commodity] = traffic_to_commodity(self._traffic)

@@ -139,6 +139,17 @@ def get_solution_confusion_matrix(lp: TrafficEngineeringLP, feasibility_tol: Opt
     return (unsatisfied, cm)
 
 
+def get_solution_maximum_utilization(assignments: np.ndarray, graph: nx.DiGraph) -> float:
+    assert len(np.shape(assignments)) == 2
+    flows = np.sum(assignments, axis=1)
+    u = 0
+    for e, (_, _, c_e) in enumerate(graph.edges(data='capacity')):
+        this_u = flows[e] / c_e
+        if u < this_u:
+            u = this_u
+    return u
+
+
 def check_centralized_flow_conservation(
         flows: Union[gurobipy.tupledict, np.ndarray], graph: nx.DiGraph, 
         commodities: List[Commodity], feasibility_tol: float

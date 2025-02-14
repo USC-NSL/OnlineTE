@@ -19,7 +19,7 @@ from te.algorithms.formulations.mp_edge_based_regularized_admm import (
     MultiProcessorRegularizedADMMLP, MultiProcessesorRegularizedADMMSolverParams,
     RegularizedADMMRPCParams
 )
-from te.algorithms.utils import check_centralized_flow_conservation, get_solution_confusion_matrix
+from te.algorithms.utils import check_centralized_flow_conservation, get_solution_confusion_matrix, get_solution_maximum_utilization
 from topologies.utils import (
     load_zoo_topology, get_capacity_lower_bound,
     set_edge_capacity_to, make_graph_from_dict,
@@ -376,8 +376,8 @@ def regularized_admm_test_medium():
 
 
 def unregulated_admm_test_small():
-    # graph = load_zoo_topology('Claranet')
-    graph = load_zoo_topology('Interoute')
+    graph = load_zoo_topology('Claranet')
+    # graph = load_zoo_topology('Interoute')
     
     tm_params = UniformTrafficMatrixParams(
         n = len(graph.nodes), min = 0.0, max = 1.0
@@ -389,12 +389,12 @@ def unregulated_admm_test_small():
     print(f"Capacity lower bound is: {c_min}")
 
     solver_params = UnregulatedADMMSolverParams(
-        NumberOfEpochs=60,
+        NumberOfEpochs=100,
         NumberOfNetworkUpdates=1,
         PGDIterations=1000,
         Gamma=1e-1,
-        Eta=1e-3,
-        Rho=1e-3,
+        Eta=1e-2,
+        Rho=1e-2,
         NumWorkers=8,
         UseVariableRho=True
     )
@@ -405,6 +405,7 @@ def unregulated_admm_test_small():
             lp.check(feasibility_ratio=1e-2)
             get_solution_confusion_matrix(lp, feasibility_ratio=1e-2, report=True)
             print(f"Solved in {t} seconds. Final objective value: {lp.objective_value}")
+            print(f"Actual utilization: {get_solution_maximum_utilization(lp.assignments, lp.graph)}")
 
 
 if __name__ == '__main__':
