@@ -135,3 +135,16 @@ def traffic_to_commodity(tm: TrafficMatrixBase) -> List[Commodity]:
             for src_idx, dst_idx in np.ndindex(TM.shape) \
             if src_idx != dst_idx
     ]
+
+
+class TrafficMatrixConverterBase(ABC):
+    def __init__(self, seed: int = None):
+        super().__init__()
+        self._seed = seed
+    
+    @abstractmethod
+    def convert(self, tm: TrafficMatrixBase) -> TrafficMatrixBase:
+        """
+        Convert a given TM into another TM given the current state of the
+        converter instance.
+        """

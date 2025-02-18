@@ -1,6 +1,6 @@
 import numpy as np
 import networkx as nx
-from collections import namedtuple
+from dataclasses import dataclass
 from te.traffic_models.base import TrafficMatrixBase, traffic_matrix
 
 
@@ -12,15 +12,18 @@ For these distributions, we need to include the graph object (i.e. a
 """
 
 
-UniformTrafficMatrixParams = namedtuple(
-    'UniformTrafficMatrixParams',
-    ['n', 'min', 'max']
-)
+@dataclass
+class UniformTrafficMatrixParams:
+    n: int
+    min: float
+    max: float
 
-ExponentialTrafficMatrixParams = namedtuple(
-    'ExponentialTrafficMatrixParams',
-    ['graph', 'beta', 'gamma']
-)
+
+@dataclass
+class ExponentialTrafficMatrixParams:
+    graph: nx.DiGraph
+    beta: float
+    gamma: float
 
 
 class CustomTrafficMatrix(TrafficMatrixBase):

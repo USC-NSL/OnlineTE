@@ -23,14 +23,34 @@ class ANSIColors:
     UNDERLINE = '\033[4m'
 
 
-def make_model(name: str, params: SolverParams):
+as_bold = lambda msg: f"{ANSIColors.BOLD}{msg}{ANSIColors.ENDC}"
+as_warning = lambda msg: f"{ANSIColors.BOLD}{ANSIColors.WARNING}{msg}{ANSIColors.ENDC}"
+as_info = lambda msg: f"{ANSIColors.BOLD}{ANSIColors.OKBLUE}{msg}{ANSIColors.ENDC}"
+as_success = lambda msg: f"{ANSIColors.BOLD}{ANSIColors.OKGREEN}{msg}{ANSIColors.ENDC}"
+as_fail = lambda msg: f"{ANSIColors.BOLD}{ANSIColors.FAIL}{msg}{ANSIColors.ENDC}"
+
+
+def make_model(name: str, params: SolverParams, env: Optional[gurobipy.Env]):
     assert issubclass(params.__class__, GurobiSolverParams)
-    model = gurobipy.Model(name=name)
-    model.Params.Method = params.Method
+    assert params.Method == gurobipy.GRB.METHOD_BARRIER, "Only BARRIER should be used!"
+    model = gurobipy.Model(name=name, env=env)
+    # model.Params.Method = params.Method
+    model.Params.Method = gurobipy.GRB.METHOD_DUAL
+    model.Params.Crossover = params.Crossover
     model.Params.NumericFocus = params.NumericFocus
     model.Params.BarConvTol = params.BarConvTol
     model.Params.FeasibilityTol = params.FeasibilityTol
     model.Params.LogFile = params.LogFile
+
+    # TODO: Disable presolve?
+    model.Params.Presolve = 0
+
+    print(as_bold(
+        "Created Gurobi Model With:\n"
+        "\tMethod: BARRIER\n"
+        f"\tOptimality Tolerance (BarConvTol): {params.BarConvTol}\n"
+        f"\tCosntraint Feasibility Tolerance (FeasibilityTol): {params.FeasibilityTol}\n"
+    ))
 
     return model
 
@@ -39,7 +59,7 @@ def optimize_or_scream(model: gurobipy.Model):
     """Solve a Gurobi model. Throw an error if the model ends up in any non-optimal state"""
     model.optimize()
     if model.Status != gurobipy.GRB.OPTIMAL:
-        raise RuntimeError(f"Optimizing model {model.ModelName} returned non-optimal status: {model.Status}")
+        raise RuntimeError(as_fail(f"Optimizing model {model.ModelName} returned non-optimal status: {model.Status}"))
 
 
 def get_solution_confusion_matrix(lp: TrafficEngineeringLP, feasibility_tol: Optional[float] = None, feasibility_ratio: Optional[float] = None, 
@@ -63,11 +83,11 @@ def get_solution_confusion_matrix(lp: TrafficEngineeringLP, feasibility_tol: Opt
         rho_coeff_trace = None
         if hasattr(_solver_params, 'UseVariableRho'):
             if _solver_params.UseVariableRho:
-                print(f"{ANSIColors.BOLD}{ANSIColors.OKBLUE}ADMM algorithm used variable step sizes. Will plot that too{ANSIColors.ENDC}")
+                print(as_info("ADMM algorithm used variable step sizes. Will plot that too"))
                 rho_coeff_trace = _lp.rho_coeff_trace
                 eta_coeff_trace = _lp.eta_coeff_trace
         if _objective_trace is None:
-            print(f"{ANSIColors.BOLD}{ANSIColors.WARNING}WARNING: No trace of objective value is available{ANSIColors.ENDC}")
+            print(as_warning("No trace of objective value is available"))
             sns.heatmap(cm)
         else:
             if rho_coeff_trace is None:
@@ -124,9 +144,9 @@ def get_solution_confusion_matrix(lp: TrafficEngineeringLP, feasibility_tol: Opt
     unsatisfied = unsats / K
 
     if unsats == 0:
-        print(f"{ANSIColors.BOLD}{ANSIColors.OKGREEN}ALL DEMANDS WERE SATISFIED{ANSIColors.ENDC}")
+        print(as_success("ALL DEMANDS WERE SATISFIED"))
     else:
-        print(f"{ANSIColors.BOLD}{ANSIColors.FAIL}" + "{:.1f}% OF DEMANDS WERE NOT SATISFIED".format(unsatisfied*100) + f"{ANSIColors.ENDC}")
+        print(as_fail("{:.1f}% OF DEMANDS WERE NOT SATISFIED".format(unsatisfied*100)))
     
     if show or save_fig:
         fig = make_fig(cm, lp)
@@ -235,9 +255,9 @@ def check_capacity_constraint(
     
     congesteds = c / N
     if congesteds == 0:
-        print(f"{ANSIColors.BOLD}{ANSIColors.OKGREEN}ALL LINK CAPCITIES WERE HONORED{ANSIColors.ENDC}")
+        print(as_success("ALL LINK CAPCITIES WERE HONORED"))
     else:
-        print(f"{ANSIColors.BOLD}{ANSIColors.FAIL}" + "{:.1f}% OF LINKS ARE CONGESTED".format(congesteds*100) + f"{ANSIColors.ENDC}")
+        print(as_fail("{:.1f}% OF LINKS ARE CONGESTED".format(congesteds*100)))
 
 
 def check_distributed_flow_conservation(

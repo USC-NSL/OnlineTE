@@ -1,8 +1,12 @@
+import os
+import pickle
+import numpy as np
 import networkx as nx
 import te.constants
 from typing import List, Optional, Tuple
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from te.algorithms import SOLUTION_DIR
 from te.traffic_models.base import TrafficMatrixBase, Commodity
 
 
@@ -12,6 +16,7 @@ class SolverParams(ABC):
 @dataclass
 class GurobiSolverParams(SolverParams):
     Method: int = te.constants.DEFAULT_SOLVER_METHOD
+    Crossover: int = te.constants.DEFAULT_CROSSOVER
     NumericFocus: int = te.constants.DEFAULT_NUMERIC_FOCUS
     BarConvTol: float = te.constants.DEFAULT_BARRIER_CONVERGENCE_TOLERANCE
     FeasibilityTol: float = te.constants.DEFAULT_FEASIBILITY_TOLERANCE
@@ -48,6 +53,17 @@ class TrafficEngineeringLP(ABC):
     @abstractmethod
     def objective_trace(self) -> Optional[List[float]]:
         """List of objective values during algorithm iterations"""
+    
+    @property
+    @abstractmethod
+    def assignments(self) -> np.ndarray:
+        """Return current assignments based on the solution"""
+
+    @abstractmethod
+    def initialize_to(self, assignment: np.ndarray):
+        """
+        Initialize the model to a particular solution
+        """
     
     @abstractmethod
     def _make_variables(self, *args, **kwargs):
@@ -95,4 +111,29 @@ class TrafficEngineeringLP(ABC):
     def get_solution_commodity_list(self) -> List[Tuple[Commodity, Commodity]]:
         """
         Get commodity allocations of the final solution
+        """
+    
+    @abstractmethod
+    def update_traffic_matrix(self, tm: TrafficMatrixBase):
+        """
+        Update the current traffic matrix and re-initialize the model
+        """
+
+
+class TrafficEngineeringLPSolution(ABC):
+    def dump(self, name: str, path: str = None):
+        path = path if path is not None else os.path.join(SOLUTION_DIR, name)
+        with open(path, 'wb') as f:
+            pickle.dump(self, f)
+    
+    @classmethod
+    def load(cls, name: str, path: str = None):
+        path = path if path is not None else os.path.join(SOLUTION_DIR, name)
+        with open(path, 'rb') as f:
+            return pickle.load(f)
+    
+    @abstractmethod
+    def regenerate(self) -> Tuple[nx.DiGraph, TrafficMatrixBase]:
+        """
+        Regenerate the graph and traffic matrix associated with this solution
         """

@@ -6,10 +6,18 @@ TM_DIR = "traffic_models/traffic_matrices"
 FLOAT_RES = 1e-6
 
 # GUROBI SPECIFIC
+
+# We _ALWAYS_ use Barrier method. It is the only one that is fast enough for very large LPs
 DEFAULT_SOLVER_METHOD = GRB.METHOD_BARRIER
-DEFAULT_NUMERIC_FOCUS = 1
-DEFAULT_BARRIER_CONVERGENCE_TOLERANCE = 1e-4
+# We don't need basic solutions per-se, thus, we will disable crossover to make things fair for Gurobi
+DEFAULT_CROSSOVER = 0
+# Solutions don't need to be too accurate, since we have to simplify them later anyway.
+# Thus, we relax barrier convergence tolerance, and stop within 1 percent of the optimal.
+DEFAULT_BARRIER_CONVERGENCE_TOLERANCE = 1e-2
+# This affects flow conservation and demand constraints.
+# We need this to be quite tight, so this we keep smaller.
 DEFAULT_FEASIBILITY_TOLERANCE = 1e-4
+DEFAULT_NUMERIC_FOCUS = 1
 DEFAULT_GUROBI_LOG_FILE = ''
 
 # DISTRIBUTED SPECIFIC

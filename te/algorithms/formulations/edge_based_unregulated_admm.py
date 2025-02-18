@@ -4,19 +4,15 @@ import gurobipy
 import numpy as np
 import networkx as nx
 import te.constants
-from collections import defaultdict
 from multiprocessing import Pool
-from typing import List, Dict, Tuple, Optional
+from typing import List, Tuple, Optional
 from dataclasses import dataclass
 from gurobipy import GRB, GurobiError
 from te.algorithms.base import TrafficEngineeringLP, GurobiSolverParams, SolverParams
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
-from topologies.utils import (get_edge_indexing, get_node_and_out_edge_index_mapping, 
-                              get_edge_to_out_index_mapping, get_graph_M_matrix, 
+from topologies.utils import (get_edge_indexing, get_graph_M_matrix, 
                               get_adjacency_null_space, get_feasible_flow_assignment)
-from te.algorithms.utils import (check_centralized_flow_conservation,
-                                 check_capacity_constraint,
-                                 optimize_or_scream)
+from te.algorithms.utils import check_capacity_constraint, optimize_or_scream
 
 
 @dataclass
@@ -46,9 +42,6 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         self._commodity_list = traffic_to_commodity(self._traffic)
 
         self._edge_indexing = get_edge_indexing(graph)
-        self._out_edge_mapping = get_node_and_out_edge_index_mapping(graph)
-        self._edge_out_indexing = get_edge_to_out_index_mapping(graph)
-        self._out_degrees = {k: v for k, v in graph.out_degree()}
         self._NULL_M: np.ndarray = None
         self._NNT_M: np.ndarray = None
         
@@ -203,6 +196,17 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
               f"\t NUMBER OF INDEPENDENT QPs PER NODE: {M - 1}\n"
               f"\t NUMBER OF VARIABLES PER QP PER NODE: {T}\n"
               f"\t NUMBER CONSTRAINTS PER QP PER NODE: {T}\n")
+
+    def initialize_to(self, assignment: np.ndarray):
+        assert self._model_controller is not None
+        self._X_ek = assignment
+        xo_e = np.sum(assignment, axis=1)
+        for e in self._Xo_e.keys():
+            self._Xo_e[e].Start = xo_e[e]
+        self._Zo_e = xo_e
+        self._Y_tk = self._NULL_M.T @ (assignment - self._X_ek_start)
+        self._Y_bar_t = np.average(self._Y_tk, axis=1)
+        self._P_bar_t = np.copy(self._Y_bar_t)
         
     def _make_variables(self):
         assert self._model_controller is None
@@ -389,7 +393,7 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
             elif dual_norm > PARAMS.Mu * primal_norm:
                 self._rho_coeff /= PARAMS.TauDecrease
                 self._r_e = (self._r_e * PARAMS.TauDecrease)
-            print(f"OUTER PRIMAL = {str(round(primal_norm, 4))} | OUTER DUAL = {str(round(dual_norm, 4))}")
+            # print(f"OUTER PRIMAL = {str(round(primal_norm, 4))} | OUTER DUAL = {str(round(dual_norm, 4))}")
     
     def _update_eta_coeff(self):
         PARAMS = self._solver_params
@@ -403,7 +407,7 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
             elif dual_norm > PARAMS.Mu * primal_norm:
                 self._eta_coeff /= PARAMS.TauDecrease
                 self._u_t = (self._u_t * PARAMS.TauDecrease)
-            print(f"\tINNER PRIMAL = {str(round(primal_norm, 4))} | INNER DUAL = {str(round(dual_norm, 4))}")
+            # print(f"\tINNER PRIMAL = {str(round(primal_norm, 4))} | INNER DUAL = {str(round(dual_norm, 4))}")
     
     def _update_r_e(self):
         assert self._model_controller is not None
@@ -459,6 +463,9 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
 
                 # First, let the controller decide what the utilization is
                 optimize_or_scream(MODEL_CONTROLLER)
+                obj = MODEL_CONTROLLER.ObjVal
+                print(f"Relative Bound (Before): {(obj - MODEL_CONTROLLER.ObjBound) / (obj) * 100}")
+                print(sum(d*p for d,p in zip(MODEL_CONTROLLER.PI, MODEL_CONTROLLER.RHS)))
 
                 # Now, do in-network optimization
                 for _ in range(PARAMS.NumberOfNetworkUpdates):
@@ -476,6 +483,11 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
 
                 # Update the objectives and start again
                 self._update_controller_objective()
+                print(sum(d*p for d,p in zip(MODEL_CONTROLLER.PI, MODEL_CONTROLLER.RHS)))
+                # MODEL_CONTROLLER.Params.TimeLimit = 1e-6
+                # MODEL_CONTROLLER.optimize()
+                # print(f"Relative Bound (After): {MODEL_CONTROLLER.ObjBound}")
+                # MODEL_CONTROLLER.Params.TimeLimit = GRB.INFINITY
 
                 # Houskeeping
                 self._objective_trace.append(self._utility.X)
@@ -556,3 +568,6 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
             )
             for i, commodity in enumerate(COMMODITIES)
         ]
+    
+    def update_traffic_matrix(self, tm):
+        pass

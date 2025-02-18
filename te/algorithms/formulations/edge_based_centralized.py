@@ -1,4 +1,5 @@
 import gurobipy
+import numpy as np
 import networkx as nx
 from typing import List, Tuple, Optional
 from collections import defaultdict
@@ -6,7 +7,7 @@ from gurobipy import GRB, GurobiError, quicksum
 from te.algorithms.base import TrafficEngineeringLP, SolverParams, GurobiSolverParams
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
 from topologies.utils import get_edge_indexing
-from te.algorithms.utils import check_centralized_flow_conservation, check_capacity_constraint, make_model
+from te.algorithms.utils import check_centralized_flow_conservation, check_capacity_constraint, make_model, get_solution_maximum_utilization
 
 
 class CentralizedEdgeBasedLP(TrafficEngineeringLP):
@@ -16,11 +17,14 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
         self._edge_indexing = get_edge_indexing(graph)
         self._traffic = traffic
         self._solver_params: GurobiSolverParams = solver_params
+        self._env: gurobipy.Env = None
         self._model: gurobipy.Model = None
         self._flows: gurobipy.tupledict = None
         self._utility: gurobipy.Var = None
         self._objective: gurobipy.LinExpr = None
         self._commodity_list: List[Commodity] = traffic_to_commodity(self._traffic)
+        self._demand_constraints: List[Tuple[gurobipy.Constr, gurobipy.Constr]] = None
+        self._X_ek: np.ndarray = None
     
     @property
     def graph(self) -> nx.DiGraph:
@@ -47,9 +51,32 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
         # TODO: Anyway to get this from Gurobi?
         return None
     
+    @property
+    def assignments(self) -> np.ndarray:
+        assert self._X_ek is not None
+        return self._X_ek
+
+    def initialize_to(self, assignment: np.ndarray):
+        assert self._model is not None and self._flows is not None
+        self._model.Params.StartNumber = 0
+        self._X_ek = assignment
+        for key in self._flows.keys():
+            e, k = key
+            self._flows[key].Start = assignment[e, k]
+            self._flows[key].PStart = assignment[e, k]
+        self._utility.Start = get_solution_maximum_utilization(assignment, self.graph)
+
+    def _set_X_ek(self):
+        K = len(self._commodity_list)
+        N = len(self._graph.edges)
+        X_EK = np.ndarray(shape=(N, K))
+        for key, value in self._flows.items():
+            e, k = key
+            X_EK[e, k] = value.X
+        self._X_ek = X_EK
+    
     def _make_variables(self):
         assert self._model is None and self._flows is None
-        self._model = make_model(name='EdgeBasedTE', params=self._solver_params)
 
         """
         As per our formulation, the commodity matrix is of the form X_{ke},
@@ -61,7 +88,13 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
 
         K = len(self._commodity_list)
         N = len(self._graph.edges)
-        MODEL = self._model
+        
+        ENV = gurobipy.Env()
+        # ENV.setParam('OutputFlag', 0)
+        ENV.start()
+        self._env = ENV
+        MODEL = make_model(name='EdgeBasedTE', params=self._solver_params, env=ENV)
+        self._model = MODEL
 
         # This implicitly encodes the condition for `X_{ke} >= 0`
         self._flows = MODEL.addVars(N, K, lb=0.0, vtype=GRB.CONTINUOUS, name='X')
@@ -107,6 +140,8 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
         We use the second form to make sure that the problem is always feasible.
         """
 
+        demand_constraints = []
+
         for k, commodity in enumerate(COMMODITIES):
             SOURCE = commodity.source
             DESTINATION = commodity.destination
@@ -117,19 +152,27 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
             for e, edge in enumerate(GRAPH.edges()):
                 flow_out[edge[0]].append(FLOWS[e, k])
                 flow_in[edge[1]].append(FLOWS[e, k])
+            
+            source_constraint = None
+            destination_constraint = None
 
             for v in GRAPH.nodes():
                 if v == SOURCE:
                     # Demand constraint from source
-                    MODEL.addConstr(quicksum(flow_out[v]) == DEMAND)
+                    source_constraint = MODEL.addConstr(quicksum(flow_out[v]) == DEMAND)
                     MODEL.addConstr(quicksum(flow_in[v]) == 0)
                 elif v == DESTINATION:
                     # Demand constraint in destination
-                    MODEL.addConstr(quicksum(flow_in[v]) == DEMAND)
+                    destination_constraint = MODEL.addConstr(quicksum(flow_in[v]) == DEMAND)
                     MODEL.addConstr(quicksum(flow_out[v]) == 0)
                 else:
                     # Flow conservation in transit
                     MODEL.addConstr(quicksum(flow_out[v]) == quicksum(flow_in[v]))
+            
+            assert source_constraint is not None and destination_constraint is not None
+
+            demand_constraints.append((source_constraint, destination_constraint))
+        self._demand_constraints = demand_constraints
 
     def _add_objective(self):
         assert self._model is not None and \
@@ -164,6 +207,7 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
         try:
             self._model.optimize()
             if self._model.Status == gurobipy.GRB.OPTIMAL:
+                self._set_X_ek()
                 return self._model.Runtime
             return -1
         except GurobiError as e:
@@ -209,3 +253,18 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
             )
             for i, commodity in enumerate(COMMODITIES)
         ]
+
+    def update_traffic_matrix(self, tm: TrafficMatrixBase):
+        # First, record the new commodity list
+        COMMODITIES = traffic_to_commodity(tm)
+        self._commodity_list = COMMODITIES
+
+        # Now, update demand constraints
+        for constraints, commodity in zip(self._demand_constraints, COMMODITIES):
+            DEMAND = commodity.demand
+            source_constraint, destination_constraint = constraints
+            source_constraint.RHS = DEMAND
+            destination_constraint.RHS = DEMAND
+        
+        # Record the new TM
+        self._traffic = tm

@@ -1,1 +1,5 @@
 *.pyc
+*.log
+
+# TODO: Should we upload presolves?
+*.sol
