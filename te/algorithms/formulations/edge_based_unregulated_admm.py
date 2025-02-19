@@ -12,23 +12,42 @@ from te.algorithms.base import TrafficEngineeringLP, GurobiSolverParams, SolverP
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
 from topologies.utils import (get_edge_indexing, get_graph_M_matrix, 
                               get_adjacency_null_space, get_feasible_flow_assignment)
-from te.algorithms.utils import check_capacity_constraint, optimize_or_scream
+from te.algorithms.utils import check_capacity_constraint, optimize_or_scream, make_model
 
 
 @dataclass
 class UnregulatedADMMSolverParams(GurobiSolverParams):
-    NumberOfEpochs: int = 1000
+    """
+    :param `NumberOfEpochs`: If positive, we only do this many iterations, otherwise,
+                             will keep hammering until stopping criterion has been met.
+    :param `NumberOfNetworkUpdates`: Number of network updates for each epoch
+    :param `Rho`: Outer ADMM step size
+    :param `Eta`: Inner ADMM step size
+    :param `Gamma`: PGD step size
+    :param `PGDIterations`: Number of PGD iterations for each commodity
+    :param `UseVariableRho`: Whether or not to use variable step sizes for ADMM
+    :param `Mu`: Primal/Dual residual bound factor
+    :param `TauIncrease`: Multiplicative step size increase factor
+    :param `TauDecrease`: Multiplicative step size decrease factor
+    :param `BigTheta`: Loose error bound for the whole solution
+    :param `BigGamma`: Tight error bound for controller solution
+    :param `NumWorkers`: Number of worker nodes to partition commodities on to
+    :param `Seed`: RNG seed
+    """
+    NumberOfEpochs: int = 0
     NumberOfNetworkUpdates: int = te.constants.DEFAULT_NUMBER_OF_NETWORK_UPDATES
     Rho: float = te.constants.DEFAULT_RHO
     Eta: float = te.constants.DEFAULT_ETA
     Gamma: float = 1e-1
     PGDIterations: int = 5
-    NumWorkers: int = 1
-    Seed: int = te.constants.DEFAULT_SEED
     UseVariableRho: bool = True
     Mu: float = te.constants.DEFAULT_MU
-    TauIncrease: float = te.constants.DEFAULT_TAU_INC
-    TauDecrease: float = te.constants.DEFAULT_TAU_DEC
+    TauIncrease: float = te.constants.DEFAULT_TAU_INC 
+    TauDecrease: float = te.constants.DEFAULT_TAU_DEC 
+    BigTheta: float = te.constants.DEFAULT_BIG_THETA
+    BigGamma: float = te.constants.DEFAULT_BIG_GAMMA
+    NumWorkers: int = 1
+    Seed: int = te.constants.DEFAULT_SEED
 
 
 class UnregulatedADMMLP(TrafficEngineeringLP):
@@ -52,14 +71,20 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
 
         self._model_controller: Optional[gurobipy.Model] = None
         self._objective_controller: Optional[gurobipy.QuadExpr] = None
-        
+
+        # List of edge capacities
+        self._capacities: Optional[np.ndarray] = None
         # Both just vectors of length `n`
         self._Xo_e_start: Optional[np.ndarray] = None
         self._Xo_e: Optional[gurobipy.tupledict] = None
         self._Zo_e: Optional[np.ndarray] = None
+        self._Xo_e_sol: Optional[np.ndarray] = None
         self._Zo_e_old: Optional[np.ndarray] = None
+        self._r_e_old: Optional[np.ndarray] = None
         # Just a variable between 0 and 1
         self._utility: Optional[gurobipy.Var] = None
+        # List of capacity constraints
+        self._capacity_constraints: List[gurobipy.Constr] = None
 
         # This need not be managed by Gurobi
         self._X_ek_start: Optional[np.ndarray] = None
@@ -168,7 +193,7 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         T = self._T
         K = len(self._commodity_list)
         NUM_EDGES = self._NUM_EDGES
-
+        self._capacities = np.array([item[-1] for item in self._graph.edges(data='capacity')])
         self._r_e = np.zeros(shape=(NUM_EDGES,))
         self._u_t = np.zeros(shape=(T,))
         self._Zo_e = np.copy(self._Xo_e_start)
@@ -218,13 +243,15 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         ENV.start()
         self._env = ENV
 
-        self._model_controller = gurobipy.Model('EdgeBasedDistributedTE_Controller', env=ENV)
-        MODEL_CONTROLLER = self._model_controller
+        PARAMS = self._solver_params
+        MODEL_CONTROLLER: gurobipy.Model = \
+            make_model('EdgeBasedDistributedTE_Controller', params=PARAMS, env=ENV, BarConvTol=PARAMS.BigGamma)
         
         self._Xo_e = MODEL_CONTROLLER.addVars(NUM_EDGES, lb=0.0, vtype=GRB.CONTINUOUS, name=f'XO_E')
         self._utility = MODEL_CONTROLLER.addVar(lb=0.0, ub=1.0, vtype=GRB.CONTINUOUS, name='U')
         # Set starting values ...
         self._Xo_e.Start = self._Xo_e_start
+        self._model_controller = MODEL_CONTROLLER
     
     def _get_F(self) -> np.ndarray:
         return self._Zo_e + self._r_e - self._Xo_e_start
@@ -245,10 +272,10 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         MODEL_CONTROLLER = self._model_controller
 
         # Capacity constraint
-        MODEL_CONTROLLER.addConstrs(
-            XO_E[i] / c_e <= UTILITY
+        self._capacity_constraints = [
+            MODEL_CONTROLLER.addConstr(XO_E[i] / c_e <= UTILITY)
                 for i, (_, _, c_e) in enumerate(GRAPH.edges(data='capacity'))
-        )
+        ]
     
     def _update_controller_objective(self):
         NUM_EDGES = self._NUM_EDGES
@@ -281,16 +308,21 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         self._update_controller_objective()
     
     @staticmethod
-    def do_pgd(lambda_k: np.ndarray, x_k_0: np.ndarray, nnt: np.ndarray, n: np.ndarray, c: np.ndarray, gamma: float, thresh: float, n_iter: int):
+    def do_pgd(lambda_k: np.ndarray, x_k_0: np.ndarray, nnt: np.ndarray, n: np.ndarray, c: np.ndarray, 
+               gamma: float, thresh: float, n_iter: int) -> Tuple[np.ndarray, np.ndarray, float]:
         _c = x_k_0 + n @ c
         for i in range(n_iter):
             lambda_k_old = lambda_k
             lambda_k = np.clip(lambda_k - gamma * (nnt @ lambda_k + _c), a_min=0, a_max=None)
             if (np.linalg.norm(lambda_k - lambda_k_old) / np.sqrt(lambda_k.shape[0])) < thresh:
                 break
-        return (lambda_k, c + n.T @ lambda_k)
+        # Get primal/dual objective gap
+        y_k = c + n.T @ lambda_k
+        primal = (1/2) * np.linalg.norm(y_k - c)**2
+        dual = (-1/2) * np.linalg.norm(n.T @ lambda_k)**2 - np.dot(lambda_k, _c)
+        return (lambda_k, y_k, dual - primal)
     
-    def _do_network_update(self) -> float:
+    def _do_network_update(self) -> Tuple[float, float]:
         def pgd_iterator():
             K = len(self._commodity_list)
             PGD_ITERS = self._solver_params.PGDIterations
@@ -308,11 +340,13 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
                 # TODO: Make threshold parameter a solver parameter input ...
                 yield (LAMBDA_EK[:, k], X_EK_START[:, k], NNT_M, NULL_M, C_K, GAMMA, 1e-8, PGD_ITERS)
         t_start = time.time()
+        total_gap = 0
         for k, item in enumerate(self.proc_pool.starmap(self.do_pgd, pgd_iterator())):
-            lambda_k, y_k = item
+            lambda_k, y_k, gap = item
+            total_gap += gap
             self._lambda_ek[:, k] = lambda_k
             self._Y_tk[:, k] = y_k
-        return time.time() - t_start
+        return time.time() - t_start, total_gap
     
     def _update_Y_bar(self):
         self._Y_bar_t_old = np.copy(self._Y_bar_t)
@@ -376,6 +410,7 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         X_KE_SUM_E = self._get_X_k_sum()
         Zo_e = (XO_E_ + X_KE_SUM_E) / 2
         self._Zo_e_old = np.copy(self._Zo_e)
+        self._Xo_e_sol = XO_E_
         self._Zo_e = Zo_e
         scaling = np.sqrt(NUM_EDGES)
         self._outer_primal_residual_norm = np.linalg.norm((Zo_e - XO_E_)) / scaling + np.linalg.norm((Zo_e - X_KE_SUM_E)) / scaling
@@ -425,7 +460,29 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         r_e = np.zeros((NUM_EDGES,))
         for e in range(NUM_EDGES):
             r_e[e] = R_E[e] + (XO_E[e].X - X_KE_SUM_E[e]) / 2
+        self._r_e_old = np.copy(self._r_e)
         self._r_e = r_e
+    
+    def _get_objective_shifts(self) -> Tuple[float, float]:
+        XO_E = self._Xo_e_sol
+        Z_HAT_OLD = self._Zo_e_old - self._r_e_old
+        Z_HAT = self._Zo_e - self._r_e
+        RHO = self._solver_params.Rho * self._rho_coeff
+        LAMBDA_E = np.array([constr.Pi for constr in self._capacity_constraints])
+        C_E = self._capacities
+
+        primal_shift = (RHO/2) * (np.linalg.norm(XO_E - Z_HAT)**2 - np.linalg.norm(XO_E - Z_HAT_OLD)**2)
+        dual_shift = -(RHO/2) * (np.linalg.norm(Z_HAT)**2 - np.linalg.norm(Z_HAT_OLD)**2) \
+                     -np.dot(np.divide(LAMBDA_E, C_E), (Z_HAT - Z_HAT_OLD))
+        return primal_shift, dual_shift
+    
+    def _check_objective_gap(self) -> bool:
+        BIG_THETA = self._solver_params.BigTheta
+        primal_shift, dual_shift = self._get_objective_shifts()
+        primal_objective = self._model_controller.ObjVal
+        relative_gap = np.abs((primal_shift + dual_shift) / (primal_objective + primal_shift))
+        print(f"Objective gap: {str(round(relative_gap, 4))}")
+        return relative_gap <= BIG_THETA
     
     def close(self):
         if self._model_controller:
@@ -458,23 +515,23 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
 
         try:
             # for _ in tqdm.tqdm(range(PARAMS.NumberOfEpochs)):
-            for _ in range(PARAMS.NumberOfEpochs):
+            for epoch in range(PARAMS.NumberOfEpochs):
                 t_network = 0
 
                 # First, let the controller decide what the utilization is
                 optimize_or_scream(MODEL_CONTROLLER)
-                obj = MODEL_CONTROLLER.ObjVal
-                print(f"Relative Bound (Before): {(obj - MODEL_CONTROLLER.ObjBound) / (obj) * 100}")
-                print(sum(d*p for d,p in zip(MODEL_CONTROLLER.PI, MODEL_CONTROLLER.RHS)))
 
                 # Now, do in-network optimization
                 for _ in range(PARAMS.NumberOfNetworkUpdates):
-                    t_network += self._do_network_update()
+                    _t, total_gap = self._do_network_update()
+                    t_network += _t
                     self._update_Y_bar()
                     self._update_P_bar()
                     self._update_eta_coeff()
                     self._update_u_t()
                 self._set_X_ek()
+
+                print(f"Total Network Update Gap: {total_gap}")
 
                 # Now that we have non-zero flow assignments, inform the controller
                 self._update_Zo_e()
@@ -483,15 +540,14 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
 
                 # Update the objectives and start again
                 self._update_controller_objective()
-                print(sum(d*p for d,p in zip(MODEL_CONTROLLER.PI, MODEL_CONTROLLER.RHS)))
-                # MODEL_CONTROLLER.Params.TimeLimit = 1e-6
-                # MODEL_CONTROLLER.optimize()
-                # print(f"Relative Bound (After): {MODEL_CONTROLLER.ObjBound}")
-                # MODEL_CONTROLLER.Params.TimeLimit = GRB.INFINITY
 
                 # Houskeeping
                 self._objective_trace.append(self._utility.X)
                 total_runtime += MODEL_CONTROLLER.Runtime + t_network
+
+                # # Check primal-dual objective gap
+                # if (epoch > 0) and (self._check_objective_gap()):
+                #     break
 
             return total_runtime
         except GurobiError as e:

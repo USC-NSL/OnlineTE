@@ -30,7 +30,7 @@ as_success = lambda msg: f"{ANSIColors.BOLD}{ANSIColors.OKGREEN}{msg}{ANSIColors
 as_fail = lambda msg: f"{ANSIColors.BOLD}{ANSIColors.FAIL}{msg}{ANSIColors.ENDC}"
 
 
-def make_model(name: str, params: SolverParams, env: Optional[gurobipy.Env]):
+def make_model(name: str, params: SolverParams, env: Optional[gurobipy.Env], **kwargs):
     assert issubclass(params.__class__, GurobiSolverParams)
     assert params.Method == gurobipy.GRB.METHOD_BARRIER, "Only BARRIER should be used!"
     model = gurobipy.Model(name=name, env=env)
@@ -44,6 +44,10 @@ def make_model(name: str, params: SolverParams, env: Optional[gurobipy.Env]):
 
     # TODO: Disable presolve?
     model.Params.Presolve = 0
+
+    if len(kwargs) > 0:
+        for k, v in kwargs.items():
+            setattr(model.Params, k, v)
 
     print(as_bold(
         "Created Gurobi Model With:\n"

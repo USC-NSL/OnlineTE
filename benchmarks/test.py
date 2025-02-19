@@ -393,10 +393,12 @@ def unregulated_admm_test_small():
         NumberOfNetworkUpdates=1,
         PGDIterations=1000,
         Gamma=1e-1,
-        Eta=1e-4,
-        Rho=1e-5,
+        Eta=1e-2,
+        Rho=1e-2,
         NumWorkers=8,
-        UseVariableRho=True
+        UseVariableRho=True,
+        BigTheta=1e-4,
+        BigGamma=1e-6
     )
     with contextlib.closing(UnregulatedADMMLP(graph, tm, solver_params)) as lp:
         lp.make_lp()
