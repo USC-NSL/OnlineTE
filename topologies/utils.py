@@ -28,11 +28,20 @@ IMPORTANT NOTE:
 
 def load_zoo_topology(name: str) -> nx.DiGraph:
     """Load the topology zoo model as an instance of `nx.DiGraph`"""
-    
-    gml_path = os.path.join(TOPOLGOY_ZOO_PATH, f"{name}.graphml")
-    assert os.path.exists(gml_path)
 
-    g: nx.Graph = nx.read_graphml(gml_path, node_type=int)
+    # First, check for a GML file
+    gml_path = os.path.join(TOPOLGOY_ZOO_PATH, f"{name}.gml")
+    if os.path.exists(gml_path):
+        g: nx.Graph = nx.read_gml(gml_path)
+    else:
+        # Fallback to see if GraphML file exists instead
+        graphml_path = os.path.join(TOPOLGOY_ZOO_PATH, f"{name}.graphml")
+        if os.path.exists(graphml_path):
+            g: nx.Graph = nx.read_graphml(gml_path, node_type=int)
+        else:
+            # We don't have this topology :/ ...
+            raise ValueError(f"No GML/GraphML file associated with topology {name} exists!")
+
     # Remove self loops (some topologies do have them, like `Interroute`)
     self_loops = list(nx.selfloop_edges(g))
     if len(self_loops) > 0:
