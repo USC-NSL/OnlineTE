@@ -390,11 +390,11 @@ def unregulated_admm_test_small():
 
     solver_params = UnregulatedADMMSolverParams(
         NumberOfEpochs=100,
-        NumberOfNetworkUpdates=1,
-        PGDIterations=1000,
+        NumberOfNetworkUpdates=3,
+        PGDIterations=100,
         Gamma=1e-1,
-        Eta=1e-2,
-        Rho=1e-2,
+        Eta=5e-2,
+        Rho=5e-2,
         NumWorkers=8,
         UseVariableRho=True,
         BigTheta=1e-4,

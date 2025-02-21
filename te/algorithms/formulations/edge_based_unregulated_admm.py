@@ -307,20 +307,49 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
 
         self._update_controller_objective()
     
+    # @staticmethod
+    # def do_pgd(lambda_k: np.ndarray, x_k_0: np.ndarray, nnt: np.ndarray, n: np.ndarray, c: np.ndarray, 
+    #            gamma: float, thresh: float, n_iter: int) -> Tuple[np.ndarray, np.ndarray, float]:
+    #     _c = x_k_0 + n @ c
+    #     for i in range(n_iter):
+    #         lambda_k_old = lambda_k
+    #         lambda_k = np.clip(lambda_k - gamma * (nnt @ lambda_k + _c), a_min=0, a_max=None)
+    #         if (np.linalg.norm(lambda_k - lambda_k_old) / np.sqrt(lambda_k.shape[0])) < thresh:
+    #             break
+    #     # Get primal/dual objective gap
+    #     # y_k, _ = dykstra_proj(x_k_0, n, c + n.T @ lambda_k, thresh)
+    #     y_k = c + n.T @ lambda_k
+    #     primal = (1/2) * np.linalg.norm(y_k - c)**2
+    #     dual = (-1/2) * np.linalg.norm(n.T @ lambda_k)**2 - np.dot(lambda_k, _c)
+    #     return (lambda_k, y_k, dual - primal)
+
     @staticmethod
     def do_pgd(lambda_k: np.ndarray, x_k_0: np.ndarray, nnt: np.ndarray, n: np.ndarray, c: np.ndarray, 
                gamma: float, thresh: float, n_iter: int) -> Tuple[np.ndarray, np.ndarray, float]:
-        _c = x_k_0 + n @ c
-        for i in range(n_iter):
+        num_edges, _ = np.shape(n)
+
+        big_c = x_k_0 + n @ c
+        big_lambda = nnt @ big_c
+        norm_1 = 0.5 * np.linalg.norm(big_c) ** 2
+        norm_2 = np.linalg.norm(n.T @ big_c) ** 2
+
+        def get_alpha(current_lambda):
+            norm = np.linalg.norm(n.T @ current_lambda) ** 2
+            dot = np.dot(current_lambda, big_lambda)
+            return (norm + 1.5 * dot + norm_1) / (norm + norm_2 + 2 * dot)
+
+        i = 0
+        scale_factor = np.sqrt(num_edges)
+        while i < n_iter:
             lambda_k_old = lambda_k
-            lambda_k = np.clip(lambda_k - gamma * (nnt @ lambda_k + _c), a_min=0, a_max=None)
-            if (np.linalg.norm(lambda_k - lambda_k_old) / np.sqrt(lambda_k.shape[0])) < thresh:
+            grad = nnt @ lambda_k + big_c
+            alpha = get_alpha(lambda_k_old)
+            lambda_k = np.clip(lambda_k_old - alpha * grad, a_min=0, a_max=None)
+            if np.linalg.norm(lambda_k - lambda_k_old) / scale_factor < thresh:
                 break
-        # Get primal/dual objective gap
+            i += 1
         y_k = c + n.T @ lambda_k
-        primal = (1/2) * np.linalg.norm(y_k - c)**2
-        dual = (-1/2) * np.linalg.norm(n.T @ lambda_k)**2 - np.dot(lambda_k, _c)
-        return (lambda_k, y_k, dual - primal)
+        return lambda_k, y_k, 0
     
     def _do_network_update(self) -> Tuple[float, float]:
         def pgd_iterator():
@@ -514,8 +543,8 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         total_runtime = 0
 
         try:
-            # for _ in tqdm.tqdm(range(PARAMS.NumberOfEpochs)):
-            for epoch in range(PARAMS.NumberOfEpochs):
+            for _ in tqdm.tqdm(range(PARAMS.NumberOfEpochs)):
+            # for epoch in range(PARAMS.NumberOfEpochs):
                 t_network = 0
 
                 # First, let the controller decide what the utilization is
@@ -531,7 +560,7 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
                     self._update_u_t()
                 self._set_X_ek()
 
-                print(f"Total Network Update Gap: {total_gap}")
+                # print(f"Total Network Update Gap: {total_gap}")
 
                 # Now that we have non-zero flow assignments, inform the controller
                 self._update_Zo_e()
