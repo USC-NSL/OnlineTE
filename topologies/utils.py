@@ -32,7 +32,7 @@ def load_zoo_topology(name: str) -> nx.DiGraph:
     # First, check for a GML file
     gml_path = os.path.join(TOPOLGOY_ZOO_PATH, f"{name}.gml")
     if os.path.exists(gml_path):
-        g: nx.Graph = nx.read_gml(gml_path)
+        g: nx.Graph = nx.read_gml(gml_path, destringizer=int)
     else:
         # Fallback to see if GraphML file exists instead
         graphml_path = os.path.join(TOPOLGOY_ZOO_PATH, f"{name}.graphml")
