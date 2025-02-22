@@ -18,12 +18,13 @@ from te.algorithms.utils import check_capacity_constraint, optimize_or_scream, m
 @dataclass
 class UnregulatedADMMSolverParams(GurobiSolverParams):
     """
-    :param `NumberOfEpochs`: If positive, we only do this many iterations, otherwise,
+    :param `NumberOfEpochs`: If not `None`, we only do this many iterations, otherwise,
                              will keep hammering until stopping criterion has been met.
     :param `NumberOfNetworkUpdates`: Number of network updates for each epoch
     :param `Rho`: Outer ADMM step size
     :param `Eta`: Inner ADMM step size
-    :param `Gamma`: PGD step size
+    :param `Gamma`: PGD step size (if `None`, will use exact line search)
+    :param `PGDConvTol: PGD convergence tolerance
     :param `PGDIterations`: Number of PGD iterations for each commodity
     :param `UseVariableRho`: Whether or not to use variable step sizes for ADMM
     :param `Mu`: Primal/Dual residual bound factor
@@ -34,11 +35,12 @@ class UnregulatedADMMSolverParams(GurobiSolverParams):
     :param `NumWorkers`: Number of worker nodes to partition commodities on to
     :param `Seed`: RNG seed
     """
-    NumberOfEpochs: int = 0
+    NumberOfEpochs: Optional[int] = None
     NumberOfNetworkUpdates: int = te.constants.DEFAULT_NUMBER_OF_NETWORK_UPDATES
     Rho: float = te.constants.DEFAULT_RHO
     Eta: float = te.constants.DEFAULT_ETA
-    Gamma: float = 1e-1
+    Gamma: Optional[float] = None
+    PGDConvTol: float = 1e-8
     PGDIterations: int = 5
     UseVariableRho: bool = True
     Mu: float = te.constants.DEFAULT_MU
@@ -81,6 +83,7 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         self._Xo_e_sol: Optional[np.ndarray] = None
         self._Zo_e_old: Optional[np.ndarray] = None
         self._r_e_old: Optional[np.ndarray] = None
+        self._C_tk_old: Optional[np.ndarray] = None
         # Just a variable between 0 and 1
         self._utility: Optional[gurobipy.Var] = None
         # List of capacity constraints
@@ -119,6 +122,7 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         self._eta_coeff_trace: List[float] = []
 
         self._objective_trace = []
+        self._objective_gap_trace = []
 
         self._set_initial_feasible_solution()
         self._set_NULL_M()
@@ -156,6 +160,10 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
     @property
     def objective_trace(self) -> Optional[List[float]]:
         return self._objective_trace
+
+    @property
+    def objective_gap_trace(self) -> Optional[List[float]]:
+        return self._objective_gap_trace
     
     @property
     def assignments(self) -> np.ndarray:
@@ -307,25 +315,21 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
 
         self._update_controller_objective()
     
-    # @staticmethod
-    # def do_pgd(lambda_k: np.ndarray, x_k_0: np.ndarray, nnt: np.ndarray, n: np.ndarray, c: np.ndarray, 
-    #            gamma: float, thresh: float, n_iter: int) -> Tuple[np.ndarray, np.ndarray, float]:
-    #     _c = x_k_0 + n @ c
-    #     for i in range(n_iter):
-    #         lambda_k_old = lambda_k
-    #         lambda_k = np.clip(lambda_k - gamma * (nnt @ lambda_k + _c), a_min=0, a_max=None)
-    #         if (np.linalg.norm(lambda_k - lambda_k_old) / np.sqrt(lambda_k.shape[0])) < thresh:
-    #             break
-    #     # Get primal/dual objective gap
-    #     # y_k, _ = dykstra_proj(x_k_0, n, c + n.T @ lambda_k, thresh)
-    #     y_k = c + n.T @ lambda_k
-    #     primal = (1/2) * np.linalg.norm(y_k - c)**2
-    #     dual = (-1/2) * np.linalg.norm(n.T @ lambda_k)**2 - np.dot(lambda_k, _c)
-    #     return (lambda_k, y_k, dual - primal)
+    @staticmethod
+    def do_plain_pgd(lambda_k: np.ndarray, x_k_0: np.ndarray, nnt: np.ndarray, n: np.ndarray, c: np.ndarray, 
+                     gamma: float, thresh: float, n_iter: int) -> Tuple[np.ndarray, np.ndarray]:
+        _c = x_k_0 + n @ c
+        for i in range(n_iter):
+            lambda_k_old = lambda_k
+            lambda_k = np.clip(lambda_k - gamma * (nnt @ lambda_k + _c), a_min=0, a_max=None)
+            if (np.linalg.norm(lambda_k - lambda_k_old) / np.sqrt(lambda_k.shape[0])) < thresh:
+                break
+        y_k = c + n.T @ lambda_k
+        return lambda_k, y_k
 
     @staticmethod
-    def do_pgd(lambda_k: np.ndarray, x_k_0: np.ndarray, nnt: np.ndarray, n: np.ndarray, c: np.ndarray, 
-               gamma: float, thresh: float, n_iter: int) -> Tuple[np.ndarray, np.ndarray, float]:
+    def do_pgd_with_exact_line_search(lambda_k: np.ndarray, x_k_0: np.ndarray, nnt: np.ndarray, n: np.ndarray, c: np.ndarray, 
+                                      thresh: float, n_iter: int) -> Tuple[np.ndarray, np.ndarray]:
         num_edges, _ = np.shape(n)
 
         big_c = x_k_0 + n @ c
@@ -349,33 +353,41 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
                 break
             i += 1
         y_k = c + n.T @ lambda_k
-        return lambda_k, y_k, 0
+        return lambda_k, y_k
     
-    def _do_network_update(self) -> Tuple[float, float]:
+    def _get_current_C(self) -> np.ndarray:
+        Y_TK = self._Y_tk
+        Y_BAR = self._Y_bar_t
+        P_BAR = self._P_bar_t
+        U_T = self._u_t
+        return Y_TK - np.expand_dims(Y_BAR - P_BAR + U_T, axis=1)
+    
+    def _do_network_update(self) -> float:
+        K = len(self._commodity_list)
+        GAMMA = self._solver_params.Gamma
+        PGD_ITERS = self._solver_params.PGDIterations
+        PGD_CONV_TOL = self._solver_params.PGDConvTol
+        NULL_M = self._NULL_M
+        NNT_M = self._NNT_M
+        X_EK_START = self._X_ek_start
+        LAMBDA_EK = self._lambda_ek
+        C_TK = self._get_current_C()
+        do_pgd = self.do_plain_pgd if GAMMA is not None else self.do_pgd_with_exact_line_search
+
         def pgd_iterator():
-            K = len(self._commodity_list)
-            PGD_ITERS = self._solver_params.PGDIterations
-            GAMMA = self._solver_params.Gamma
-            NULL_M = self._NULL_M
-            NNT_M = self._NNT_M
-            X_EK_START = self._X_ek_start
-            Y_TK = self._Y_tk
-            Y_BAR = self._Y_bar_t
-            P_BAR = self._P_bar_t
-            U_T = self._u_t
-            LAMBDA_EK = self._lambda_ek
             for k in range(K):
-                C_K = Y_TK[:, k] - Y_BAR + P_BAR - U_T
-                # TODO: Make threshold parameter a solver parameter input ...
-                yield (LAMBDA_EK[:, k], X_EK_START[:, k], NNT_M, NULL_M, C_K, GAMMA, 1e-8, PGD_ITERS)
+                if GAMMA is not None:
+                    yield (LAMBDA_EK[:, k], X_EK_START[:, k], NNT_M, NULL_M, C_TK[:, k], GAMMA, PGD_CONV_TOL, PGD_ITERS)
+                else:
+                    yield (LAMBDA_EK[:, k], X_EK_START[:, k], NNT_M, NULL_M, C_TK[:, k], PGD_CONV_TOL, PGD_ITERS)
+
         t_start = time.time()
-        total_gap = 0
-        for k, item in enumerate(self.proc_pool.starmap(self.do_pgd, pgd_iterator())):
-            lambda_k, y_k, gap = item
-            total_gap += gap
+        for k, item in enumerate(self.proc_pool.starmap(do_pgd, pgd_iterator())):
+            lambda_k, y_k = item
             self._lambda_ek[:, k] = lambda_k
             self._Y_tk[:, k] = y_k
-        return time.time() - t_start, total_gap
+        self._C_tk_old = C_TK
+        return time.time() - t_start
     
     def _update_Y_bar(self):
         self._Y_bar_t_old = np.copy(self._Y_bar_t)
@@ -424,6 +436,12 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         P_BAR_T = self._P_bar_t
 
         self._u_t = (U_T + Y_BAR_T - P_BAR_T)
+    
+    def _reconvene_network_updates(self):
+        self._update_Y_bar()
+        self._update_P_bar()
+        self._update_eta_coeff()
+        self._update_u_t()
 
     def _update_Zo_e(self):
         assert self._model_controller is not None
@@ -457,7 +475,6 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
             elif dual_norm > PARAMS.Mu * primal_norm:
                 self._rho_coeff /= PARAMS.TauDecrease
                 self._r_e = (self._r_e * PARAMS.TauDecrease)
-            # print(f"OUTER PRIMAL = {str(round(primal_norm, 4))} | OUTER DUAL = {str(round(dual_norm, 4))}")
     
     def _update_eta_coeff(self):
         PARAMS = self._solver_params
@@ -471,7 +488,6 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
             elif dual_norm > PARAMS.Mu * primal_norm:
                 self._eta_coeff /= PARAMS.TauDecrease
                 self._u_t = (self._u_t * PARAMS.TauDecrease)
-            # print(f"\tINNER PRIMAL = {str(round(primal_norm, 4))} | INNER DUAL = {str(round(dual_norm, 4))}")
     
     def _update_r_e(self):
         assert self._model_controller is not None
@@ -492,7 +508,7 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         self._r_e_old = np.copy(self._r_e)
         self._r_e = r_e
     
-    def _get_objective_shifts(self) -> Tuple[float, float]:
+    def _get_controller_objective_shifts(self) -> Tuple[float, float]:
         XO_E = self._Xo_e_sol
         Z_HAT_OLD = self._Zo_e_old - self._r_e_old
         Z_HAT = self._Zo_e - self._r_e
@@ -505,12 +521,35 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
                      -np.dot(np.divide(LAMBDA_E, C_E), (Z_HAT - Z_HAT_OLD))
         return primal_shift, dual_shift
     
+    def _get_network_objective(self) -> float:
+        Y_TK = self._Y_tk
+        C_TK_OLD = self._C_tk_old
+        return (1/2) * np.linalg.norm(Y_TK - C_TK_OLD) ** 2
+    
+    def _get_network_objective_shifts(self) -> Tuple[float, float]:
+        n = self._NULL_M
+        K = len(self._commodity_list)
+        RHO = self._solver_params.Rho * self._rho_coeff
+        LAMBDA_EK = self._lambda_ek
+        Y_TK = self._Y_tk
+        C_TK = self._get_current_C()
+        C_TK_OLD = self._C_tk_old
+
+        # TODO: We need RHO here ... right?
+        primal_shift = (RHO/2) * (np.linalg.norm(Y_TK - C_TK) ** 2 - np.linalg.norm(Y_TK - C_TK_OLD) ** 2)
+        dual_shift = -(RHO/2) * np.sum([np.dot(LAMBDA_EK[:, k].T, n @ (C_TK[:, k] - C_TK_OLD[:, k])) for k in range(K)])
+        return primal_shift, dual_shift
+    
     def _check_objective_gap(self) -> bool:
         BIG_THETA = self._solver_params.BigTheta
-        primal_shift, dual_shift = self._get_objective_shifts()
-        primal_objective = self._model_controller.ObjVal
-        relative_gap = np.abs((primal_shift + dual_shift) / (primal_objective + primal_shift))
-        print(f"Objective gap: {str(round(relative_gap, 4))}")
+        primal_shift_controller, dual_shift_controller = self._get_controller_objective_shifts()
+        primal_shift_network, dual_shift_network = self._get_network_objective_shifts()
+        primal_objective = self._model_controller.ObjVal + self._get_network_objective()
+        primal_shift = primal_shift_controller + primal_shift_network
+        dual_shift = dual_shift_controller + dual_shift_network
+        relative_gap = (np.abs(primal_shift) + np.abs(dual_shift)) / np.abs(primal_objective + primal_shift)
+        self._objective_gap_trace.append(relative_gap)
+        print(f"Objective gap: {str(round(relative_gap * 100, 4))} percent")
         return relative_gap <= BIG_THETA
     
     def close(self):
@@ -538,26 +577,31 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         
         MODEL_CONTROLLER = self._model_controller
         PARAMS = self._solver_params
-        K = len(self._commodity_list)
 
         total_runtime = 0
-
+        epoch = 0
+        max_iters = PARAMS.NumberOfEpochs
         try:
-            for _ in tqdm.tqdm(range(PARAMS.NumberOfEpochs)):
-            # for epoch in range(PARAMS.NumberOfEpochs):
+            # for _ in tqdm.tqdm(range(PARAMS.NumberOfEpochs)):
+            while True:
                 t_network = 0
 
                 # First, let the controller decide what the utilization is
                 optimize_or_scream(MODEL_CONTROLLER)
 
                 # Now, do in-network optimization
-                for _ in range(PARAMS.NumberOfNetworkUpdates):
-                    _t, total_gap = self._do_network_update()
-                    t_network += _t
-                    self._update_Y_bar()
-                    self._update_P_bar()
-                    self._update_eta_coeff()
-                    self._update_u_t()
+                for i in reversed(range(PARAMS.NumberOfNetworkUpdates)):
+                    t_network += self._do_network_update()
+                    """
+                    Defer the update for the last iteration.
+                    This final update is moot, since the controller has to
+                    update `Zo` anyway after this, which affects the final
+                    result of this.
+                    So let the controller update itself first, and then push
+                    the chnages to the dual variables within the network.
+                    """
+                    if i > 0:
+                        self._reconvene_network_updates()
                 self._set_X_ek()
 
                 # print(f"Total Network Update Gap: {total_gap}")
@@ -567,17 +611,21 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
                 self._update_rho_coeff()
                 self._update_r_e()
 
+                # Finalize the last update that we deferred ...
+                self._reconvene_network_updates()
+
                 # Update the objectives and start again
                 self._update_controller_objective()
 
                 # Houskeeping
                 self._objective_trace.append(self._utility.X)
                 total_runtime += MODEL_CONTROLLER.Runtime + t_network
-
-                # # Check primal-dual objective gap
-                # if (epoch > 0) and (self._check_objective_gap()):
-                #     break
-
+                # Check primal-dual objective gap
+                if ((epoch > 0) and (self._check_objective_gap())):
+                    break
+                epoch += 1
+                if ((max_iters is not None) and (epoch == max_iters)):
+                    break
             return total_runtime
         except GurobiError as e:
             print(f'Error code {e.errno}: {e}')

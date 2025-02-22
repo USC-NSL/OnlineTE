@@ -7,7 +7,7 @@ from scipy.linalg import null_space
 from te.algorithms.utils import dykstra_proj
 
 
-def gurobi_test_primal(n: np.ndarray, c: np.ndarray, x_0: np.ndarray, env: gp.Env) -> Tuple[np.ndarray, np.ndarray]:
+def gurobi_test_primal(n: np.ndarray, c: np.ndarray, x_0: np.ndarray, env: gp.Env) -> Tuple[np.ndarray, np.ndarray, float, float]:
     """
     This solves the QP:
         minimize 0.5 * || X - c ||^2
@@ -53,10 +53,10 @@ def gurobi_test_primal(n: np.ndarray, c: np.ndarray, x_0: np.ndarray, env: gp.En
     out = np.zeros((null_dim,))
     for t in range(null_dim):
         out[t] = Y_k[t].X
-    return out, np.array([c.Pi for c in constraints])
+    return out, np.array([c.Pi for c in constraints]), model.ObjVal, model.ObjBound
 
 
-def gurobi_test_dual(n: np.ndarray, c: np.ndarray, x_0: np.ndarray, env: gp.Env) -> np.ndarray:
+def gurobi_test_dual(n: np.ndarray, c: np.ndarray, x_0: np.ndarray, env: gp.Env) -> Tuple[np.ndarray, float, float]:
     """
     This solves the QP:
         maximize -0.5 || n.T lambda_k ||^2 - lambda_k.^T (x_0 + n @ c)
@@ -95,7 +95,18 @@ def gurobi_test_dual(n: np.ndarray, c: np.ndarray, x_0: np.ndarray, env: gp.Env)
     out = np.zeros((num_edges,))
     for e in range(num_edges):
         out[e] = lambda_k[e].X
-    return out
+    return out, model.ObjBound, model.ObjVal
+
+
+def get_primal_objective_from_feasible_solution(c: np.ndarray, y_k: np.ndarray) -> float:
+    return 0.5 * np.linalg.norm(y_k - c) ** 2
+
+def get_dual_objective_from_feasible_solution(n: np.ndarray, c: np.ndarray, x_0: np.ndarray, lambda_k: np.ndarray) -> float:
+    big_c = x_0 + n @ c
+    return -0.5 * np.linalg.norm(n.T @ lambda_k) ** 2 - np.dot(lambda_k, big_c)
+
+def get_objective_gap(n: np.ndarray, c: np.ndarray, x_0: np.ndarray, y_k: np.ndarray, lambda_k: np.ndarray) -> float:
+    return get_dual_objective_from_feasible_solution(n, c, x_0, lambda_k) - get_primal_objective_from_feasible_solution(c, y_k)
 
 
 def pgd_test_primal(n: np.ndarray, c: np.ndarray, x_0: np.ndarray, num_iters: int, gamma: float) -> np.ndarray:
@@ -199,12 +210,12 @@ if __name__ == '__main__':
     x_0 = rng.random((number_of_edges,))
 
     # These will be our baselines
-    primal, dual = gurobi_test_primal(n, c, x_0, env)
+    primal, dual, optimal_primal_obj, optimal_dual_obj = gurobi_test_primal(n, c, x_0, env)
     
-    # Get dual solution by solving the dual problem exactly and crossover to primal (both feasible and infeasible)
-    kkt_dual = gurobi_test_dual(n, c, x_0, env)
-    crossover_kkt_primal = c + n.T @ kkt_dual
-    projected_crossover_kkt_primal, _ = dykstra_proj(x_0, n, crossover_kkt_primal, feasibility_tol=1e-6)
+    # # Get dual solution by solving the dual problem exactly and crossover to primal (both feasible and infeasible)
+    # kkt_dual, kkt_optimal_primal_obj, kkt_optimal_dual_obj = gurobi_test_dual(n, c, x_0, env)
+    # crossover_kkt_primal = c + n.T @ kkt_dual
+    # projected_crossover_kkt_primal, _ = dykstra_proj(x_0, n, crossover_kkt_primal, feasibility_tol=1e-6)
     
     # Use simple PGD on primal (there is no way to get the dual as-is)
     pgd_primal = pgd_test_primal(n, c, x_0, 1000, 0.1)
@@ -219,9 +230,22 @@ if __name__ == '__main__':
     crossover_exact_search_pgd_primal = c + n.T @ exact_search_pgd_dual
     projected_crossover_exact_search_pgd_primal, _ = dykstra_proj(x_0, n, crossover_exact_search_pgd_primal, feasibility_tol=1e-6)
 
+    print("="*10 + " DUALITY GAPS " + "="*10)
+    print(f"Gurobi gap: {optimal_dual_obj - optimal_primal_obj}")
+    # print(f"KKT gap: {kkt_optimal_dual_obj - kkt_optimal_primal_obj}")
+    print(f"Primal PGD gap: < DON'T KNOW! >")
+    print(f"Dual PGD gap: {get_objective_gap(n, c, x_0, crossover_pgd_primal, pgd_dual)}")
+    print(f"Exact line search PGD gap: {get_objective_gap(n, c, x_0, crossover_exact_search_pgd_primal, exact_search_pgd_dual)}")
+
+    print("="*10 + " PRIMAL OBJECTIVE GAPS " + "="*10)
+    # print(f"Gurobi/KKT gap: {np.abs(kkt_optimal_primal_obj - optimal_primal_obj)}")
+    print(f"Gurobi/Primal-PGD gap: {np.abs(get_primal_objective_from_feasible_solution(c, pgd_primal) - optimal_primal_obj)}")
+    print(f"Gurobi/Dual-PGD gap: {np.abs(get_primal_objective_from_feasible_solution(c, crossover_pgd_primal) - optimal_primal_obj)}")
+    print(f"Gurobi/Exact-PGD gap: {np.abs(get_primal_objective_from_feasible_solution(c, crossover_exact_search_pgd_primal) - optimal_primal_obj)}")
+
     print("="*10 + " PRIMAL SOLUTION GAPS " + "="*10)
-    print(f"Gurobi/Crossover-KKT solution gap: {np.linalg.norm(crossover_kkt_primal - primal) / np.sqrt(null_dim)}")
-    print(f"Gurobi/Projected-Crossover-KKT solution gap: {np.linalg.norm(projected_crossover_kkt_primal - primal) / np.sqrt(null_dim)}")
+    # print(f"Gurobi/Crossover-KKT solution gap: {np.linalg.norm(crossover_kkt_primal - primal) / np.sqrt(null_dim)}")
+    # print(f"Gurobi/Projected-Crossover-KKT solution gap: {np.linalg.norm(projected_crossover_kkt_primal - primal) / np.sqrt(null_dim)}")
     print(f"Gurobi/PGD solution gap: {np.linalg.norm(pgd_primal - primal) / np.sqrt(null_dim)}")
     print(f"Gurobi/Crossover-PGD solution gap: {np.linalg.norm(crossover_pgd_primal - primal) / np.sqrt(null_dim)}")
     print(f"Gurobi/Projected-Crossover-PGD solution gap: {np.linalg.norm(projected_crossover_pgd_primal - primal) / np.sqrt(null_dim)}")
@@ -229,14 +253,13 @@ if __name__ == '__main__':
     print(f"Gurobi/Projected-Crossover-Exact-PGD solution gap: {np.linalg.norm(projected_crossover_exact_search_pgd_primal - primal) / np.sqrt(null_dim)}")
 
     print("="*10 + " DUAL SOLUTION GAPS " + "="*10)
-    print(f"Gurobi/KKT-Dual solution gap: {np.linalg.norm(kkt_dual - dual) / np.sqrt(number_of_edges)}")
+    # print(f"Gurobi/KKT-Dual solution gap: {np.linalg.norm(kkt_dual - dual) / np.sqrt(number_of_edges)}")
     print(f"Gurobi/PGD solution gap: {np.linalg.norm(pgd_dual - dual) / np.sqrt(number_of_edges)}")
     print(f"Gurobi/Exact-PGD solution gap: {np.linalg.norm(exact_search_pgd_dual - dual) / np.sqrt(number_of_edges)}")
     
     print("="*10 + " PRIMAL INFEASIBILITIES " + "="*10)
-
-    print(f"KKT crossover infeasibility: {np.linalg.norm(np.clip(x_0 + n @ crossover_kkt_primal, a_min=None, a_max=0.0))}")
-    print(f"Projected KKT crossover infeasibility: {np.linalg.norm(np.clip(x_0 + n @ projected_crossover_kkt_primal, a_min=None, a_max=0.0))}")
+    # print(f"KKT crossover infeasibility: {np.linalg.norm(np.clip(x_0 + n @ crossover_kkt_primal, a_min=None, a_max=0.0))}")
+    # print(f"Projected KKT crossover infeasibility: {np.linalg.norm(np.clip(x_0 + n @ projected_crossover_kkt_primal, a_min=None, a_max=0.0))}")
     print(f"PGD infeasibility: {np.linalg.norm(np.clip(x_0 + n @ pgd_primal, a_min=None, a_max=0.0))}")
     print(f"KKT-PGD crossover infeasibility: {np.linalg.norm(np.clip(x_0 + n @ crossover_pgd_primal, a_min=None, a_max=0.0))}")
     print(f"Projected-KKT-PGD crossover infeasibility: {np.linalg.norm(np.clip(x_0 + n @ projected_crossover_pgd_primal, a_min=None, a_max=0.0))}")

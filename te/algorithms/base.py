@@ -53,6 +53,11 @@ class TrafficEngineeringLP(ABC):
     @abstractmethod
     def objective_trace(self) -> Optional[List[float]]:
         """List of objective values during algorithm iterations"""
+
+    @property
+    def objective_gap_trace(self) -> Optional[List[float]]:
+        """List of primal-dual objective gap during iterations"""
+        return None
     
     @property
     @abstractmethod

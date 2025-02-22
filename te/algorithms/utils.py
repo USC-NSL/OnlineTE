@@ -83,6 +83,7 @@ def get_solution_confusion_matrix(lp: TrafficEngineeringLP, feasibility_tol: Opt
 
     def make_fig(_cm: np.ndarray, _lp: TrafficEngineeringLP) -> Figure:
         _objective_trace = _lp.objective_trace
+        _objective_gap_trace = _lp.objective_gap_trace
         _solver_params = _lp.params
         rho_coeff_trace = None
         if hasattr(_solver_params, 'UseVariableRho'):
@@ -92,26 +93,66 @@ def get_solution_confusion_matrix(lp: TrafficEngineeringLP, feasibility_tol: Opt
                 eta_coeff_trace = _lp.eta_coeff_trace
         if _objective_trace is None:
             print(as_warning("No trace of objective value is available"))
-            sns.heatmap(cm)
+        if _objective_gap_trace is None:
+            print(as_warning("No trace of primal/dual objective gap is available"))
         else:
             if rho_coeff_trace is None:
-                _fig = plt.figure(figsize=(7, 3))
-                plt.subplot(1, 2, 1)
-                plt.plot(_objective_trace)
-                plt.subplot(1, 2, 2)
-                sns.heatmap(_cm, vmin=0, vmax=1)
+                if _objective_gap_trace is None and _objective_trace is None:
+                    _fig = plt.figure(figsize=(4, 3))
+                    sns.heatmap(cm)
+                elif _objective_trace is not None and _objective_gap_trace is None:
+                    _fig = plt.figure(figsize=(8, 3))
+                    plt.subplot(1, 2, 1)
+                    plt.plot(_objective_trace)
+                    plt.subplot(1, 2, 2)
+                    sns.heatmap(_cm, vmin=0, vmax=1)
+                else:
+                    _fig = plt.figure(figsize=(12, 3))
+                    plt.subplot(1, 3, 1)
+                    plt.plot(_objective_trace)
+                    ax = plt.subplot(1, 3, 2)
+                    plt.plot(_objective_gap_trace)
+                    ax.set_yscale('log')
+                    plt.subplot(1, 3, 3)
+                    sns.heatmap(_cm, vmin=0, vmax=1)
             else:
-                _fig = plt.figure(figsize=(7, 6))
-                plt.subplot(2, 2, 1)
-                plt.plot(_objective_trace)
-                plt.subplot(2, 2, 2)
-                sns.heatmap(_cm, vmin=0, vmax=1)
-                ax = plt.subplot(2, 2, 3)
-                plt.plot(rho_coeff_trace)
-                ax.set_yscale('log')
-                ax = plt.subplot(2, 2, 4)
-                plt.plot(eta_coeff_trace)
-                ax.set_yscale('log')
+                if _objective_gap_trace is None and _objective_trace is None:
+                    _fig = plt.figure(figsize=(4, 6))
+                    plt.subplot(2, 2, 1)
+                    sns.heatmap(cm)
+                    ax = plt.subplot(2, 2, 3)
+                    ax.set_yscale('log')
+                    plt.plot(rho_coeff_trace)
+                    ax = plt.subplot(2, 2, 4)
+                    ax.set_yscale('log')
+                    plt.plot(eta_coeff_trace)
+                elif _objective_trace is not None and _objective_gap_trace is None:
+                    _fig = plt.figure(figsize=(8, 6))
+                    plt.subplot(2, 2, 1)
+                    plt.plot(_objective_trace)
+                    plt.subplot(2, 2, 2)
+                    sns.heatmap(cm)
+                    ax = plt.subplot(2, 2, 3)
+                    ax.set_yscale('log')
+                    plt.plot(rho_coeff_trace)
+                    ax = plt.subplot(2, 2, 4)
+                    ax.set_yscale('log')
+                    plt.plot(eta_coeff_trace)
+                else:
+                    _fig = plt.figure(figsize=(12, 6))
+                    plt.subplot(2, 3, 1)
+                    plt.plot(_objective_trace)
+                    plt.subplot(2, 3, 2)
+                    sns.heatmap(cm)
+                    ax = plt.subplot(2, 3, 3)
+                    ax.set_yscale('log')
+                    plt.plot(_objective_gap_trace)
+                    ax = plt.subplot(2, 3, 4)
+                    ax.set_yscale('log')
+                    plt.plot(rho_coeff_trace)
+                    ax = plt.subplot(2, 3, 5)
+                    ax.set_yscale('log')
+                    plt.plot(eta_coeff_trace)
             return _fig
 
 
@@ -132,18 +173,22 @@ def get_solution_confusion_matrix(lp: TrafficEngineeringLP, feasibility_tol: Opt
         assert actual[0].destination == ideal.destination
         assert actual[1].source == ideal.source
         assert actual[1].destination == ideal.destination
+        is_not_satisfied = not is_satisfied(ideal.demand, actual[0].demand)
+        if is_not_satisfied:
+            cm[ideal.source, ideal.destination] = 1
+            unsats += 1        
+        
         if report:
-            print(
-                "{:<4} -> {:<4}".format(ideal.source, ideal.destination) +
+            report_str = "{:<4} -> {:<4}".format(ideal.source, ideal.destination) + \
                 "{:^10}    {:^7} <--> {:^7}".format(
                     str(np.round(ideal.demand, 2)),
                     str(np.round(actual[0].demand, 2)),
                     str(np.round(actual[1].demand, 2))
                 )
-            )
-        if not is_satisfied(ideal.demand, actual[0].demand):
-            cm[ideal.source, ideal.destination] = 1
-            unsats += 1
+            if is_not_satisfied:
+                print(as_fail(report_str))
+            else:
+                print(report_str)
     
     unsatisfied = unsats / K
 
