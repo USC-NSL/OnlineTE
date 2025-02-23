@@ -34,8 +34,7 @@ def make_model(name: str, params: SolverParams, env: Optional[gurobipy.Env], **k
     assert issubclass(params.__class__, GurobiSolverParams)
     assert params.Method == gurobipy.GRB.METHOD_BARRIER, "Only BARRIER should be used!"
     model = gurobipy.Model(name=name, env=env)
-    # model.Params.Method = params.Method
-    model.Params.Method = gurobipy.GRB.METHOD_DUAL
+    model.Params.Method = params.Method
     model.Params.Crossover = params.Crossover
     model.Params.NumericFocus = params.NumericFocus
     model.Params.BarConvTol = params.BarConvTol
