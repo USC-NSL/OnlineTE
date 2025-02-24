@@ -1,0 +1,13 @@
+{
+    "seed": 12345,
+    "topology_name": "Claranet",
+    "capacity": 77.9144287109375,
+    "tm_model_name": "Uniform",
+    "tm_model_params": {
+        "n": 15,
+        "min": 0.0,
+        "max": 1.0
+    },
+    "gurobi_sol_path": "D:\\USC\\DistributedTE\\te\\solutions\\Claranet_12345_Uniform",
+    "runtime": 0.009999990463256836
+}

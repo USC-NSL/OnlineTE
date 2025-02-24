@@ -37,7 +37,7 @@ class GurobiEdgeBasedMinimizeMaximumUtilitySolution(TrafficEngineeringLPSolution
 
         self.seed = seed
         self.topology_name = topology_name
-        self.capacity = capacity
+        self.capacity = float(capacity)
         self.tm_model_name = tm_model_name
         self.tm_model_params = tm_model_params
         self.gurobi_sol_path = gurobi_sol_path \
