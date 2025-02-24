@@ -32,6 +32,7 @@ def get_baseline_solution(base_seed: int, topology_name: str, tm_model: str,
 
     if not barrier:
         solver_params.Method = gurobipy.GRB.METHOD_PRIMAL
+        solver_params.Presolve = 1
     else:
         solver_params.Method = gurobipy.GRB.METHOD_BARRIER
         # We need a basic solution, thus, we need to enable crossover
@@ -198,7 +199,7 @@ def unregulated_admm_test_small():
 
 
 if __name__ == '__main__':
-    get_baseline_solution(12345, 'Claranet', 'Uniform', convergence_tol=1e-4, feasibility_tol=1e-6)
+    get_baseline_solution(12345, 'Interoute', 'Uniform', convergence_tol=1e-4, feasibility_tol=1e-6)
     # get_baseline_solution(12345, 'Interoute', 'Uniform', convergence_tol=1e-4, feasibility_tol=1e-6)
     # get_baseline_shifted_solutions(
     #     base_seed=12345, topology_name='Forthnet', tm_model='Uniform',
