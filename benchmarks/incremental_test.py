@@ -57,7 +57,8 @@ def get_baseline_solution(base_seed: int, topology_name: str, tm_model: str,
 
 def get_baseline_shifted_solutions(base_seed: int, topology_name: str, tm_model: str,
                                    converter_model: str, converter_params: TrafficMatrixConverterParamsBase,
-                                   converter_seed: int, number_of_shifts: int, convergence_tol: float,
+                                   converter_seed: int, number_of_shifts: int, 
+                                   convergence_tol: float, feasibility_tol: float,
                                    warm_start: bool = True, save_solutions: bool = True):
     """This function generates baseline solutions for shifted demands, by default it warm starts Gurobi"""
     base_solution_name = f'{topology_name}_{base_seed}_{tm_model}.tesol'
@@ -69,7 +70,10 @@ def get_baseline_shifted_solutions(base_seed: int, topology_name: str, tm_model:
         raise NotImplementedError
     converter = get_traffic_converter(name=converter_model)(seed=converter_seed, params=converter_params)
     solver_params = GurobiSolverParams()
-    solver_params.Method = gurobipy.GRB.METHOD_DUAL
+    solver_params.Presolve = 1
+    solver_params.ConvTol = convergence_tol
+    solver_params.FeasibilityTol = feasibility_tol
+    solver_params.Method = gurobipy.GRB.METHOD_PRIMAL
     solution_times: List[float] = []
     with contextlib.closing(CentralizedEdgeBasedLP(graph, tm, solver_params)) as lp:
         lp.make_lp()
@@ -79,8 +83,8 @@ def get_baseline_shifted_solutions(base_seed: int, topology_name: str, tm_model:
         shifted_tm = tm
         for i in range(number_of_shifts):
             print("="*10 + f" ITERATION {i+1} / {number_of_shifts} " + "="*10)
-            shifted_tm = converter.convert(shifted_tm)
-            lp.update_traffic_matrix(shifted_tm)
+            # shifted_tm = converter.convert(shifted_tm)
+            # lp.update_traffic_matrix(shifted_tm)
             t = lp.solve()
             if t > 0:
                 lp.check(feasibility_ratio=1e-2)
@@ -88,19 +92,19 @@ def get_baseline_shifted_solutions(base_seed: int, topology_name: str, tm_model:
                 get_solution_confusion_matrix(lp, solver_params.FeasibilityTol, report=False, show=False, save_fig=False)
                 print(f"Solved in {str(round(t, 4))} seconds. Final objective value: {str(round(lp.objective_value, 4))}")
                 print(f"Actual utilization: {get_solution_maximum_utilization(lp.assignments, lp.graph)}")
-                if save_solutions:
-                    shifted_solution = GurobiEdgeBasedMinimizeMaximumUtilityShiftedSolution(
-                        seed=base_seed, topology_name=topology_name, capacity=base_solution.capacity, 
-                        tm_model_name=tm_model, tm_model_params=base_solution.tm_model_params,
-                        tm_converter_name=converter_model, tm_converter_params=converter_params,
-                        converter_seed=converter_seed, iteration=i,
-                        gurobi_sol_name=f'{topology_name}_{base_seed}_{tm_model}_shifted_{converter_seed}_{converter_model}_{i}', 
-                        runtime=t
-                    )
-                    shifted_solution.dump(
-                        model=lp._model,
-                        name=f'{topology_name}_{base_seed}_{tm_model}_shifted_{converter_seed}_{converter_model}_{i}.tesol'
-                    )
+                # if save_solutions:
+                #     shifted_solution = GurobiEdgeBasedMinimizeMaximumUtilityShiftedSolution(
+                #         seed=base_seed, topology_name=topology_name, capacity=base_solution.capacity, 
+                #         tm_model_name=tm_model, tm_model_params=base_solution.tm_model_params,
+                #         tm_converter_name=converter_model, tm_converter_params=converter_params,
+                #         converter_seed=converter_seed, iteration=i,
+                #         gurobi_sol_name=f'{topology_name}_{base_seed}_{tm_model}_shifted_{converter_seed}_{converter_model}_{i}', 
+                #         runtime=t
+                #     )
+                #     shifted_solution.dump(
+                #         model=lp._model,
+                #         name=f'{topology_name}_{base_seed}_{tm_model}_shifted_{converter_seed}_{converter_model}_{i}.tesol'
+                #     )
             time.sleep(1)
     print(
         f"MEDIAN: {str(round(np.median(solution_times), 4))} | "
@@ -205,7 +209,7 @@ if __name__ == '__main__':
         base_seed=12345, topology_name='Interoute', tm_model='Uniform',
         converter_model='Uniform', 
         converter_params=get_traffic_converter_params('Uniform')(delta_min=-0.3, delta_max=0.3),
-        converter_seed=6789, convergence_tol=1e-4, number_of_shifts=30
+        converter_seed=6789, convergence_tol=1e-4, feasibility_tol=1e-6, number_of_shifts=30
     )
     # centralized_test_small()
     # unregulated_admm_test_small()

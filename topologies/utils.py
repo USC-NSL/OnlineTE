@@ -218,7 +218,7 @@ def get_capacity_lower_bound(graph: nx.DiGraph, traffic: TrafficMatrixBase) -> f
             receiving / degrees_in[i]
         )
     
-    return cap
+    return float(cap)
 
 
 def make_graph_from_dict(graph_n: int, graph_dict: Dict[Tuple[int, int], float]) -> nx.DiGraph:
