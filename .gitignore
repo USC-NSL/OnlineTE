@@ -2,4 +2,5 @@
 *.log
 
 # TODO: Should we upload presolves?
-*.sol
+# UPDATE: Yes we should!
+# *.sol

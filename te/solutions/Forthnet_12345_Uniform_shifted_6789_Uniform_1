@@ -1,0 +1,20 @@
+{
+    "seed": 12345,
+    "topology_name": "Forthnet",
+    "capacity": 369.7693634033203,
+    "tm_model_name": "Uniform",
+    "tm_model_params": {
+        "n": 62,
+        "min": 0.0,
+        "max": 1.0
+    },
+    "gurobi_sol_path": "D:\\USC\\DistributedTE\\te\\solutions\\Forthnet_12345_Uniform_shifted_6789_Uniform_1",
+    "runtime": 0.1380000114440918,
+    "tm_converter_name": "Uniform",
+    "tm_converter_params": {
+        "delta_max": 0.3,
+        "delta_min": -0.3
+    },
+    "converter_seed": 6789,
+    "iteration": 1
+}

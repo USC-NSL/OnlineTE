@@ -31,11 +31,9 @@ def get_baseline_solution(base_seed: int, topology_name: str, tm_model: str,
     solver_params = GurobiSolverParams()
 
     if not barrier:
-        solver_params.Method = gurobipy.GRB.METHOD_DUAL
+        solver_params.Method = gurobipy.GRB.METHOD_PRIMAL
         # Always use presolve with Simplex, it helps qute a bit
         solver_params.Presolve = 1
-        # Numeric focus helps with larger topologies
-        solver_params.NumericFocus = 2
     else:
         solver_params.Method = gurobipy.GRB.METHOD_BARRIER
         # We need a basic solution, thus, we need to enable crossover
