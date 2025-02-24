@@ -30,9 +30,15 @@ as_success = lambda msg: f"{ANSIColors.BOLD}{ANSIColors.OKGREEN}{msg}{ANSIColors
 as_fail = lambda msg: f"{ANSIColors.BOLD}{ANSIColors.FAIL}{msg}{ANSIColors.ENDC}"
 
 
+method_to_str = {
+    gurobipy.GRB.METHOD_BARRIER: "BARRIER",
+    gurobipy.GRB.METHOD_PRIMAL: "PRIMAL-SIMPLEX",
+    gurobipy.GRB.METHOD_DUAL: "DUAL-SIMPLEX"
+}
+
+
 def make_model(name: str, params: SolverParams, env: Optional[gurobipy.Env], **kwargs):
     assert issubclass(params.__class__, GurobiSolverParams)
-    assert params.Method == gurobipy.GRB.METHOD_BARRIER, "Only BARRIER should be used!"
     model = gurobipy.Model(name=name, env=env)
     model.Params.Method = params.Method
     model.Params.Crossover = params.Crossover
@@ -50,7 +56,7 @@ def make_model(name: str, params: SolverParams, env: Optional[gurobipy.Env], **k
 
     print(as_bold(
         "Created Gurobi Model With:\n"
-        "\tMethod: BARRIER\n"
+        f"\tMethod: {method_to_str[params.Method]}\n"
         f"\tOptimality Tolerance (BarConvTol): {params.BarConvTol}\n"
         f"\tCosntraint Feasibility Tolerance (FeasibilityTol): {params.FeasibilityTol}\n"
     ))

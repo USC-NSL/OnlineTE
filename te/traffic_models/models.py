@@ -1,7 +1,7 @@
 import numpy as np
 import networkx as nx
 from dataclasses import dataclass
-from te.traffic_models.base import TrafficMatrixBase, traffic_matrix
+from te.traffic_models.base import TrafficMatrixBase, TrafficMatrixParamsBase, traffic_matrix, traffic_matrix_param
 
 
 """
@@ -12,15 +12,17 @@ For these distributions, we need to include the graph object (i.e. a
 """
 
 
+@traffic_matrix_param('Uniform')
 @dataclass
-class UniformTrafficMatrixParams:
+class UniformTrafficMatrixParams(TrafficMatrixParamsBase):
     n: int
     min: float
     max: float
 
 
+@traffic_matrix_param('Exponential')
 @dataclass
-class ExponentialTrafficMatrixParams:
+class ExponentialTrafficMatrixParams(TrafficMatrixParamsBase):
     graph: nx.DiGraph
     beta: float
     gamma: float

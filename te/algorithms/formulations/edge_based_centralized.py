@@ -7,6 +7,7 @@ from gurobipy import GRB, GurobiError, quicksum
 from te.algorithms.base import TrafficEngineeringLP, SolverParams, GurobiSolverParams
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
 from topologies.utils import get_edge_indexing
+from te.algorithms.solution import GurobiEdgeBasedMinimizeMaximumUtilitySolution
 from te.algorithms.utils import check_centralized_flow_conservation, check_capacity_constraint, make_model, get_solution_maximum_utilization
 
 
@@ -24,6 +25,7 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
         self._objective: gurobipy.LinExpr = None
         self._commodity_list: List[Commodity] = traffic_to_commodity(self._traffic)
         self._demand_constraints: List[Tuple[gurobipy.Constr, gurobipy.Constr]] = None
+        self._capacity_constraints: gurobipy.tupledict = None
         self._X_ek: np.ndarray = None
     
     @property
@@ -56,15 +58,9 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
         assert self._X_ek is not None
         return self._X_ek
 
-    def initialize_to(self, assignment: np.ndarray):
+    def initialize_to(self, solution: GurobiEdgeBasedMinimizeMaximumUtilitySolution):
         assert self._model is not None and self._flows is not None
-        self._model.Params.StartNumber = 0
-        self._X_ek = assignment
-        for key in self._flows.keys():
-            e, k = key
-            self._flows[key].Start = assignment[e, k]
-            self._flows[key].PStart = assignment[e, k]
-        self._utility.Start = get_solution_maximum_utilization(assignment, self.graph)
+        solution.initiate_model(self._model)
 
     def _set_X_ek(self):
         K = len(self._commodity_list)
@@ -111,7 +107,7 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
         COMMODITIES = self._commodity_list
 
         # Capacity constraint
-        MODEL.addConstrs(
+        self._capacity_constraints = MODEL.addConstrs(
             FLOWS.sum(e, '*') / c_e <= UTILITY \
                 for e, (_, _, c_e) in \
                     enumerate(GRAPH.edges.data('capacity'))

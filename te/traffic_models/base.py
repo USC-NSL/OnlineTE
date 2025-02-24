@@ -4,9 +4,20 @@ import numpy as np
 import te.constants
 import te.traffic_models
 from te import TE_PATH
-from typing import Dict, Type, List
+from typing import Dict, Type, List, ClassVar, Optional
 from abc import ABC, abstractmethod
 from collections import namedtuple
+from dataclasses import dataclass
+
+
+@dataclass
+class TrafficMatrixParamsBase:
+    _type: ClassVar[Optional[str]] = None
+
+    @classmethod
+    def type(cls) -> str:
+        assert cls._type is not None
+        return cls._type
 
 
 class TrafficMatrixBase(ABC):
@@ -111,6 +122,9 @@ this before we want deserialize them.
 """
 _MODELS: Dict[str, Type[TrafficMatrixBase]] = dict()
 
+# TODO: The values MUST be a dataclass. Is there a reliable way to check that?
+_PARAMS: Dict[str, Type[TrafficMatrixParamsBase]] = dict()
+
 
 def traffic_matrix(cls: Type[TrafficMatrixBase]) -> TrafficMatrixBase:
     """Decorator that registers any Traffic Matrix class for use"""
@@ -123,7 +137,19 @@ def traffic_matrix(cls: Type[TrafficMatrixBase]) -> TrafficMatrixBase:
 
     return cls
 
+def traffic_matrix_param(name: str) -> TrafficMatrixParamsBase:
+    """Decorator that registers any Traffic Matrix Parameter dataclass for use"""
+    def wrapper(cls: Type[TrafficMatrixParamsBase]):
+        global _PARAMS
+        assert name not in _PARAMS
+        cls._type = name
+        _PARAMS[name] = cls
+        return cls
+    return wrapper
+
+
 # A Commodity is just a tuple of source, destination and demand.
+# TODO: Make this a `dataclass` for goodness sake ...
 Commodity = namedtuple('Commodity', ['source', 'destination', 'demand'])
 
 

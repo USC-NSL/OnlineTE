@@ -23,6 +23,25 @@ class GurobiSolverParams(SolverParams):
     LogFile: str = te.constants.DEFAULT_GUROBI_LOG_FILE
 
 
+class TrafficEngineeringLPSolution(ABC):
+    def dump(self, name: str, path: str = None):
+        path = path if path is not None else os.path.join(SOLUTION_DIR, name)
+        with open(path, 'wb') as f:
+            pickle.dump(self, f)
+    
+    @classmethod
+    def load(cls, name: str, path: str = None):
+        path = path if path is not None else os.path.join(SOLUTION_DIR, name)
+        with open(path, 'rb') as f:
+            return pickle.load(f)
+    
+    @abstractmethod
+    def regenerate(self) -> Tuple[nx.DiGraph, TrafficMatrixBase]:
+        """
+        Regenerate the graph and traffic matrix associated with this solution
+        """
+
+
 class TrafficEngineeringLP(ABC):
     @property
     @abstractmethod
@@ -65,7 +84,7 @@ class TrafficEngineeringLP(ABC):
         """Return current assignments based on the solution"""
 
     @abstractmethod
-    def initialize_to(self, assignment: np.ndarray):
+    def initialize_to(self, solution: TrafficEngineeringLPSolution):
         """
         Initialize the model to a particular solution
         """
@@ -122,23 +141,4 @@ class TrafficEngineeringLP(ABC):
     def update_traffic_matrix(self, tm: TrafficMatrixBase):
         """
         Update the current traffic matrix and re-initialize the model
-        """
-
-
-class TrafficEngineeringLPSolution(ABC):
-    def dump(self, name: str, path: str = None):
-        path = path if path is not None else os.path.join(SOLUTION_DIR, name)
-        with open(path, 'wb') as f:
-            pickle.dump(self, f)
-    
-    @classmethod
-    def load(cls, name: str, path: str = None):
-        path = path if path is not None else os.path.join(SOLUTION_DIR, name)
-        with open(path, 'rb') as f:
-            return pickle.load(f)
-    
-    @abstractmethod
-    def regenerate(self) -> Tuple[nx.DiGraph, TrafficMatrixBase]:
-        """
-        Regenerate the graph and traffic matrix associated with this solution
         """
