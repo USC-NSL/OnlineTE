@@ -42,7 +42,7 @@ class GurobiEdgeBasedMinimizeMaximumUtilitySolution(TrafficEngineeringLPSolution
         self.tm_model_params = tm_model_params
         self.gurobi_sol_path = gurobi_sol_path \
             if gurobi_sol_path is not None \
-            else os.path.join(SOLUTION_DIR, f'{gurobi_sol_name}')
+            else f'$$SOLDIR/{gurobi_sol_name}'
         self.runtime = runtime
     
     def initiate_model(self, model: gp.Model):
@@ -51,9 +51,15 @@ class GurobiEdgeBasedMinimizeMaximumUtilitySolution(TrafficEngineeringLPSolution
     
     @property
     def bas_path(self):
+        if self.gurobi_sol_path.startswith('$$SOLDIR/'):
+            rest = self.gurobi_sol_path.replace('$$SOLDIR/', '')
+            return os.path.join(SOLUTION_DIR, f'{rest}.gurobi.bas')
         return f'{self.gurobi_sol_path}.gurobi.bas'
     @property
     def sol_path(self):
+        if self.gurobi_sol_path.startswith('$$SOLDIR/'):
+            rest = self.gurobi_sol_path.replace('$$SOLDIR/', '')
+            return os.path.join(SOLUTION_DIR, f'{rest}.gurobi.json')
         return f'{self.gurobi_sol_path}.gurobi.json'
 
     def dump(self, model: gp.Model, name: str, path: str = None):

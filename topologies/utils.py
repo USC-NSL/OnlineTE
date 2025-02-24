@@ -280,7 +280,10 @@ if __name__ == '__main__':
     import matplotlib.pyplot as plt
     
     # g = get_zoo_topology_at_least_as_large_as(100, 112)
-    g = get_zoo_topology_at_least_as_large_as(60, 70)
-    if g:
-        nx.draw(g)
-        plt.show()
+    # g = get_zoo_topology_at_least_as_large_as(60, 70)
+    # if g:
+    #     nx.draw(g)
+    #     plt.show()
+    g = load_zoo_topology('Interoute')
+    print(f'Nodes: {len(g.nodes)}')
+    print(f'Edges: {len(g.edges)}')

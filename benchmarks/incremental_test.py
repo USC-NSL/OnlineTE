@@ -99,7 +99,7 @@ def get_baseline_shifted_solutions(base_seed: int, topology_name: str, tm_model:
                     )
                     shifted_solution.dump(
                         model=lp._model,
-                        name=f'{topology_name}_{base_seed}_{tm_model}_shifted_{converter_seed}_{converter_model}_{i}'
+                        name=f'{topology_name}_{base_seed}_{tm_model}_shifted_{converter_seed}_{converter_model}_{i}.tesol'
                     )
             time.sleep(1)
     print(
@@ -199,13 +199,13 @@ def unregulated_admm_test_small():
 
 
 if __name__ == '__main__':
-    get_baseline_solution(12345, 'Interoute', 'Uniform', convergence_tol=1e-4, feasibility_tol=1e-6)
     # get_baseline_solution(12345, 'Interoute', 'Uniform', convergence_tol=1e-4, feasibility_tol=1e-6)
-    # get_baseline_shifted_solutions(
-    #     base_seed=12345, topology_name='Forthnet', tm_model='Uniform',
-    #     converter_model='Uniform', 
-    #     converter_params=get_traffic_converter_params('Uniform')(delta_min=-0.3, delta_max=0.3),
-    #     converter_seed=6789, convergence_tol=1e-4, number_of_shifts=30
-    # )
+    # get_baseline_solution(12345, 'Interoute', 'Uniform', convergence_tol=1e-4, feasibility_tol=1e-6)
+    get_baseline_shifted_solutions(
+        base_seed=12345, topology_name='Interoute', tm_model='Uniform',
+        converter_model='Uniform', 
+        converter_params=get_traffic_converter_params('Uniform')(delta_min=-0.3, delta_max=0.3),
+        converter_seed=6789, convergence_tol=1e-4, number_of_shifts=30
+    )
     # centralized_test_small()
     # unregulated_admm_test_small()
