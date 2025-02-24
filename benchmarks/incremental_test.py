@@ -15,8 +15,7 @@ from te.algorithms.utils import get_solution_confusion_matrix, get_solution_maxi
 from topologies.utils import load_zoo_topology, get_capacity_lower_bound, set_edge_capacity_to
 
 
-def get_baseline_solutions(base_seed: int, topology_name: str, tm_model: str, delta_min: float, 
-                           delta_max: float, converter_seed: int, number_of_shifts: int):
+def get_baseline_solution(base_seed: int, topology_name: str, tm_model: str):
     """This function generates the optimal basis for the base TM and all shifts"""
     gurobi_sol_name = f'{topology_name}_{base_seed}_{tm_model}'
     solution_name = f'{gurobi_sol_name}.tesol'
@@ -41,6 +40,47 @@ def get_baseline_solutions(base_seed: int, topology_name: str, tm_model: str, de
                 tm_model_params=tm_params, gurobi_sol_name=gurobi_sol_name, runtime=t
             )
             solution.dump(model=lp._model, name=solution_name)
+
+
+def get_baseline_shifted_solutions(base_seed: int, topology_name: str, tm_model: str, delta_min: float, 
+                                   delta_max: float, converter_seed: int, number_of_shifts: int, 
+                                   warm_start: bool = True):
+    """This function generates baseline solutions for shifted demands, by default it warm starts Gurobi"""
+    base_solution_name = f'{topology_name}_{base_seed}_{tm_model}.tesol'
+    if warm_start:
+        base_solution: GurobiEdgeBasedMinimizeMaximumUtilitySolution = GurobiEdgeBasedMinimizeMaximumUtilitySolution.load(name=base_solution_name)
+        graph, tm = base_solution.regenerate()
+    else:
+        # TODO: Add the option to refuse warm start ...
+        raise NotImplementedError
+    converter = UniformConverter(seed=converter_seed, delta_min=delta_min, delta_max=delta_max)
+    solver_params = GurobiSolverParams()
+    solver_params.Method = gurobipy.GRB.METHOD_DUAL
+    solution_times: List[float] = []
+    with contextlib.closing(CentralizedEdgeBasedLP(graph, tm, solver_params)) as lp:
+        lp.make_lp()
+        # First, initiate to baseline solution
+        lp.initialize_to(base_solution)
+        # Now, start shifting the demands
+        shifted_tm = tm
+        for i in range(number_of_shifts):
+            print("="*10 + f" ITERATION {i+1} / {number_of_shifts} " + "="*10)
+            shifted_tm = converter.convert(shifted_tm)
+            lp.update_traffic_matrix(shifted_tm)
+            t = lp.solve()
+            if t > 0:
+                lp.check(feasibility_ratio=1e-2)
+                solution_times.append(t)
+                get_solution_confusion_matrix(lp, solver_params.FeasibilityTol, report=False, show=False, save_fig=False)
+                print(f"Solved in {str(round(t, 4))} seconds. Final objective value: {str(round(lp.objective_value, 4))}")
+                print(f"Actual utilization: {get_solution_maximum_utilization(lp.assignments, lp.graph)}")
+            time.sleep(1)
+    print(
+        f"MEDIAN: {str(round(np.median(solution_times), 4))} | "
+        f"MIN: {str(round(np.min(solution_times), 4))} | "
+        f"MAX: {str(round(np.max(solution_times), 4))}"
+    )
+    return solution_times
 
 
 def centralized_test_small() -> List[float]:
@@ -133,5 +173,6 @@ def unregulated_admm_test_small():
 
 if __name__ == '__main__':
     # get_baseline_solutions(12345, 'Forthnet', 'Uniform', -0.3, 0.3, 6789, 10)
-    centralized_test_small()
+    get_baseline_shifted_solutions(12345, 'Forthnet', 'Uniform', -0.3, 0.3, 6789, 10)
+    # centralized_test_small()
     # unregulated_admm_test_small()
