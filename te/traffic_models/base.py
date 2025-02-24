@@ -163,10 +163,28 @@ def traffic_to_commodity(tm: TrafficMatrixBase) -> List[Commodity]:
     ]
 
 
+@dataclass
+class TrafficMatrixConverterParamsBase:
+    _type: ClassVar[Optional[str]] = None
+
+    @classmethod
+    def type(cls) -> str:
+        assert cls._type is not None
+        return cls._type
+
+
 class TrafficMatrixConverterBase(ABC):
-    def __init__(self, seed: int = None):
+    _type: Optional[str] = None
+
+    def __init__(self, seed: int = None, params: Optional[Type[TrafficMatrixConverterParamsBase]] = None):
+        assert self._type is not None
         super().__init__()
         self._seed = seed
+    
+    @classmethod
+    def type(cls) -> str:
+        assert cls._type is not None
+        return cls._type
     
     @abstractmethod
     def convert(self, tm: TrafficMatrixBase) -> TrafficMatrixBase:
@@ -174,3 +192,29 @@ class TrafficMatrixConverterBase(ABC):
         Convert a given TM into another TM given the current state of the
         converter instance.
         """
+
+
+_CONVERTERS: Dict[str, Type[TrafficMatrixConverterBase]] = dict()
+_CONVERTER_PARAMS: Dict[str, Type[TrafficMatrixConverterParamsBase]] = dict()
+
+
+def traffic_matrix_converter(name: str) -> TrafficMatrixConverterBase:
+    """Decorator that registers a traffic matrix converter"""
+    def wrapper(cls: Type[TrafficMatrixConverterBase]):
+        global _CONVERTERS
+        assert name not in _CONVERTERS
+        cls._type = name
+        _CONVERTERS[name] = cls
+        return cls
+    return wrapper
+
+
+def traffic_matrix_converter_param(name: str) -> TrafficMatrixConverterParamsBase:
+    """Decorator that registers a traffic matrix converter parameters"""
+    def wrapper(cls: Type[TrafficMatrixConverterParamsBase]):
+        global _CONVERTER_PARAMS
+        assert name not in _CONVERTER_PARAMS
+        cls._type = name
+        _CONVERTER_PARAMS[name] = cls
+        return cls
+    return wrapper

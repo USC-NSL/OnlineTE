@@ -43,12 +43,15 @@ def make_model(name: str, params: SolverParams, env: Optional[gurobipy.Env], **k
     model.Params.Method = params.Method
     model.Params.Crossover = params.Crossover
     model.Params.NumericFocus = params.NumericFocus
-    model.Params.BarConvTol = params.BarConvTol
+
+    # We set _both_ of these to the same value to make sure that both
+    # Barrier and Simplex converge to within the same tolerance.
+    model.Params.BarConvTol = params.ConvTol
+    model.Params.OptimalityTol = params.ConvTol
+
     model.Params.FeasibilityTol = params.FeasibilityTol
     model.Params.LogFile = params.LogFile
-
-    # TODO: Disable presolve?
-    model.Params.Presolve = 0
+    model.Params.Presolve = params.Presolve
 
     if len(kwargs) > 0:
         for k, v in kwargs.items():
@@ -57,7 +60,7 @@ def make_model(name: str, params: SolverParams, env: Optional[gurobipy.Env], **k
     print(as_bold(
         "Created Gurobi Model With:\n"
         f"\tMethod: {method_to_str[params.Method]}\n"
-        f"\tOptimality Tolerance (BarConvTol): {params.BarConvTol}\n"
+        f"\tOptimality Tolerance (OptimalityTol/BarConvTol): {params.ConvTol}\n"
         f"\tCosntraint Feasibility Tolerance (FeasibilityTol): {params.FeasibilityTol}\n"
     ))
 

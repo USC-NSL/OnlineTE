@@ -4,9 +4,11 @@ import contextlib
 import numpy as np
 from typing import List
 import matplotlib.pyplot as plt
-from te.traffic_models import get_traffic_model
-from te.algorithms.solution import GurobiEdgeBasedMinimizeMaximumUtilitySolution
+from te.traffic_models import get_traffic_model, get_traffic_converter, get_traffic_converter_params
+from te.algorithms.solution import (
+    GurobiEdgeBasedMinimizeMaximumUtilitySolution, GurobiEdgeBasedMinimizeMaximumUtilityShiftedSolution)
 from te.traffic_models.models import UniformTrafficMatrixParams
+from te.traffic_models.base import TrafficMatrixConverterParamsBase
 from te.traffic_models.converters import UniformConverter
 from te.algorithms.base import GurobiSolverParams
 from te.algorithms.formulations.edge_based_centralized import CentralizedEdgeBasedLP
@@ -15,7 +17,8 @@ from te.algorithms.utils import get_solution_confusion_matrix, get_solution_maxi
 from topologies.utils import load_zoo_topology, get_capacity_lower_bound, set_edge_capacity_to
 
 
-def get_baseline_solution(base_seed: int, topology_name: str, tm_model: str):
+def get_baseline_solution(base_seed: int, topology_name: str, tm_model: str, 
+                          convergence_tol: float, feasibility_tol: float, barrier: bool = False):
     """This function generates the optimal basis for the base TM and all shifts"""
     gurobi_sol_name = f'{topology_name}_{base_seed}_{tm_model}'
     solution_name = f'{gurobi_sol_name}.tesol'
@@ -26,7 +29,20 @@ def get_baseline_solution(base_seed: int, topology_name: str, tm_model: str):
     set_edge_capacity_to(graph, c_min*10)
 
     solver_params = GurobiSolverParams()
-    solver_params.Method = gurobipy.GRB.METHOD_DUAL
+
+    if not barrier:
+        solver_params.Method = gurobipy.GRB.METHOD_DUAL
+        # Always use presolve with Simplex, it helps qute a bit
+        solver_params.Presolve = 1
+        # Numeric focus helps with larger topologies
+        solver_params.NumericFocus = 2
+    else:
+        solver_params.Method = gurobipy.GRB.METHOD_BARRIER
+        # We need a basic solution, thus, we need to enable crossover
+        solver_params.Crossover = 1
+    solver_params.ConvTol = convergence_tol
+    solver_params.FeasibilityTol = feasibility_tol
+    
     with contextlib.closing(CentralizedEdgeBasedLP(graph, tm, solver_params)) as lp:
         lp.make_lp()
         t = lp.solve()
@@ -42,9 +58,10 @@ def get_baseline_solution(base_seed: int, topology_name: str, tm_model: str):
             solution.dump(model=lp._model, name=solution_name)
 
 
-def get_baseline_shifted_solutions(base_seed: int, topology_name: str, tm_model: str, delta_min: float, 
-                                   delta_max: float, converter_seed: int, number_of_shifts: int, 
-                                   warm_start: bool = True):
+def get_baseline_shifted_solutions(base_seed: int, topology_name: str, tm_model: str,
+                                   converter_model: str, converter_params: TrafficMatrixConverterParamsBase,
+                                   converter_seed: int, number_of_shifts: int, convergence_tol: float,
+                                   warm_start: bool = True, save_solutions: bool = True):
     """This function generates baseline solutions for shifted demands, by default it warm starts Gurobi"""
     base_solution_name = f'{topology_name}_{base_seed}_{tm_model}.tesol'
     if warm_start:
@@ -53,7 +70,7 @@ def get_baseline_shifted_solutions(base_seed: int, topology_name: str, tm_model:
     else:
         # TODO: Add the option to refuse warm start ...
         raise NotImplementedError
-    converter = UniformConverter(seed=converter_seed, delta_min=delta_min, delta_max=delta_max)
+    converter = get_traffic_converter(name=converter_model)(seed=converter_seed, params=converter_params)
     solver_params = GurobiSolverParams()
     solver_params.Method = gurobipy.GRB.METHOD_DUAL
     solution_times: List[float] = []
@@ -74,6 +91,19 @@ def get_baseline_shifted_solutions(base_seed: int, topology_name: str, tm_model:
                 get_solution_confusion_matrix(lp, solver_params.FeasibilityTol, report=False, show=False, save_fig=False)
                 print(f"Solved in {str(round(t, 4))} seconds. Final objective value: {str(round(lp.objective_value, 4))}")
                 print(f"Actual utilization: {get_solution_maximum_utilization(lp.assignments, lp.graph)}")
+                if save_solutions:
+                    shifted_solution = GurobiEdgeBasedMinimizeMaximumUtilityShiftedSolution(
+                        seed=base_seed, topology_name=topology_name, capacity=base_solution.capacity, 
+                        tm_model_name=tm_model, tm_model_params=base_solution.tm_model_params,
+                        tm_converter_name=converter_model, tm_converter_params=converter_params,
+                        converter_seed=converter_seed, iteration=i,
+                        gurobi_sol_name=f'{topology_name}_{base_seed}_{tm_model}_shifted_{converter_seed}_{converter_model}_{i}', 
+                        runtime=t
+                    )
+                    shifted_solution.dump(
+                        model=lp._model,
+                        name=f'{topology_name}_{base_seed}_{tm_model}_shifted_{converter_seed}_{converter_model}_{i}'
+                    )
             time.sleep(1)
     print(
         f"MEDIAN: {str(round(np.median(solution_times), 4))} | "
@@ -172,7 +202,12 @@ def unregulated_admm_test_small():
 
 
 if __name__ == '__main__':
-    # get_baseline_solutions(12345, 'Forthnet', 'Uniform', -0.3, 0.3, 6789, 10)
-    get_baseline_shifted_solutions(12345, 'Forthnet', 'Uniform', -0.3, 0.3, 6789, 10)
+    get_baseline_solution(12345, 'Interoute', 'Uniform', convergence_tol=1e-4, feasibility_tol=1e-6)
+    # get_baseline_shifted_solutions(
+    #     base_seed=12345, topology_name='Forthnet', tm_model='Uniform',
+    #     converter_model='Uniform', 
+    #     converter_params=get_traffic_converter_params('Uniform')(delta_min=-0.3, delta_max=0.3),
+    #     converter_seed=6789, convergence_tol=1e-4, number_of_shifts=30
+    # )
     # centralized_test_small()
     # unregulated_admm_test_small()

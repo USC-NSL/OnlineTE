@@ -18,8 +18,9 @@ class GurobiSolverParams(SolverParams):
     Method: int = te.constants.DEFAULT_SOLVER_METHOD
     Crossover: int = te.constants.DEFAULT_CROSSOVER
     NumericFocus: int = te.constants.DEFAULT_NUMERIC_FOCUS
-    BarConvTol: float = te.constants.DEFAULT_BARRIER_CONVERGENCE_TOLERANCE
+    ConvTol: float = te.constants.DEFAULT_OPTIMALITY_TOLERANCE
     FeasibilityTol: float = te.constants.DEFAULT_FEASIBILITY_TOLERANCE
+    Presolve: int = te.constants.DEFAULT_PRESOLVE
     LogFile: str = te.constants.DEFAULT_GUROBI_LOG_FILE
 
 

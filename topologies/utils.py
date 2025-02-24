@@ -29,15 +29,15 @@ IMPORTANT NOTE:
 def load_zoo_topology(name: str) -> nx.DiGraph:
     """Load the topology zoo model as an instance of `nx.DiGraph`"""
 
-    # First, check for a GML file
-    gml_path = os.path.join(TOPOLGOY_ZOO_PATH, f"{name}.gml")
-    if os.path.exists(gml_path):
-        g: nx.Graph = nx.read_gml(gml_path, label='id', destringizer=int)
+    # First, check for a GraphML file
+    graphml_path = os.path.join(TOPOLGOY_ZOO_PATH, f"{name}.graphml")
+    if os.path.exists(graphml_path):
+        g: nx.Graph = nx.read_graphml(graphml_path, node_type=int)
     else:
-        # Fallback to see if GraphML file exists instead
-        graphml_path = os.path.join(TOPOLGOY_ZOO_PATH, f"{name}.graphml")
-        if os.path.exists(graphml_path):
-            g: nx.Graph = nx.read_graphml(gml_path, node_type=int)
+        # Fallback to see if GML file exists instead
+        gml_path = os.path.join(TOPOLGOY_ZOO_PATH, f"{name}.gml")
+        if os.path.exists(gml_path):
+            g: nx.Graph = nx.read_gml(gml_path, label='id', destringizer=int)
         else:
             # We don't have this topology :/ ...
             raise ValueError(f"No GML/GraphML file associated with topology {name} exists!")
