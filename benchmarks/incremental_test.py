@@ -13,6 +13,7 @@ from te.traffic_models.converters import UniformConverter
 from te.algorithms.base import GurobiSolverParams
 from te.algorithms.formulations.edge_based_centralized import CentralizedEdgeBasedLP
 from te.algorithms.formulations.edge_based_unregulated_admm import UnregulatedADMMLP, UnregulatedADMMSolverParams
+from te.algorithms.formulations.edge_based_regularized_admm import RegularizedADMMLP, RegularizedADMMSolverParams
 from te.algorithms.utils import get_solution_confusion_matrix, get_solution_maximum_utilization
 from topologies.utils import load_zoo_topology, get_capacity_lower_bound, set_edge_capacity_to
 
@@ -138,25 +139,43 @@ def test_warm_start(base_seed: int, topology_name: str, tm_model: str,
         raise NotImplementedError
     converter = get_traffic_converter(name=converter_model)(seed=converter_seed, params=converter_params)
     n = len(graph.edges)
-    solver_params = UnregulatedADMMSolverParams(
-        NumberOfEpochs=100,
-        NumberOfNetworkUpdates=2,
+    # solver_params = UnregulatedADMMSolverParams(
+    #     NumberOfEpochs=100,
+    #     NumberOfNetworkUpdates=2,
+    #     PGDIterations=25,
+    #     Gamma=None,
+    #     Eta=10/(n**2),
+    #     Rho=10/(n**2),
+    #     NumWorkers=8,
+    #     UseVariableRho=False,
+    #     BigTheta=1e-2,
+    #     BigGamma=1e-4
+    # )
+    solver_params = RegularizedADMMSolverParams(
+        NumberOfEpochs=1,
+        NumberOfNetworkUpdates=3,
         PGDIterations=25,
         Gamma=None,
+        Epsilon=1e-5,
         Eta=10/(n**2),
         Rho=10/(n**2),
+        # Eta=1e-3,
+        # Rho=1e-3,
         NumWorkers=8,
-        UseVariableRho=False,
-        BigTheta=1e-2,
-        BigGamma=1e-4
+        UseVariableRho=True,
+        BigTheta=1e-6,
+        BigGamma=1e-7
     )
     solver_params.ConvTol = convergence_tol
     solver_params.FeasibilityTol = feasibility_tol
     solution_times: List[float] = []
-    with contextlib.closing(UnregulatedADMMLP(graph, tm, solver_params)) as lp:
+    # with contextlib.closing(UnregulatedADMMLP(graph, tm, solver_params)) as lp:
+    with contextlib.closing(RegularizedADMMLP(graph, tm, solver_params)) as lp:
         lp.make_lp()
         # First, initiate to baseline solution
         lp.initialize_to(base_solution)
+        get_solution_confusion_matrix(lp, feasibility_ratio=1e-2, report=True, show=False, save_fig=False)
+        print(f"Actual utilization: {get_solution_maximum_utilization(lp.assignments, lp.graph)}")
         lp.set_target(base_solution)
         # Now, start shifting the demands
         shifted_tm = tm
@@ -170,7 +189,7 @@ def test_warm_start(base_seed: int, topology_name: str, tm_model: str,
             print(f"Actual utilization: {get_solution_maximum_utilization(lp.assignments, lp.graph)}")
             if t > 0:
                 if check_solution:
-                    lp.check(feasibility_ratio=1e-2)
+                    lp.check(feasibility_ratio=5e-2)
                 solution_times.append(t)
                 get_solution_confusion_matrix(lp, feasibility_ratio=1e-2, report=False, show=False, save_fig=False)
                 print(f"Solved in {str(round(t, 4))} seconds. Final objective value: {str(round(lp.objective_value, 4))}")

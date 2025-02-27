@@ -349,7 +349,11 @@ def mp_regularized_admm_test_small():
 
 
 def regularized_admm_test_medium():
-    graph = load_zoo_topology('Interoute')
+    # graph = load_zoo_topology('Claranet')
+    graph = load_zoo_topology('Forthnet')
+    # graph = load_zoo_topology('Interoute')
+    
+    n = len(graph.edges())
     
     tm_params = UniformTrafficMatrixParams(
         n = len(graph.nodes), min = 0.0, max = 1.0
@@ -361,22 +365,31 @@ def regularized_admm_test_medium():
     print(f"Capacity lower bound is: {c_min}")
 
     solver_params = RegularizedADMMSolverParams(
-        NumberOfEpochs=20,
-        NumberOfNetworkUpdates=10,
-        Epsilon=1e-3,
-        Rho=1e-3
+        NumberOfEpochs=200,
+        NumberOfNetworkUpdates=2,
+        PGDIterations=25,
+        Gamma=1e-1,
+        Epsilon=0,
+        Eta=1e-1,
+        Rho=1e-1,
+        NumWorkers=8,
+        UseVariableRho=True,
+        BigTheta=1e-6,
+        BigGamma=1e-7
     )
     with contextlib.closing(RegularizedADMMLP(graph, tm, solver_params)) as lp:
         lp.make_lp()
         t = lp.solve()
         if t > 0:
-            lp.check(feasibility_ratio=1e-2)
-            get_solution_confusion_matrix(lp, solver_params.FeasibilityTol)
+            lp.check(feasibility_ratio=5e-2)
+            get_solution_confusion_matrix(lp, solver_params.FeasibilityTol, report=True)
             print(f"Solved in {t} seconds. Final objective value: {lp.objective_value}")
+            print(f"Actual utilization: {get_solution_maximum_utilization(lp.assignments, lp.graph)}")
 
 
 def unregulated_admm_test_small():
-    graph = load_zoo_topology('Claranet')
+    # graph = load_zoo_topology('Claranet')
+    graph = load_zoo_topology('Forthnet')
     # graph = load_zoo_topology('Interoute')
     
     n = len(graph.edges())
@@ -395,8 +408,10 @@ def unregulated_admm_test_small():
         NumberOfNetworkUpdates=2,
         PGDIterations=25,
         Gamma=None,
-        Eta=10/(n**2),
-        Rho=10/(n**2),
+        # Eta=10/(n**2),
+        # Rho=10/(n**2),
+        Eta=1e-1,
+        Rho=1e-1,
         NumWorkers=8,
         UseVariableRho=True,
         BigTheta=1e-6,

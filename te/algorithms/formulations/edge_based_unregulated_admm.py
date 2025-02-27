@@ -14,7 +14,7 @@ from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Comm
 from topologies.utils import (get_edge_indexing, get_graph_M_matrix, 
                               get_adjacency_null_space, get_feasible_flow_assignment)
 from te.algorithms.utils import (check_capacity_constraint, optimize_or_scream, make_model, 
-                                 get_solution_maximum_utilization, 
+                                 get_solution_maximum_utilization, as_fail,
                                  careful_norm, careful_norm_squared)
 
 
@@ -594,14 +594,13 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         epoch = 0
         max_iters = PARAMS.NumberOfEpochs
         try:
-            # for _ in tqdm.tqdm(range(PARAMS.NumberOfEpochs)):
-            while True:
+            for _ in tqdm.tqdm(range(PARAMS.NumberOfEpochs)):
+            # while True:
                 t_network = 0
 
                 # First, let the controller decide what the utilization is
                 optimize_or_scream(MODEL_CONTROLLER)
-                print("Finished controller optimization problem")
-                self._check_objective_gap()
+                # self._check_objective_gap()
 
                 # Now, do in-network optimization
                 for i in reversed(range(PARAMS.NumberOfNetworkUpdates)):
@@ -635,8 +634,8 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
                 self._objective_trace.append(self._utility.X)
                 total_runtime += MODEL_CONTROLLER.Runtime + t_network
                 # Check primal-dual objective gap
-                if ((epoch > 0) and (self._check_objective_gap())):
-                    break
+                # if ((epoch > 0) and (self._check_objective_gap())):
+                #     break
                 epoch += 1
                 if ((max_iters is not None) and (epoch == max_iters)):
                     break
@@ -658,27 +657,27 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
                 return abs(primal - pair) < feasibility_tol
             return abs((primal - pair) / (primal + te.constants.FLOAT_RES)) < feasibility_ratio
 
-        # # Are outer ADMM pairs in consensus?
-        # XO_E = self._Xo_e
-        # ZO_E = self._Zo_e
-        # for e in range(NUM_EDGES):
-        #     primal = XO_E[e].X
-        #     pair = ZO_E[e]
-        #     primal_str = str(np.round(primal, 4))
-        #     pair_str = str(np.round(pair, 4))
-        #     assert in_consensus(primal, pair), \
-        #         f"Edge {e} --> Outer ADMM pairing is not in consensus with primal variable: {primal_str} vs {pair_str}"
+        # Are outer ADMM pairs in consensus?
+        XO_E = self._Xo_e
+        ZO_E = self._Zo_e
+        for e in range(NUM_EDGES):
+            primal = XO_E[e].X
+            pair = ZO_E[e]
+            primal_str = str(np.round(primal, 4))
+            pair_str = str(np.round(pair, 4))
+            if not in_consensus(primal, pair):
+                print(as_fail(f"Edge {e} --> Outer ADMM pairing is not in consensus with primal variable: {primal_str} vs {pair_str}"))
         
-        # # Are inner ADMM pairs in consensus?
-        # Y_BAR_T = self._Y_bar_t
-        # P_BAR_T = self._P_bar_t
-        # for t in range(T):
-        #     primal = Y_BAR_T[t]
-        #     pair = P_BAR_T[t]
-        #     primal_str = str(np.round(primal, 4))
-        #     pair_str = str(np.round(pair, 4))
-        #     assert in_consensus(primal, pair), \
-        #         f"Axis {t} --> Inner ADMM pairing is not in consensus with primal variable: {primal_str} vs {pair_str}"
+        # Are inner ADMM pairs in consensus?
+        Y_BAR_T = self._Y_bar_t
+        P_BAR_T = self._P_bar_t
+        for t in range(T):
+            primal = Y_BAR_T[t]
+            pair = P_BAR_T[t]
+            primal_str = str(np.round(primal, 4))
+            pair_str = str(np.round(pair, 4))
+            if not in_consensus(primal, pair):
+                print(as_fail(f"Axis {t} --> Inner ADMM pairing is not in consensus with primal variable: {primal_str} vs {pair_str}"))
         
         # Now, check flow conservation ...
         X_EK = self._X_ek
