@@ -6,7 +6,6 @@ import te.traffic_models
 from te import TE_PATH
 from typing import Dict, Type, List, ClassVar, Optional
 from abc import ABC, abstractmethod
-from collections import namedtuple
 from dataclasses import dataclass
 
 
@@ -148,9 +147,12 @@ def traffic_matrix_param(name: str) -> TrafficMatrixParamsBase:
     return wrapper
 
 
-# A Commodity is just a tuple of source, destination and demand.
-# TODO: Make this a `dataclass` for goodness sake ...
-Commodity = namedtuple('Commodity', ['source', 'destination', 'demand'])
+@dataclass(frozen=True)
+class Commodity:
+    """A Commodity is just a tuple of source, destination and demand."""
+    source: int
+    destination: int
+    demand: float
 
 
 def traffic_to_commodity(tm: TrafficMatrixBase) -> List[Commodity]:

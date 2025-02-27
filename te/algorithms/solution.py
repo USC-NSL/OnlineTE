@@ -8,7 +8,7 @@ from typing import Any, Tuple, Optional
 from te.algorithms import SOLUTION_DIR
 from topologies.utils import load_zoo_topology, set_edge_capacity_to
 from te.traffic_models import get_traffic_model, get_traffic_model_params, get_traffic_converter, get_traffic_converter_params
-from te.traffic_models.base import TrafficMatrixBase, TrafficMatrixConverterBase, TrafficMatrixConverterParamsBase
+from te.traffic_models.base import TrafficMatrixBase, TrafficMatrixConverterBase
 from te.algorithms.base import TrafficEngineeringLPSolution
 
 
@@ -82,6 +82,26 @@ class GurobiEdgeBasedMinimizeMaximumUtilitySolution(TrafficEngineeringLPSolution
                 'tm_model_params': get_traffic_model_params(d['tm_model_name'])(**d['tm_model_params'])
             })
             return cls(**d)
+    
+    def get_vars(self) -> Tuple[np.ndarray, float]:
+        with open(self.sol_path) as f:
+            d = json.loads(f.read())['Vars']
+            graph = load_zoo_topology(name=self.topology_name)
+            num_edges = len(graph.edges)
+            num_nodes = len(graph.nodes)
+            num_commodities = num_nodes * (num_nodes - 1)
+            u = None
+            assignments = np.zeros((num_edges, num_commodities))
+            for item in d:
+                name: str = item['VarName']
+                if name.startswith('X'):
+                    indices_str = name.split('X')[-1].replace('[', '').replace(']', '').split(',')
+                    indices = (int(indices_str[0]), int(indices_str[1]))
+                    assignments[indices] = item["X"]
+                else:
+                    assert name == 'U'
+                    u = item['X']
+        return assignments, u
 
     def regenerate(self) -> Tuple[nx.DiGraph, TrafficMatrixBase]:
         graph = load_zoo_topology(name=self.topology_name)
@@ -150,3 +170,13 @@ class EdgeBasedMinimizeMaximumUtilitySolution(TrafficEngineeringLPSolution):
         set_edge_capacity_to(graph=graph, capacity=self.capacity)
         tm = get_traffic_model(self.tm_model_name)(seed=self.seed, params=self.tm_model_params)
         return (graph, tm)
+
+
+if __name__ == '__main__':
+    from te.traffic_models.models import UniformTrafficMatrixParams
+    SEED = 12345
+    TOPOLOGY_NAME = 'Interoute'
+    TM_MODEL = 'Uniform'
+    SOLUTION_NAME = f'{TOPOLOGY_NAME}_{SEED}_{TM_MODEL}.tesol'
+    solution = GurobiEdgeBasedMinimizeMaximumUtilitySolution.load(name=SOLUTION_NAME)
+    assignments, u = solution.get_vars()

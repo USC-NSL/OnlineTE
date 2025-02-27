@@ -5,6 +5,9 @@ TM_DIR = "traffic_models/traffic_matrices"
 """When deciding feasibility, if two values are closer than this, we consider them to be the same"""
 FLOAT_RES = 1e-6
 
+"""This value is the smallest norm a vector can have while not being considered just 0"""
+MINIMUM_NORM = 1e-12
+
 # GUROBI SPECIFIC
 
 # We _ALWAYS_ use Barrier method. It is the only one that is fast enough for very large LPs

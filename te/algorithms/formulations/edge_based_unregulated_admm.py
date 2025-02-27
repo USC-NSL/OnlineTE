@@ -9,10 +9,13 @@ from typing import List, Tuple, Optional
 from dataclasses import dataclass
 from gurobipy import GRB, GurobiError
 from te.algorithms.base import TrafficEngineeringLP, GurobiSolverParams, SolverParams
+from te.algorithms.solution import GurobiEdgeBasedMinimizeMaximumUtilitySolution
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
 from topologies.utils import (get_edge_indexing, get_graph_M_matrix, 
                               get_adjacency_null_space, get_feasible_flow_assignment)
-from te.algorithms.utils import check_capacity_constraint, optimize_or_scream, make_model
+from te.algorithms.utils import (check_capacity_constraint, optimize_or_scream, make_model, 
+                                 get_solution_maximum_utilization, 
+                                 careful_norm, careful_norm_squared)
 
 
 @dataclass
@@ -73,6 +76,7 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
 
         self._model_controller: Optional[gurobipy.Model] = None
         self._objective_controller: Optional[gurobipy.QuadExpr] = None
+        self._target_u: Optional[float] = None
 
         # List of edge capacities
         self._capacities: Optional[np.ndarray] = None
@@ -302,10 +306,7 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         OBJECTIVE_CONTROLLER = gurobipy.QuadExpr()
         OBJECTIVE_CONTROLLER.addTerms(1, UTILITY)
         for e in range(NUM_EDGES):
-            x = XO_E[e]
-            c = R_E[e] - ZO_E[e]
-            OBJECTIVE_CONTROLLER.addTerms(RHO/2, x, x)
-            OBJECTIVE_CONTROLLER.addTerms(RHO * c, x)
+            OBJECTIVE_CONTROLLER += (RHO/2) * (XO_E[e] - ZO_E[e] + R_E[e]) ** 2
         
         MODEL_CONTROLLER.setObjective(OBJECTIVE_CONTROLLER, GRB.MINIMIZE)
         self._objective_controller = OBJECTIVE_CONTROLLER
@@ -322,7 +323,7 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         for i in range(n_iter):
             lambda_k_old = lambda_k
             lambda_k = np.clip(lambda_k - gamma * (nnt @ lambda_k + _c), a_min=0, a_max=None)
-            if (np.linalg.norm(lambda_k - lambda_k_old) / np.sqrt(lambda_k.shape[0])) < thresh:
+            if careful_norm(lambda_k - lambda_k_old) < thresh:
                 break
         y_k = c + n.T @ lambda_k
         return lambda_k, y_k
@@ -330,26 +331,29 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
     @staticmethod
     def do_pgd_with_exact_line_search(lambda_k: np.ndarray, x_k_0: np.ndarray, nnt: np.ndarray, n: np.ndarray, c: np.ndarray, 
                                       thresh: float, n_iter: int) -> Tuple[np.ndarray, np.ndarray]:
-        num_edges, _ = np.shape(n)
-
         big_c = x_k_0 + n @ c
         big_lambda = nnt @ big_c
-        norm_1 = 0.5 * np.linalg.norm(big_c) ** 2
-        norm_2 = np.linalg.norm(n.T @ big_c) ** 2
+        norm_1 = 0.5 * careful_norm_squared(big_c)
+        norm_2 = careful_norm_squared(n.T @ big_c)
 
-        def get_alpha(current_lambda):
-            norm = np.linalg.norm(n.T @ current_lambda) ** 2
+        def get_alpha(current_lambda) -> Optional[float]:
+            norm = careful_norm_squared(n.T @ current_lambda)
             dot = np.dot(current_lambda, big_lambda)
-            return (norm + 1.5 * dot + norm_1) / (norm + norm_2 + 2 * dot)
+            t1 = norm + 1.5 * dot + norm_1
+            t2 = norm + norm_2 + 2 * dot
+            if t1 < te.constants.MINIMUM_NORM or t2 < te.constants.MINIMUM_NORM:
+                return None
+            return t1 / t2
 
         i = 0
-        scale_factor = np.sqrt(num_edges)
         while i < n_iter:
             lambda_k_old = lambda_k
             grad = nnt @ lambda_k + big_c
             alpha = get_alpha(lambda_k_old)
+            if alpha is None:
+                break
             lambda_k = np.clip(lambda_k_old - alpha * grad, a_min=0, a_max=None)
-            if np.linalg.norm(lambda_k - lambda_k_old) / scale_factor < thresh:
+            if careful_norm(lambda_k - lambda_k_old) < thresh:
                 break
             i += 1
         y_k = c + n.T @ lambda_k
@@ -415,12 +419,13 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         P_BAR_T = (NULL_M.T @ F_E + (ETA/RHO) * (U_T + Y_BAR_T)) / (K + (ETA/RHO))
         self._P_bar_t = P_BAR_T
 
-        self._inner_primal_residual_norm = np.linalg.norm((P_BAR_T - Y_BAR_T)) / np.sqrt(T)
-        self._inner_dual_residual_norm = np.linalg.norm(
+        self._inner_primal_residual_norm = careful_norm((P_BAR_T - Y_BAR_T), scaled=True)
+        self._inner_dual_residual_norm = careful_norm(
             (self._Y_tk - self._Y_tk_old) + 
             (P_BAR_T - self._P_bar_t_old)[:, np.newaxis] +
-            (self._Y_bar_t_old - Y_BAR_T)[:, np.newaxis]
-        ) * self._eta_coeff / np.sqrt(T * K)
+            (self._Y_bar_t_old - Y_BAR_T)[:, np.newaxis],
+            scaled=True
+        ) * self._eta_coeff
     
     def _update_u_t(self):
         assert self._model_controller is not None
@@ -459,9 +464,8 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         self._Zo_e_old = np.copy(self._Zo_e)
         self._Xo_e_sol = XO_E_
         self._Zo_e = Zo_e
-        scaling = np.sqrt(NUM_EDGES)
-        self._outer_primal_residual_norm = np.linalg.norm((Zo_e - XO_E_)) / scaling + np.linalg.norm((Zo_e - X_KE_SUM_E)) / scaling
-        self._outer_dual_residual_norm = np.linalg.norm((Zo_e - self._Zo_e_old)) * self._rho_coeff / scaling
+        self._outer_primal_residual_norm = careful_norm((Zo_e - XO_E_), scaled=True) + careful_norm((Zo_e - X_KE_SUM_E), scaled=True)
+        self._outer_dual_residual_norm = careful_norm((Zo_e - self._Zo_e_old), scaled=True) * self._rho_coeff
     
     def _update_rho_coeff(self):
         PARAMS = self._solver_params
@@ -516,15 +520,15 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         LAMBDA_E = np.array([constr.Pi for constr in self._capacity_constraints])
         C_E = self._capacities
 
-        primal_shift = (RHO/2) * (np.linalg.norm(XO_E - Z_HAT)**2 - np.linalg.norm(XO_E - Z_HAT_OLD)**2)
-        dual_shift = -(RHO/2) * (np.linalg.norm(Z_HAT)**2 - np.linalg.norm(Z_HAT_OLD)**2) \
+        primal_shift = (RHO/2) * (careful_norm_squared(XO_E - Z_HAT) - careful_norm_squared(XO_E - Z_HAT_OLD))
+        dual_shift = -(RHO/2) * (careful_norm_squared(Z_HAT) - careful_norm_squared(Z_HAT_OLD)) \
                      -np.dot(np.divide(LAMBDA_E, C_E), (Z_HAT - Z_HAT_OLD))
         return primal_shift, dual_shift
     
     def _get_network_objective(self) -> float:
         Y_TK = self._Y_tk
         C_TK_OLD = self._C_tk_old
-        return (1/2) * np.linalg.norm(Y_TK - C_TK_OLD) ** 2
+        return (1/2) * careful_norm_squared(Y_TK - C_TK_OLD)
     
     def _get_network_objective_shifts(self) -> Tuple[float, float]:
         n = self._NULL_M
@@ -536,20 +540,28 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         C_TK_OLD = self._C_tk_old
 
         # TODO: We need RHO here ... right?
-        primal_shift = (RHO/2) * (np.linalg.norm(Y_TK - C_TK) ** 2 - np.linalg.norm(Y_TK - C_TK_OLD) ** 2)
+        primal_shift = (RHO/2) * (careful_norm_squared(Y_TK - C_TK) - careful_norm_squared(Y_TK - C_TK_OLD))
         dual_shift = -(RHO/2) * np.sum([np.dot(LAMBDA_EK[:, k].T, n @ (C_TK[:, k] - C_TK_OLD[:, k])) for k in range(K)])
         return primal_shift, dual_shift
     
     def _check_objective_gap(self) -> bool:
         BIG_THETA = self._solver_params.BigTheta
-        primal_shift_controller, dual_shift_controller = self._get_controller_objective_shifts()
-        primal_shift_network, dual_shift_network = self._get_network_objective_shifts()
-        primal_objective = self._model_controller.ObjVal + self._get_network_objective()
-        primal_shift = primal_shift_controller + primal_shift_network
-        dual_shift = dual_shift_controller + dual_shift_network
-        relative_gap = (np.abs(primal_shift) + np.abs(dual_shift)) / np.abs(primal_objective + primal_shift)
+        if self._target_u:
+            actual_utilization = get_solution_maximum_utilization(self._X_ek, self.graph)
+            apparent_utulization = self._utility.X
+            actual_gap = np.abs(actual_utilization - self._target_u) / self._target_u
+            apparent_gap = np.abs(apparent_utulization - self._target_u) / self._target_u
+            relative_gap = max(actual_gap, apparent_gap)
+            print(f"Utilization gap: {str(round(max(actual_gap, apparent_gap) * 100, 4))} percent")
+        else:
+            primal_shift_controller, dual_shift_controller = self._get_controller_objective_shifts()
+            primal_shift_network, dual_shift_network = self._get_network_objective_shifts()
+            primal_objective = self._model_controller.ObjVal + self._get_network_objective()
+            primal_shift = primal_shift_controller + primal_shift_network
+            dual_shift = dual_shift_controller + dual_shift_network
+            relative_gap = (np.abs(primal_shift) + np.abs(dual_shift)) / np.abs(primal_objective + primal_shift)
+            print(f"Objective gap: {str(round(relative_gap * 100, 4))} percent")
         self._objective_gap_trace.append(relative_gap)
-        print(f"Objective gap: {str(round(relative_gap * 100, 4))} percent")
         return relative_gap <= BIG_THETA
     
     def close(self):
@@ -588,6 +600,8 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
 
                 # First, let the controller decide what the utilization is
                 optimize_or_scream(MODEL_CONTROLLER)
+                print("Finished controller optimization problem")
+                self._check_objective_gap()
 
                 # Now, do in-network optimization
                 for i in reversed(range(PARAMS.NumberOfNetworkUpdates)):
@@ -703,4 +717,97 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         ]
     
     def update_traffic_matrix(self, tm):
-        pass
+        self._traffic = tm
+        self._commodity_list = traffic_to_commodity(tm)
+        self._set_initial_feasible_solution()
+    
+    @staticmethod
+    def do_pgd_with_exact_line_search_for_optimal_lambda(x_k_0: np.ndarray, nnt: np.ndarray, n: np.ndarray, Y_t: np.ndarray, 
+                                                         thresh: float, n_iter: int) -> np.ndarray:
+        num_edges, _ = np.shape(n)
+
+        lambda_k = np.zeros((num_edges,))
+        big_c = x_k_0 + n @ Y_t
+        big_lambda = nnt @ big_c
+        norm_1 = 0.5 * careful_norm_squared(big_c)
+        norm_2 = careful_norm_squared(n.T @ big_c)
+
+        def get_alpha(current_lambda):
+            norm = careful_norm_squared(n.T @ current_lambda)
+            dot = np.dot(current_lambda, big_lambda)
+            return (norm + 1.5 * dot + norm_1) / (norm + norm_2 + 2 * dot)
+
+        i = 0
+        while i < n_iter:
+            lambda_k_old = lambda_k
+            grad = nnt @ lambda_k + big_c
+            alpha = get_alpha(lambda_k_old)
+            lambda_k = np.clip(lambda_k_old - alpha * grad, a_min=0, a_max=None)
+            if careful_norm(lambda_k - lambda_k_old) < thresh:
+                break
+            i += 1
+        return lambda_k
+
+    def get_optimal_lambda(self):
+        K = len(self._commodity_list)
+        GAMMA = self._solver_params.Gamma
+        assert GAMMA is None
+        PGD_ITERS = self._solver_params.PGDIterations
+        PGD_CONV_TOL = self._solver_params.PGDConvTol
+        NULL_M = self._NULL_M
+        NNT_M = self._NNT_M
+        Y_TK = self._Y_tk
+        X_EK_START = self._X_ek_start
+
+        def pgd_iterator():
+            for k in range(K):
+                yield (X_EK_START[:, k], NNT_M, NULL_M, Y_TK[:, k], PGD_CONV_TOL, PGD_ITERS)
+
+        obj = 0
+        for k, lambda_k in enumerate(self.proc_pool.starmap(self.do_pgd_with_exact_line_search_for_optimal_lambda, pgd_iterator())):
+            self._lambda_ek[:, k] = lambda_k
+            obj += (0.5 * careful_norm_squared(NULL_M.T @ lambda_k) + np.dot(lambda_k, X_EK_START[:, k] + NULL_M @ Y_TK[:, k]))
+    
+    def initialize_to(self, solution: GurobiEdgeBasedMinimizeMaximumUtilitySolution):
+        T = self._T
+        NULL_M = self._NULL_M
+        assignments, u = solution.get_vars()
+        print(f"Target Utilization: {u}")
+        Xo_e = np.sum(assignments, axis=1)
+        # Both just vectors of length `n`
+        assert self._Xo_e is not None
+        self._model_controller.update()
+        self._Zo_e = np.copy(Xo_e)
+        self._Zo_e_old = np.copy(Xo_e)
+        self._Xo_e_sol = np.copy(Xo_e)
+        self._X_ek = assignments
+        self._Y_tk = NULL_M.T @ (self._X_ek - self._X_ek_start)
+        self._Y_bar_t = np.average(self._Y_tk, axis=1)
+        self._P_bar_t = np.copy(self._Y_bar_t)
+        self._Y_bar_t_old = np.copy(self._Y_bar_t)
+        self._P_bar_t_old = np.copy(self._Y_bar_t)
+        self._C_tk_old = np.copy(self._Y_tk)
+        self.get_optimal_lambda()
+        self._r_e = np.zeros_like(Xo_e)
+        self._r_e_old = np.zeros_like(Xo_e)
+        self._u_t = np.zeros(shape=(T,))
+
+        # Now, optimize the controller model
+        self._target_u = u
+        self._update_controller_objective()
+        optimize_or_scream(self._model_controller)
+        print("Finished warm start optimization problem")
+        self._check_objective_gap()
+
+        self._rho_coeff = 1
+        self._rho_coeff_trace = []
+        self._eta_coeff = 1
+        self._eta_coeff_trace = []
+        
+        self._objective_trace = []
+        self._objective_gap_trace = []
+    
+    def set_target(self, solution: GurobiEdgeBasedMinimizeMaximumUtilitySolution):
+        _, u = solution.get_vars()
+        self._target_u = u
+

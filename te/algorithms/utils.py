@@ -87,6 +87,8 @@ def get_solution_confusion_matrix(lp: TrafficEngineeringLP, feasibility_tol: Opt
     def is_satisfied(optim, actual):
         if feasibility_tol is not None:
             return abs(optim - actual) < feasibility_tol
+        if optim < te.constants.FLOAT_RES:
+            return abs(actual) < te.constants.FLOAT_RES
         return abs((optim - actual) / optim) < feasibility_ratio
 
     def make_fig(_cm: np.ndarray, _lp: TrafficEngineeringLP) -> Figure:
@@ -416,3 +418,23 @@ def half_space_proj(x_0: float, a: np.ndarray, x: np.ndarray, feasibility_tol: f
     if d >= -feasibility_tol:
         return x, True
     return x - (d / np.linalg.norm(a)**2) * a, False
+
+
+all_elements_within_threshold = lambda x, thresh: np.all(np.abs(x) < thresh)
+
+
+def careful_norm(x: np.ndarray, scaled: bool = False) -> float:
+    if scaled:
+        scale_factor = np.sqrt(x.size)
+        if all_elements_within_threshold(x, te.constants.MINIMUM_NORM / scale_factor):
+            return 0
+        return np.linalg.norm(x) / scale_factor
+    if all_elements_within_threshold(x, te.constants.MINIMUM_NORM):
+        return 0
+    return np.linalg.norm(x)
+
+
+def careful_norm_squared(x: np.ndarray) -> float:
+    if all_elements_within_threshold(x, te.constants.MINIMUM_NORM):
+        return 0
+    return np.dot(x, x)
