@@ -9,6 +9,7 @@ from topologies import (
     TOPOLOGY_ZOO_INDEX_FILE_NAME
 )
 from te.traffic_models.base import TrafficMatrixBase, Commodity
+from te.traffic_models.models import UniformTrafficMatrix, UniformTrafficMatrixParams
 
 
 TOPOLGOY_ZOO_PATH = os.path.join(TOPOLOGIES_PATH, TOPOLOGY_ZOO_DIR_NAME)
@@ -237,6 +238,39 @@ def make_graph_from_dict(graph_n: int, graph_dict: Dict[Tuple[int, int], float])
         dict_of_dicts[src][dst]['capacity'] = v
     
     return nx.Graph(dict_of_dicts).to_directed()
+
+
+def load_zoo_topology_with_capacity_heuristic(name: str, tm: TrafficMatrixBase, scale_factor: float = 10) -> Tuple[float, nx.DiGraph]:
+    """
+    Load a topology from the zoo and assign a single capacity value to each edge.
+    The capacity is chosen heuristically. Its value is set to be `scale_factor * c`,
+    where `c` is the return value of `get_capacity_lower_bound`.
+    """
+    
+    graph = load_zoo_topology(name)
+    c_min = get_capacity_lower_bound(graph, tm)
+    c = c_min * scale_factor
+    set_edge_capacity_to(graph, c)
+    
+    return c, graph
+
+
+def get_uniform_tm_problem_with_capacity_heuristic(
+        topo_name: str, tm_seed: int, scale_factor: float = 10
+    ) -> Tuple[float, nx.DiGraph, TrafficMatrixBase]:
+    """
+    Given a topology name, create the input for a TE problem.
+    Returns an heuristically assigned capacity value, a graph and a uniform traffic matrix.
+    """
+    
+    graph = load_zoo_topology(topo_name)
+    tm_params = UniformTrafficMatrixParams(n = len(graph.nodes), min = 0.0, max = 1.0)
+    tm = UniformTrafficMatrix(seed=tm_seed, params=tm_params)
+    c_min = get_capacity_lower_bound(graph, tm)
+    c = c_min * scale_factor
+    set_edge_capacity_to(graph, c)
+    
+    return c, graph, tm
 
 
 def get_graph_M_matrix(graph: nx.DiGraph) -> np.ndarray:

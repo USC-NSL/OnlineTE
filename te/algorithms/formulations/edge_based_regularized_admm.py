@@ -35,6 +35,7 @@ class RegularizedADMMSolverParams(GurobiSolverParams):
     :param `TauDecrease`: Multiplicative step size decrease factor
     :param `BigTheta`: Loose error bound for the whole solution
     :param `BigGamma`: Tight error bound for controller solution
+    :param `Alpha`: Over-relaxation parameter
     :param `NumWorkers`: Number of worker nodes to partition commodities on to
     :param `Seed`: RNG seed
     """
@@ -52,6 +53,7 @@ class RegularizedADMMSolverParams(GurobiSolverParams):
     TauDecrease: float = te.constants.DEFAULT_TAU_DEC 
     BigTheta: float = te.constants.DEFAULT_BIG_THETA
     BigGamma: float = te.constants.DEFAULT_BIG_GAMMA
+    Alpha: float = 1
     NumWorkers: int = 1
     Seed: int = te.constants.DEFAULT_SEED
 
@@ -416,10 +418,11 @@ class RegularizedADMMLP(TrafficEngineeringLP):
         """
         The update rule for `P_bar` is:
 
-            P_bar \gets (Z_o + r + (\eta/\rho) (u + Y_bar)) / (K + (\eta/\rho))
+            P_bar \gets (Z_o + r + alpha * (\eta/\rho) (u + alpha * Y_bar)) / (K + alpha^2 * (\eta/\rho))
         """
 
         K = len(self._commodity_list)
+        ALPHA = self._solver_params.Alpha
         ETA = self._solver_params.Eta * self._eta_coeff
         RHO = self._solver_params.Rho * self._rho_coeff
         U_T = self._u_t
@@ -427,7 +430,7 @@ class RegularizedADMMLP(TrafficEngineeringLP):
         ZO_T = self._Zo_t
         R_T = self._r_t
         self._P_bar_t_old = np.copy(self._P_bar_t)
-        P_BAR_T = (ZO_T + R_T + (ETA/RHO) * (U_T + Y_BAR_T)) / (K + (ETA/RHO))
+        P_BAR_T = (ZO_T + R_T + ALPHA * (ETA/RHO) * (U_T + ALPHA * Y_BAR_T)) / (K + ALPHA**2 * (ETA/RHO))
         self._P_bar_t = P_BAR_T
 
         # TODO: These look really shifty ...
@@ -445,14 +448,15 @@ class RegularizedADMMLP(TrafficEngineeringLP):
         """
         The update rule for `u` is:
 
-            u \gets (u + Y_bar - P_bar)
+            u \gets u + alpha * (Y_bar - P_bar)
         """
 
         U_T = self._u_t
         Y_BAR_T = self._Y_bar_t
         P_BAR_T = self._P_bar_t
+        ALPHA = self._solver_params.Alpha
 
-        self._u_t = (U_T + Y_BAR_T - P_BAR_T)
+        self._u_t = U_T + ALPHA * (Y_BAR_T - P_BAR_T)
 
     def _update_Zo_t(self):
         assert self._model_controller is not None
@@ -479,15 +483,16 @@ class RegularizedADMMLP(TrafficEngineeringLP):
 
         """
         The update rule for r_e is:
-            r_t \gets r_t + (Y_ot - \sum_k Y_tk)/2
+            r_t \gets r_t + alpha * (Y_ot - \sum_k Y_tk)/2
         """
 
         T = self._T
         YO_T = self._Yo_t
         YO_T_ = np.array([YO_T[t].X for t in range(T)])
         Y_TK_SUM_T = np.sum(self._Y_tk, axis=1)
+        ALPHA = self._solver_params.Alpha
 
-        R_T = self._r_t + (YO_T_ - Y_TK_SUM_T) / 2
+        R_T = self._r_t + ALPHA * (YO_T_ - Y_TK_SUM_T) / 2
         self._r_t_old = np.copy(self._r_t)
         self._r_t = R_T
 

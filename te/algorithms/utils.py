@@ -1,13 +1,14 @@
 import gurobipy
+import contextlib
 import numpy as np
 import seaborn as sns
 import networkx as nx
 import te.constants
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
-from typing import List, Tuple, Dict, Union, Optional
+from typing import List, Tuple, Dict, Union, Optional, Type
 from collections import defaultdict
-from te.traffic_models.base import Commodity
+from te.traffic_models.base import Commodity, TrafficMatrixBase
 from te.algorithms.base import TrafficEngineeringLP, SolverParams, GurobiSolverParams
 
 
@@ -438,3 +439,16 @@ def careful_norm_squared(x: np.ndarray) -> float:
     if all_elements_within_threshold(x, te.constants.MINIMUM_NORM):
         return 0
     return np.dot(x, x)
+
+
+def test_mlu(lp_cls: Type[TrafficEngineeringLP], graph: nx.DiGraph, tm: TrafficMatrixBase, solver_params: SolverParams,
+             feasibility_tol: float = None, feasibility_ratio: float = None, **kwargs):
+    with contextlib.closing(lp_cls(graph, tm, solver_params)) as lp:
+        lp.make_lp()
+        t = lp.solve()
+        if t > 0:
+            lp.check(feasibility_tol=feasibility_tol, feasibility_ratio=feasibility_ratio)
+            get_solution_confusion_matrix(lp, feasibility_tol=feasibility_tol, feasibility_ratio=feasibility_ratio, **kwargs)
+            print(as_info(f"Solved in {str(round(t, 2))} seconds"))
+            print(as_info(f"Final objective value: {str(round(lp.objective_value, 4))}"))
+            print(as_info(f"Actual utilization: {str(round(get_solution_maximum_utilization(lp.assignments, lp.graph), 4))}"))

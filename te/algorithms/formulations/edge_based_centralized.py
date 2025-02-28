@@ -1,9 +1,10 @@
+import tqdm
 import gurobipy
 import numpy as np
 import networkx as nx
 from typing import List, Tuple, Optional
 from collections import defaultdict
-from gurobipy import GRB, GurobiError, quicksum
+from gurobipy import GRB, GurobiError
 from te.algorithms.base import TrafficEngineeringLP, SolverParams, GurobiSolverParams
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
 from topologies.utils import get_edge_indexing
@@ -27,6 +28,8 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
         self._demand_constraints: List[Tuple[gurobipy.Constr, gurobipy.Constr]] = None
         self._capacity_constraints: gurobipy.tupledict = None
         self._X_ek: np.ndarray = None
+        
+        self._report_problem_size()
     
     @property
     def graph(self) -> nx.DiGraph:
@@ -58,6 +61,14 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
         assert self._X_ek is not None
         return self._X_ek
 
+    def _report_problem_size(self):
+        M = len(self._graph.nodes)
+        N = len(self._graph.edges)
+        K = len(self._commodity_list)
+
+        print(f"Graph Size: {M} nodes | {N} edges")
+        print(f"Number of commodities: {K}")
+
     def initialize_to(self, solution: GurobiEdgeBasedMinimizeMaximumUtilitySolution):
         assert self._model is not None and self._flows is not None
         solution.initiate_model(self._model)
@@ -86,7 +97,6 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
         N = len(self._graph.edges)
         
         ENV = gurobipy.Env()
-        # ENV.setParam('OutputFlag', 0)
         ENV.start()
         self._env = ENV
         MODEL = make_model(name='EdgeBasedTE', params=self._solver_params, env=ENV)
@@ -100,6 +110,8 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
     def _add_constraints(self):
         assert self._model is not None and self._flows is not None
 
+        K = len(self._commodity_list)
+        NUM_EDGES = self._graph.number_of_edges()
         MODEL = self._model
         GRAPH = self._graph
         FLOWS = self._flows
@@ -107,11 +119,17 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
         COMMODITIES = self._commodity_list
 
         # Capacity constraint
-        self._capacity_constraints = MODEL.addConstrs(
-            FLOWS.sum(e, '*') / c_e <= UTILITY \
-                for e, (_, _, c_e) in \
-                    enumerate(GRAPH.edges.data('capacity'))
-        )
+        print("Adding capacity constraints")
+        capacity_constraints: List[gurobipy.Constr] = []
+        pbar = tqdm.tqdm(total=NUM_EDGES)
+        for e, (_, _, c_e) in enumerate(GRAPH.edges.data('capacity')):
+            scaled_total_flow = gurobipy.LinExpr()
+            for k in range(K):
+                scaled_total_flow.addTerms(1/c_e, FLOWS[e, k])
+            capacity_constraints.append(MODEL.addConstr(scaled_total_flow <= UTILITY))
+            pbar.update()
+        pbar.close()
+        self._capacity_constraints = capacity_constraints
 
         """
         We use the expanded version of the constraint `MX_k = b_k.d_k`, which needs
@@ -137,17 +155,18 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
         """
 
         demand_constraints = []
-
+        print("Adding demand/flow-conservation constraints")
+        pbar = tqdm.tqdm(total=K)
         for k, commodity in enumerate(COMMODITIES):
             SOURCE = commodity.source
             DESTINATION = commodity.destination
             DEMAND = commodity.demand
 
-            flow_out = defaultdict(list)
-            flow_in = defaultdict(list)
+            flow_out = defaultdict(gurobipy.LinExpr)
+            flow_in = defaultdict(gurobipy.LinExpr)
             for e, edge in enumerate(GRAPH.edges()):
-                flow_out[edge[0]].append(FLOWS[e, k])
-                flow_in[edge[1]].append(FLOWS[e, k])
+                flow_out[edge[0]].addTerms(1, FLOWS[e, k])
+                flow_in[edge[1]].addTerms(1, FLOWS[e, k])
             
             source_constraint = None
             destination_constraint = None
@@ -155,19 +174,19 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
             for v in GRAPH.nodes():
                 if v == SOURCE:
                     # Demand constraint from source
-                    source_constraint = MODEL.addConstr(quicksum(flow_out[v]) == DEMAND)
-                    MODEL.addConstr(quicksum(flow_in[v]) == 0)
+                    source_constraint = MODEL.addConstr(flow_out[v] == DEMAND)
+                    MODEL.addConstr(flow_in[v] == 0)
                 elif v == DESTINATION:
                     # Demand constraint in destination
-                    destination_constraint = MODEL.addConstr(quicksum(flow_in[v]) == DEMAND)
-                    MODEL.addConstr(quicksum(flow_out[v]) == 0)
+                    destination_constraint = MODEL.addConstr(flow_in[v] == DEMAND)
+                    MODEL.addConstr(flow_out[v] == 0)
                 else:
                     # Flow conservation in transit
-                    MODEL.addConstr(quicksum(flow_out[v]) == quicksum(flow_in[v]))
+                    MODEL.addConstr(flow_out[v] == flow_in[v])
             
             assert source_constraint is not None and destination_constraint is not None
-
             demand_constraints.append((source_constraint, destination_constraint))
+            pbar.update()
         self._demand_constraints = demand_constraints
 
     def _add_objective(self):

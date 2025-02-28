@@ -35,6 +35,7 @@ class UnregulatedADMMSolverParams(GurobiSolverParams):
     :param `TauDecrease`: Multiplicative step size decrease factor
     :param `BigTheta`: Loose error bound for the whole solution
     :param `BigGamma`: Tight error bound for controller solution
+    :param `Alpha`: Over-relaxation parameter
     :param `NumWorkers`: Number of worker nodes to partition commodities on to
     :param `Seed`: RNG seed
     """
@@ -51,6 +52,7 @@ class UnregulatedADMMSolverParams(GurobiSolverParams):
     TauDecrease: float = te.constants.DEFAULT_TAU_DEC 
     BigTheta: float = te.constants.DEFAULT_BIG_THETA
     BigGamma: float = te.constants.DEFAULT_BIG_GAMMA
+    Alpha: float = 1
     NumWorkers: int = 1
     Seed: int = te.constants.DEFAULT_SEED
 
@@ -404,11 +406,11 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         """
         The update rule for `P_bar` is:
 
-            P_bar \gets (NULL_M^T F + (\eta/\rho) (u + Y_bar)) / (K + (\eta/\rho))
+            P_bar \gets (NULL_M^T F + alpha * (\eta/\rho) (u + alpha * Y_bar)) / (K + alpha^2 * (\eta/\rho))
         """
 
-        T = self._T
         K = len(self._commodity_list)
+        ALPHA = self._solver_params.Alpha
         ETA = self._solver_params.Eta * self._eta_coeff
         RHO = self._solver_params.Rho * self._rho_coeff
         U_T = self._u_t
@@ -416,7 +418,7 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         F_E = self._get_F()
         NULL_M = self._NULL_M
         self._P_bar_t_old = np.copy(self._P_bar_t)
-        P_BAR_T = (NULL_M.T @ F_E + (ETA/RHO) * (U_T + Y_BAR_T)) / (K + (ETA/RHO))
+        P_BAR_T = (NULL_M.T @ F_E + ALPHA * (ETA/RHO) * (U_T + ALPHA * Y_BAR_T)) / (K + ALPHA**2 * (ETA/RHO))
         self._P_bar_t = P_BAR_T
 
         self._inner_primal_residual_norm = careful_norm((P_BAR_T - Y_BAR_T), scaled=True)
@@ -433,14 +435,15 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         """
         The update rule for `u` is:
 
-            u \gets (u + Y_bar - P_bar)
+            u \gets u + alpha * (Y_bar - P_bar)
         """
 
         U_T = self._u_t
         Y_BAR_T = self._Y_bar_t
         P_BAR_T = self._P_bar_t
+        ALPHA = self._solver_params.Alpha
 
-        self._u_t = (U_T + Y_BAR_T - P_BAR_T)
+        self._u_t = U_T + ALPHA * (Y_BAR_T - P_BAR_T)
     
     def _reconvene_network_updates(self):
         self._update_Y_bar()
@@ -498,17 +501,18 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
 
         """
         The update rule for r_e is:
-            r_e \gets r_e + (X_oe - \sum_k X_ke)/2
+            r_e \gets r_e + alpha(X_oe - \sum_k X_ke)/2
         """
 
         R_E = self._r_e
         XO_E = self._Xo_e
         NUM_EDGES = self._NUM_EDGES
         X_KE_SUM_E = self._get_X_k_sum()
+        ALPHA = self._solver_params.Alpha
 
         r_e = np.zeros((NUM_EDGES,))
         for e in range(NUM_EDGES):
-            r_e[e] = R_E[e] + (XO_E[e].X - X_KE_SUM_E[e]) / 2
+            r_e[e] = R_E[e] + ALPHA * (XO_E[e].X - X_KE_SUM_E[e]) / 2
         self._r_e_old = np.copy(self._r_e)
         self._r_e = r_e
     
