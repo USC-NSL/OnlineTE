@@ -40,14 +40,14 @@ def regularized_admm_test(topology: str, seed: int, **kwargs):
         PGDIterations=25,
         Gamma=None,
         Epsilon=0,
-        Eta=1e-3,
-        Rho=1e-3,
+        Eta=1e-4,
+        Rho=1e-4,
         NumWorkers=8,
         UseVariableRho=True,
         BigTheta=1e-6,
         BigGamma=1e-7
     )
-    test_mlu(RegularizedADMMSolverParams, graph, tm, solver_params, feasibility_tol=FEASIBILITY_TOL, 
+    test_mlu(RegularizedADMMLP, graph, tm, solver_params, feasibility_tol=FEASIBILITY_TOL, 
              feasibility_ratio=FEASIBILITY_RATIO, **kwargs)
 
 
@@ -69,13 +69,13 @@ def unregulated_admm_test(topology: str, seed: int, **kwargs):
         BigTheta=1e-6,
         BigGamma=1e-7
     )
-    test_mlu(UnregulatedADMMSolverParams, graph, tm, solver_params, feasibility_tol=FEASIBILITY_TOL, 
+    test_mlu(UnregulatedADMMLP, graph, tm, solver_params, feasibility_tol=FEASIBILITY_TOL, 
              feasibility_ratio=FEASIBILITY_RATIO, **kwargs)
 
 
 if __name__ == '__main__':
-    centralized_test(SMALL_MEDIUM_TOPOLOGY, RNG_SEED)
+    # centralized_test(SMALL_MEDIUM_TOPOLOGY, RNG_SEED)
     # centralized_test(MEDIUM_TOPOLOGY, RNG_SEED)
     # centralized_test(HUGE_TOPOLOGY, RNG_SEED)
-    # regularized_admm_test()
+    regularized_admm_test(HUGE_TOPOLOGY, RNG_SEED)
     # unregulated_admm_test()
