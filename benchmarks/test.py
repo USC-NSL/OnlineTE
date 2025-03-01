@@ -54,16 +54,17 @@ def regularized_admm_test(topology: str, seed: int, **kwargs):
 def unregulated_admm_test(topology: str, seed: int, **kwargs):
     c, graph, tm = get_uniform_tm_problem_with_capacity_heuristic(topology, seed)
     print(f"Network link capacity is: {str(round(c, 2))}")
+    n = graph.number_of_nodes()
 
     solver_params = UnregulatedADMMSolverParams(
         NumberOfEpochs=200,
         NumberOfNetworkUpdates=2,
         PGDIterations=25,
         Gamma=None,
-        # Eta=10/(n**2),
-        # Rho=10/(n**2),
-        Eta=1e-1,
-        Rho=1e-1,
+        Eta=10/(n**2),
+        Rho=10/(n**2),
+        # Eta=1e-1,
+        # Rho=1e-1,
         NumWorkers=8,
         UseVariableRho=True,
         BigTheta=1e-6,
@@ -77,5 +78,6 @@ if __name__ == '__main__':
     # centralized_test(SMALL_MEDIUM_TOPOLOGY, RNG_SEED)
     # centralized_test(MEDIUM_TOPOLOGY, RNG_SEED)
     # centralized_test(HUGE_TOPOLOGY, RNG_SEED)
-    regularized_admm_test(HUGE_TOPOLOGY, RNG_SEED)
-    # unregulated_admm_test()
+    # regularized_admm_test(HUGE_TOPOLOGY, RNG_SEED)
+    # unregulated_admm_test(SMALL_TOPOLOGY, RNG_SEED)
+    unregulated_admm_test(SMALL_MEDIUM_TOPOLOGY, RNG_SEED)

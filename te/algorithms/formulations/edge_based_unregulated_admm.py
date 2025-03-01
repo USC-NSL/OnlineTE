@@ -4,10 +4,11 @@ import gurobipy
 import numpy as np
 import networkx as nx
 import te.constants
-from multiprocessing import Pool
+from multiprocessing import get_context
 from typing import List, Tuple, Optional
 from dataclasses import dataclass
 from gurobipy import GRB, GurobiError
+from utils.get_pypy import get_pypy_interpreter_path
 from te.algorithms.base import TrafficEngineeringLP, GurobiSolverParams, SolverParams
 from te.algorithms.solution import GurobiEdgeBasedMinimizeMaximumUtilitySolution
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
@@ -15,7 +16,7 @@ from topologies.utils import (get_edge_indexing, get_graph_M_matrix,
                               get_adjacency_null_space, get_feasible_flow_assignment)
 from te.algorithms.utils import (check_capacity_constraint, optimize_or_scream, make_model, 
                                  get_solution_maximum_utilization, as_fail,
-                                 careful_norm, careful_norm_squared)
+                                 careful_norm, careful_norm_squared, all_elements_within_threshold)
 
 
 @dataclass
@@ -110,7 +111,9 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         # For PGD, an `N x K` matrix
         self._lambda_ek: Optional[np.ndarray] = None
 
-        self.proc_pool = Pool(processes=self._solver_params.NumWorkers)
+        self._proc_context = get_context('spawn')
+        # self._proc_context.set_executable(get_pypy_interpreter_path())
+        self.proc_pool = self._proc_context.Pool(processes=self._solver_params.NumWorkers)
 
         # Dual vairable of outer ADMM. A vector of length `n`.
         self._r_e: Optional[np.ndarray] = None
@@ -330,36 +333,65 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         y_k = c + n.T @ lambda_k
         return lambda_k, y_k
 
-    @staticmethod
-    def do_pgd_with_exact_line_search(lambda_k: np.ndarray, x_k_0: np.ndarray, nnt: np.ndarray, n: np.ndarray, c: np.ndarray, 
-                                      thresh: float, n_iter: int) -> Tuple[np.ndarray, np.ndarray]:
-        big_c = x_k_0 + n @ c
-        big_lambda = nnt @ big_c
-        norm_1 = 0.5 * careful_norm_squared(big_c)
-        norm_2 = careful_norm_squared(n.T @ big_c)
+    # @staticmethod
+    # def do_pgd_with_exact_line_search(lambda_k: np.ndarray, x_k_0: np.ndarray, nnt: np.ndarray, n: np.ndarray, c: np.ndarray, 
+    #                                   thresh: float, n_iter: int) -> Tuple[np.ndarray, np.ndarray]:
+    #     big_c = x_k_0 + n @ c
+    #     big_lambda = nnt @ big_c
+    #     norm_1 = 0.5 * careful_norm_squared(big_c)
+    #     norm_2 = careful_norm_squared(n.T @ big_c)
 
-        def get_alpha(current_lambda) -> Optional[float]:
-            norm = careful_norm_squared(n.T @ current_lambda)
-            dot = np.dot(current_lambda, big_lambda)
+    #     def get_alpha(current_lambda) -> Optional[float]:
+    #         norm = careful_norm_squared(n.T @ current_lambda)
+    #         dot = np.dot(current_lambda, big_lambda)
+    #         t1 = norm + 1.5 * dot + norm_1
+    #         t2 = norm + norm_2 + 2 * dot
+    #         if t1 < te.constants.MINIMUM_NORM or t2 < te.constants.MINIMUM_NORM:
+    #             return None
+    #         return t1 / t2
+
+    #     i = 0
+    #     while i < n_iter:
+    #         lambda_k_old = lambda_k
+    #         grad = nnt @ lambda_k + big_c
+    #         alpha = get_alpha(lambda_k_old)
+    #         if alpha is None:
+    #             break
+    #         lambda_k = np.clip(lambda_k_old - alpha * grad, a_min=0, a_max=None)
+    #         if careful_norm(lambda_k - lambda_k_old) < thresh:
+    #             break
+    #         i += 1
+    #     y_k = c + n.T @ lambda_k
+    #     return lambda_k, y_k
+    @staticmethod
+    def do_block_pgd_with_exact_line_search(lambda_block: np.ndarray, x_block_0: np.ndarray, nnt: np.ndarray, 
+                                            n: np.ndarray, c_block: np.ndarray, thresh: float, n_iter: int) -> Tuple[np.ndarray, np.ndarray]:
+        big_c_block = x_block_0 + n @ c_block
+        nnt_big_c_block = nnt @ big_c_block
+        norm_1 = 0.5 * careful_norm_squared(big_c_block, axis=0)
+        norm_2 = careful_norm_squared(n.T @ big_c_block, axis=0)
+
+        def get_alpha_block(current_lambda_block) -> np.ndarray:
+            norm = careful_norm_squared(n.T @ current_lambda_block, axis=0)
+            dot = np.diagonal(current_lambda_block.T @ nnt_big_c_block)
             t1 = norm + 1.5 * dot + norm_1
             t2 = norm + norm_2 + 2 * dot
-            if t1 < te.constants.MINIMUM_NORM or t2 < te.constants.MINIMUM_NORM:
-                return None
+            if all_elements_within_threshold(t1, te.constants.MINIMUM_NORM) or \
+               all_elements_within_threshold(t2, te.constants.MINIMUM_NORM):
+                return np.zeros_like(t1)
             return t1 / t2
 
         i = 0
         while i < n_iter:
-            lambda_k_old = lambda_k
-            grad = nnt @ lambda_k + big_c
-            alpha = get_alpha(lambda_k_old)
-            if alpha is None:
-                break
-            lambda_k = np.clip(lambda_k_old - alpha * grad, a_min=0, a_max=None)
-            if careful_norm(lambda_k - lambda_k_old) < thresh:
+            lambda_block_old = np.copy(lambda_block)
+            grad_block = nnt @ lambda_block + big_c_block
+            alpha_block = get_alpha_block(lambda_block_old)
+            lambda_block = np.clip(lambda_block_old - alpha_block * grad_block, a_min=0, a_max=None)
+            if careful_norm(lambda_block - lambda_block_old) < thresh:
                 break
             i += 1
-        y_k = c + n.T @ lambda_k
-        return lambda_k, y_k
+        y_block = c_block + n.T @ lambda_block
+        return lambda_block, y_block
     
     def _get_current_C(self) -> np.ndarray:
         Y_TK = self._Y_tk
@@ -368,30 +400,59 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         U_T = self._u_t
         return Y_TK - np.expand_dims(Y_BAR - P_BAR + U_T, axis=1)
     
-    def _do_network_update(self) -> float:
-        K = len(self._commodity_list)
+    # def _do_network_update(self) -> float:
+    #     K = len(self._commodity_list)
+    #     GAMMA = self._solver_params.Gamma
+    #     PGD_ITERS = self._solver_params.PGDIterations
+    #     PGD_CONV_TOL = self._solver_params.PGDConvTol
+    #     NULL_M = self._NULL_M
+    #     NNT_M = self._NNT_M
+    #     X_EK_START = self._X_ek_start
+    #     LAMBDA_EK = self._lambda_ek
+    #     C_TK = self._get_current_C()
+    #     do_pgd = self.do_plain_pgd if GAMMA is not None else self.do_pgd_with_exact_line_search
+
+    #     def pgd_iterator():
+    #         for k in range(K):
+    #             if GAMMA is not None:
+    #                 yield (LAMBDA_EK[:, k], X_EK_START[:, k], NNT_M, NULL_M, C_TK[:, k], GAMMA, PGD_CONV_TOL, PGD_ITERS)
+    #             else:
+    #                 yield (LAMBDA_EK[:, k], X_EK_START[:, k], NNT_M, NULL_M, C_TK[:, k], PGD_CONV_TOL, PGD_ITERS)
+
+    #     t_start = time.time()
+    #     for k, item in enumerate(self.proc_pool.starmap(do_pgd, pgd_iterator())):
+    #         lambda_k, y_k = item
+    #         self._lambda_ek[:, k] = lambda_k
+    #         self._Y_tk[:, k] = y_k
+    #     self._C_tk_old = C_TK
+    #     return time.time() - t_start
+    def _do_block_network_update(self) -> float:
         GAMMA = self._solver_params.Gamma
         PGD_ITERS = self._solver_params.PGDIterations
         PGD_CONV_TOL = self._solver_params.PGDConvTol
+        NUM_BLOCKS = self._solver_params.NumWorkers
         NULL_M = self._NULL_M
         NNT_M = self._NNT_M
-        X_EK_START = self._X_ek_start
-        LAMBDA_EK = self._lambda_ek
+        X_EK_START_BLOCKS = np.array_split(self._X_ek_start, NUM_BLOCKS, axis=1)
+        LAMBDA_EK_BLOCKS = np.array_split(self._lambda_ek, NUM_BLOCKS, axis=1)
         C_TK = self._get_current_C()
-        do_pgd = self.do_plain_pgd if GAMMA is not None else self.do_pgd_with_exact_line_search
+        C_TK_BLOCKS = np.array_split(C_TK, NUM_BLOCKS, axis=1)
+        assert GAMMA is None
+        do_pgd = self.do_block_pgd_with_exact_line_search
 
         def pgd_iterator():
-            for k in range(K):
-                if GAMMA is not None:
-                    yield (LAMBDA_EK[:, k], X_EK_START[:, k], NNT_M, NULL_M, C_TK[:, k], GAMMA, PGD_CONV_TOL, PGD_ITERS)
-                else:
-                    yield (LAMBDA_EK[:, k], X_EK_START[:, k], NNT_M, NULL_M, C_TK[:, k], PGD_CONV_TOL, PGD_ITERS)
+            for i in range(NUM_BLOCKS):
+                yield (LAMBDA_EK_BLOCKS[i], X_EK_START_BLOCKS[i], NNT_M, NULL_M, C_TK_BLOCKS[i], PGD_CONV_TOL, PGD_ITERS)
 
         t_start = time.time()
-        for k, item in enumerate(self.proc_pool.starmap(do_pgd, pgd_iterator())):
-            lambda_k, y_k = item
-            self._lambda_ek[:, k] = lambda_k
-            self._Y_tk[:, k] = y_k
+        lambda_holder: List[np.ndarray] = []
+        Y_holder: List[np.ndarray] = []
+        for item in self.proc_pool.starmap(do_pgd, pgd_iterator()):
+            lambda_block, y_block = item
+            lambda_holder.append(lambda_block)
+            Y_holder.append(y_block)
+        self._lambda_ek = np.hstack(lambda_holder)
+        self._Y_tk = np.hstack(Y_holder)
         self._C_tk_old = C_TK
         return time.time() - t_start
     
@@ -599,6 +660,8 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         max_iters = PARAMS.NumberOfEpochs
         try:
             for _ in tqdm.tqdm(range(PARAMS.NumberOfEpochs)):
+                if ((max_iters is not None) and (epoch == max_iters)):
+                    break
             # while True:
                 t_network = 0
 
@@ -608,7 +671,7 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
 
                 # Now, do in-network optimization
                 for i in reversed(range(PARAMS.NumberOfNetworkUpdates)):
-                    t_network += self._do_network_update()
+                    t_network += self._do_block_network_update()
                     """
                     Defer the update for the last iteration.
                     This final update is moot, since the controller has to
@@ -641,8 +704,6 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
                 # if ((epoch > 0) and (self._check_objective_gap())):
                 #     break
                 epoch += 1
-                if ((max_iters is not None) and (epoch == max_iters)):
-                    break
             return total_runtime
         except GurobiError as e:
             print(f'Error code {e.errno}: {e}')
