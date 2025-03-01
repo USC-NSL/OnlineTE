@@ -463,6 +463,10 @@ class DistributedParallelEdgeBasedLP(TrafficEngineeringLP):
         self._out_edge_mapping: Dict[Tuple[int, int], Tuple[int, int]] = get_node_and_out_edge_index_mapping(graph)
 
     @property
+    def alg_name(self) -> str:
+        return '(DEFUNCT) Multi-Process Method of Multipliers'
+
+    @property
     def graph(self) -> nx.DiGraph:
         return self._graph
     

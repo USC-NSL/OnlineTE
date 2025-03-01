@@ -14,7 +14,7 @@ from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Comm
 from topologies.utils import (get_edge_indexing, get_graph_M_matrix, 
                               get_adjacency_null_space, get_feasible_flow_assignment)
 from te.algorithms.utils import (check_capacity_constraint, optimize_or_scream, make_model, 
-                                 get_solution_maximum_utilization, as_fail,
+                                 get_solution_maximum_utilization, as_fail, as_info,
                                  careful_norm, careful_norm_squared, dykstra_proj)
 
 
@@ -135,6 +135,10 @@ class RegularizedADMMLP(TrafficEngineeringLP):
         self._set_NULL_M()
         self._initialize_variables_and_residuals()
         self._report_problem_size()
+
+    @property
+    def alg_name(self) -> str:
+        return 'Multi-Proces Regularized ADMM'
 
     @property
     def graph(self) -> nx.DiGraph:

@@ -32,6 +32,10 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
         self._report_problem_size()
     
     @property
+    def alg_name(self) -> str:
+        return 'Centralized'
+    
+    @property
     def graph(self) -> nx.DiGraph:
         return self._graph
     

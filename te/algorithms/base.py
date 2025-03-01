@@ -3,7 +3,8 @@ import pickle
 import numpy as np
 import networkx as nx
 import te.constants
-from typing import List, Optional, Tuple
+import dataclasses
+from typing import List, Optional, Tuple, Dict, Any
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from te.algorithms import SOLUTION_DIR
@@ -11,7 +12,32 @@ from te.traffic_models.base import TrafficMatrixBase, Commodity
 
 
 class SolverParams(ABC):
-    pass
+    LINE = "+" + "-"*65 + "+"
+    PRINT_FORMAT = "| {:^30} : {:^30} |"
+
+    @classmethod
+    def field_names(cls) -> List[str]:
+        return [item.name for item in dataclasses.fields(cls)]
+    
+    @property
+    def child_fields(self) -> Dict[str, Any]:
+        parent_class = self.__class__.__base__
+        if parent_class == ABC.__class__:
+            parent_fields = []
+        else:
+            assert issubclass(parent_class, SolverParams)
+            parent_fields = parent_class.field_names()
+        child_dict = dataclasses.asdict(self)
+        for key in parent_fields:
+            child_dict.pop(key)
+        return child_dict
+
+    def __str__(self) -> str:
+        return '\n'.join([self.LINE]+ [
+            self.PRINT_FORMAT.format(key, str(value))
+            for key, value in self.child_fields.items()
+        ] + [self.LINE])
+
 
 @dataclass
 class GurobiSolverParams(SolverParams):
@@ -44,6 +70,11 @@ class TrafficEngineeringLPSolution(ABC):
 
 
 class TrafficEngineeringLP(ABC):
+    @property
+    @abstractmethod
+    def alg_name(cls) -> str:
+        """Name of this algorithm"""
+
     @property
     @abstractmethod
     def graph(self) -> nx.DiGraph:

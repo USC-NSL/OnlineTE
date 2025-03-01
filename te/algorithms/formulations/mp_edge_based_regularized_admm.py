@@ -85,6 +85,9 @@ class ControllerModel(TrafficEngineeringLP):
         self._initialize_variables_and_residuals()
 
     @property
+    def alg_name(self) -> str:
+        return 'Multi-Process, Node-Distributed ADMM'
+    @property
     def graph(self) -> nx.DiGraph:
         return self._graph
     @property

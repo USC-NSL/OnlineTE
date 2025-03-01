@@ -71,6 +71,10 @@ class SemiDistributedEdgeBasedADMMLP(TrafficEngineeringLP):
         self._initiate_dual_weights()
 
     @property
+    def alg_name(self) -> str:
+        return '(DEBUG) Single Process ADMM'
+
+    @property
     def graph(self) -> nx.DiGraph:
         return self._graph
     

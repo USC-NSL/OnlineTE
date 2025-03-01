@@ -1,7 +1,3 @@
-import contextlib
-import matplotlib.pyplot as plt
-from te.traffic_models import get_traffic_model
-from te.traffic_models.models import UniformTrafficMatrixParams
 from te.algorithms.base import GurobiSolverParams
 from te.algorithms.formulations.edge_based_centralized import CentralizedEdgeBasedLP
 from te.algorithms.formulations.edge_based_regularized_admm import RegularizedADMMLP, RegularizedADMMSolverParams
@@ -57,18 +53,20 @@ def unregulated_admm_test(topology: str, seed: int, **kwargs):
     n = graph.number_of_nodes()
 
     solver_params = UnregulatedADMMSolverParams(
-        NumberOfEpochs=200,
+        NumberOfEpochs=150,
         NumberOfNetworkUpdates=2,
         PGDIterations=25,
         Gamma=None,
         Eta=10/(n**2),
         Rho=10/(n**2),
-        # Eta=1e-1,
-        # Rho=1e-1,
+        # Eta=5e-2,
+        # Rho=5e-2,
+        PGDConvTol=1e-12,
         NumWorkers=8,
         UseVariableRho=True,
         BigTheta=1e-6,
-        BigGamma=1e-7
+        BigGamma=1e-7,
+        BlockMode=True
     )
     test_mlu(UnregulatedADMMLP, graph, tm, solver_params, feasibility_tol=FEASIBILITY_TOL, 
              feasibility_ratio=FEASIBILITY_RATIO, **kwargs)
@@ -79,5 +77,5 @@ if __name__ == '__main__':
     # centralized_test(MEDIUM_TOPOLOGY, RNG_SEED)
     # centralized_test(HUGE_TOPOLOGY, RNG_SEED)
     # regularized_admm_test(HUGE_TOPOLOGY, RNG_SEED)
-    # unregulated_admm_test(SMALL_TOPOLOGY, RNG_SEED)
-    unregulated_admm_test(SMALL_MEDIUM_TOPOLOGY, RNG_SEED)
+    unregulated_admm_test(SMALL_TOPOLOGY, RNG_SEED)
+    # unregulated_admm_test(SMALL_MEDIUM_TOPOLOGY, RNG_SEED)

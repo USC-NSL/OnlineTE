@@ -76,7 +76,7 @@ def optimize_or_scream(model: gurobipy.Model):
 
 
 def get_solution_confusion_matrix(lp: TrafficEngineeringLP, feasibility_tol: Optional[float] = None, feasibility_ratio: Optional[float] = None, 
-                                  report: bool = False, show: bool = True, save_fig: bool = True) -> Tuple[float, np.ndarray]:
+                                  report: bool = False, report_unsat: bool = True, show: bool = True, save_fig: bool = True) -> Tuple[float, np.ndarray]:
     """
     Check how many of the demands are not satisfied and report the solution.
     To check feasibility:
@@ -175,7 +175,7 @@ def get_solution_confusion_matrix(lp: TrafficEngineeringLP, feasibility_tol: Opt
     unsats = 0
     cm = np.zeros(shape=(topology_size, topology_size))
 
-    if report:
+    if report or report_unsat:
         print(" "*12 + "{:^10}    {:^20}".format("DESIRED", "ALLOCATED"))
         print("-"*46)
 
@@ -200,6 +200,15 @@ def get_solution_confusion_matrix(lp: TrafficEngineeringLP, feasibility_tol: Opt
                 print(as_fail(report_str))
             else:
                 print(report_str)
+        else:
+            if report_unsat and is_not_satisfied:
+                report_str = "{:<4} -> {:<4}".format(ideal.source, ideal.destination) + \
+                    "{:^10}    {:^7} <--> {:^7}".format(
+                        str(np.round(ideal.demand, 2)),
+                        str(np.round(actual[0].demand, 2)),
+                        str(np.round(actual[1].demand, 2))
+                    )
+                print(as_fail(report_str))
     
     unsatisfied = unsats / K
 
@@ -445,7 +454,12 @@ def careful_norm_squared(x: np.ndarray, axis: Optional[int] = None) -> float:
 
 def test_mlu(lp_cls: Type[TrafficEngineeringLP], graph: nx.DiGraph, tm: TrafficMatrixBase, solver_params: SolverParams,
              feasibility_tol: float = None, feasibility_ratio: float = None, **kwargs):
+    print(as_info("="*60))
+    print(as_info("="*23 + " MLU PROBLEM " + "="*24))
+    print(as_info("="*60))
     with contextlib.closing(lp_cls(graph, tm, solver_params)) as lp:
+        print(as_info(f"Solving With: {lp.alg_name}"))
+        print(as_info(f"Solving With Parameters:\n{solver_params}"))
         lp.make_lp()
         t = lp.solve()
         if t > 0:

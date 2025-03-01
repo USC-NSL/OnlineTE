@@ -47,6 +47,10 @@ class DistributedEdgeBasedLP(TrafficEngineeringLP):
 
         self._prepare_in_edge_mapping()
         self._initiate_dual_weights()
+    
+    @property
+    def alg_name(self) -> str:
+        return 'Single-Process Method of Multipliers'
 
     @property
     def graph(self) -> nx.DiGraph:

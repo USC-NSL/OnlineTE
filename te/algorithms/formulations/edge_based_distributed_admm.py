@@ -78,6 +78,10 @@ class DistributedEdgeBasedADMMLP(TrafficEngineeringLP):
         self._report_problem_size()
 
     @property
+    def alg_name(self) -> str:
+        return 'Single Process ADMM'
+
+    @property
     def graph(self) -> nx.DiGraph:
         return self._graph
     
