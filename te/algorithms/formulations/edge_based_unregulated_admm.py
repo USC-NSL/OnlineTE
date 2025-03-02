@@ -12,6 +12,8 @@ from utils.get_pypy import get_pypy_interpreter_path
 from te.algorithms.base import TrafficEngineeringLP, GurobiSolverParams, SolverParams
 from te.algorithms.solution import GurobiEdgeBasedMinimizeMaximumUtilitySolution
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
+from te.algorithms.sub_algorithms.pgd import (do_iterative_plain_pgd, do_iterative_pgd_with_exact_line_search,
+                                              do_block_plain_pgd, do_block_pgd_with_exact_line_search)
 from topologies.utils import (get_edge_indexing, get_graph_M_matrix, 
                               get_adjacency_null_space, get_feasible_flow_assignment)
 from te.algorithms.utils import (check_capacity_constraint, optimize_or_scream, make_model, 
@@ -331,163 +333,7 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         assert self._model_controller is not None
 
         self._update_controller_objective()
-    
-    @staticmethod
-    def do_plain_pgd(lambda_k: np.ndarray, x_k_0: np.ndarray, nnt: np.ndarray, n: np.ndarray, c: np.ndarray, 
-                     gamma: float, thresh: Optional[float], n_iter: int) -> Tuple[np.ndarray, np.ndarray]:
-        _c = x_k_0 + n @ c
-        for i in range(n_iter):
-            lambda_k_old = lambda_k
-            lambda_k = np.clip(lambda_k - gamma * (nnt @ lambda_k + _c), a_min=0, a_max=None)
-            if thresh and careful_norm(lambda_k - lambda_k_old) < thresh:
-                break
-        y_k = c + n.T @ lambda_k
-        return lambda_k, y_k
 
-    @staticmethod
-    def do_iterative_plain_pgd(lambda_block: np.ndarray, x_block_0: np.ndarray, nnt: np.ndarray, 
-                               n: np.ndarray, c_block: np.ndarray, gamma: float, thresh: Optional[float], n_iter: int) -> Tuple[np.ndarray, np.ndarray]:
-        big_c_block = x_block_0 + n @ c_block
-        num_blocks = np.shape(lambda_block)[-1]
-        for k in range(num_blocks):
-            for _ in range(n_iter):
-                lambda_k_old = lambda_block[:, k]
-                lambda_k = np.clip(lambda_k_old - gamma * (nnt @ lambda_k_old + big_c_block[:, k]), a_min=0, a_max=None)
-                lambda_block[:, k] = lambda_k
-                if thresh and careful_norm(lambda_k - lambda_k_old) < thresh:
-                    break
-        y_block = c_block + n.T @ lambda_block
-        return lambda_block, y_block
-
-    @staticmethod
-    def do_iterative_pgd_with_exact_line_search(lambda_block: np.ndarray, x_block_0: np.ndarray, nnt: np.ndarray, 
-                                                n: np.ndarray, c_block: np.ndarray, thresh: Optional[float], n_iter: int) -> Tuple[np.ndarray, np.ndarray]:
-        big_c_block = x_block_0 + n @ c_block
-        nnt_big_c_block = nnt @ big_c_block
-        norm_1 = 0.5 * careful_norm_squared(big_c_block, axis=0)
-        norm_2 = careful_norm_squared(n.T @ big_c_block, axis=0)
-
-        def get_alpha(current_lambda, k: int) -> Optional[float]:
-            norm = careful_norm_squared(n.T @ current_lambda)
-            dot = np.dot(current_lambda, nnt_big_c_block[:, k])
-            t1 = norm + 1.5 * dot + norm_1[k]
-            t2 = norm + norm_2[k] + 2 * dot
-            if thresh and t1 < te.constants.MINIMUM_NORM or t2 < te.constants.MINIMUM_NORM:
-                return None
-            return t1 / t2
-
-        num_blocks = np.shape(lambda_block)[-1]
-        for k in range(num_blocks):
-            i = 0
-            while i < n_iter:
-                lambda_k_old = lambda_block[:, k]
-                grad = nnt @ lambda_k_old + big_c_block[:, k]
-                alpha = get_alpha(lambda_k_old, k)
-                if alpha is None:
-                    break
-                lambda_k = np.clip(lambda_k_old - alpha * grad, a_min=0, a_max=None)
-                lambda_block[:, k] = lambda_k
-                if careful_norm(lambda_k - lambda_k_old) < thresh:
-                    break
-                i += 1
-        y_block = c_block + n.T @ lambda_block
-        return lambda_block, y_block
-
-    @staticmethod
-    def do_block_plain_pgd(lambda_block: np.ndarray, x_block_0: np.ndarray, nnt: np.ndarray, 
-                           n: np.ndarray, c_block: np.ndarray, gamma: float, thresh: Optional[float], 
-                           n_iter: int, check_conv: bool) -> Tuple[np.ndarray, np.ndarray]:
-        i = 0
-        big_c_block = x_block_0 + n @ c_block
-        number_of_converged_columns = 0
-        number_of_commodities = lambda_block.shape[-1]
-        commodity_indexes = np.arange(number_of_commodities)
-        converged_lambda_block = np.zeros_like(lambda_block)
-        while number_of_converged_columns < number_of_commodities:
-            # Do a block descent
-            lambda_block_old = np.copy(lambda_block)
-            grad_block = nnt @ lambda_block_old + big_c_block
-            lambda_block = np.clip(lambda_block_old - gamma * grad_block, a_min=0, a_max=None)
-
-            # Check which columns seem to have converged
-            if thresh and check_conv:
-                converged_indices = np.where(careful_norm(lambda_block - lambda_block_old, axis=0) < thresh)[0]
-                if len(converged_indices) > 0:
-                    number_of_converged_columns += len(converged_indices)
-                    converged_lambda_block[:, commodity_indexes[converged_indices]] = lambda_block[:, converged_indices]
-                    lambda_block = np.delete(lambda_block, converged_indices, axis=1)
-                    big_c_block = np.delete(big_c_block, converged_indices, axis=1)
-                    commodity_indexes = np.delete(commodity_indexes, converged_indices)
-            i += 1
-            if i == n_iter:
-                # Maximum iteration reached. Make do with what we have ...
-                if thresh and check_conv:
-                    indices = np.arange(lambda_block.shape[-1])
-                    converged_lambda_block[:, commodity_indexes[indices]] = lambda_block[:, indices]
-                else:
-                    converged_lambda_block = lambda_block
-                break
-        # print(f'Did {i} iterations')
-        y_block = c_block + n.T @ converged_lambda_block
-        return converged_lambda_block, y_block
-
-    @staticmethod
-    def do_block_pgd_with_exact_line_search(lambda_block: np.ndarray, x_block_0: np.ndarray, nnt: np.ndarray, 
-                                            n: np.ndarray, c_block: np.ndarray, thresh: float, 
-                                            n_iter: int, check_conv: bool) -> Tuple[np.ndarray, np.ndarray]:
-        big_c_block = x_block_0 + n @ c_block
-        nnt_big_c_block = nnt @ big_c_block
-        norm_1 = 0.5 * careful_norm_squared(big_c_block, axis=0)
-        norm_2 = careful_norm_squared(n.T @ big_c_block, axis=0)
-
-        def get_alpha_block(current_lambda_block) -> np.ndarray:
-            norm = careful_norm_squared(n.T @ current_lambda_block, axis=0)
-            dot = np.diagonal(current_lambda_block.T @ nnt_big_c_block)
-            t1 = norm + 1.5 * dot + norm_1
-            t2 = norm + norm_2 + 2 * dot
-            if all_elements_within_threshold(t1, te.constants.MINIMUM_NORM) or \
-               all_elements_within_threshold(t2, te.constants.MINIMUM_NORM):
-                return np.zeros_like(t1)
-            return t1 / t2
-
-        i = 0
-        number_of_converged_columns = 0
-        number_of_commodities = lambda_block.shape[-1]
-        commodity_indexes = np.arange(number_of_commodities)
-        converged_lambda_block = np.zeros_like(lambda_block)
-        while number_of_converged_columns < number_of_commodities:
-            # Do a block descent
-            lambda_block_old = np.copy(lambda_block)
-            grad_block = nnt @ lambda_block_old + big_c_block
-            alpha_block = get_alpha_block(lambda_block_old)
-            lambda_block = np.clip(lambda_block_old - alpha_block * grad_block, a_min=0, a_max=None)
-
-            # Check which columns seem to have converged
-            if thresh and check_conv:
-                converged_indices = np.where(careful_norm(lambda_block - lambda_block_old, axis=0) < thresh)[0]
-                if len(converged_indices) > 0:
-                    number_of_converged_columns += len(converged_indices)
-                    converged_lambda_block[:, commodity_indexes[converged_indices]] = lambda_block[:, converged_indices]
-                    lambda_block = np.delete(lambda_block, converged_indices, axis=1)
-                    big_c_block = np.delete(big_c_block, converged_indices, axis=1)
-                    nnt_big_c_block = np.delete(nnt_big_c_block, converged_indices, axis=1)
-                    norm_1 = np.delete(norm_1, converged_indices)
-                    norm_2 = np.delete(norm_2, converged_indices)
-                    commodity_indexes = np.delete(commodity_indexes, converged_indices)
-                # print(number_of_converged_columns)
-            i += 1
-            if i == n_iter:
-                # Maximum iteration reached. Make do with what we have ...
-                if thresh and check_conv:
-                    indices = np.arange(lambda_block.shape[-1])
-                    converged_lambda_block[:, commodity_indexes[indices]] = lambda_block[:, indices]
-                else:
-                    converged_lambda_block = lambda_block
-                break
-        # print(f'Did {i} iterations')
-        y_block = c_block + n.T @ converged_lambda_block
-        return converged_lambda_block, y_block
-    
     def _get_current_C(self) -> np.ndarray:
         Y_TK = self._Y_tk
         Y_BAR = self._Y_bar_t
@@ -510,11 +356,9 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         C_TK_BLOCKS = np.array_split(C_TK, NUM_BLOCKS, axis=1)
         
         if GAMMA is None:
-            do_pgd = self.do_block_pgd_with_exact_line_search if self._solver_params.BlockMode \
-                                                              else self.do_iterative_pgd_with_exact_line_search
+            do_pgd = do_block_pgd_with_exact_line_search if BLOCK_MODE else do_iterative_pgd_with_exact_line_search
         else:
-            do_pgd = self.do_block_plain_pgd if self._solver_params.BlockMode \
-                                             else self.do_iterative_plain_pgd
+            do_pgd = do_block_plain_pgd if BLOCK_MODE else do_iterative_plain_pgd
 
         def pgd_iterator():
             for i in range(NUM_BLOCKS):

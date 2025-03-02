@@ -29,19 +29,21 @@ def centralized_test(topology: str, seed: int, **kwargs):
 def regularized_admm_test(topology: str, seed: int, **kwargs):
     c, graph, tm = get_uniform_tm_problem_with_capacity_heuristic(topology, seed)
     print(f"Network link capacity is: {str(round(c, 2))}")
+    n = graph.number_of_nodes()
 
     solver_params = RegularizedADMMSolverParams(
-        NumberOfEpochs=200,
+        NumberOfEpochs=150,
         NumberOfNetworkUpdates=2,
         PGDIterations=25,
         Gamma=None,
         Epsilon=0,
-        Eta=1e-4,
-        Rho=1e-4,
+        Eta=10/(n**2),
+        Rho=10/(n**2),
         NumWorkers=8,
         UseVariableRho=True,
         BigTheta=1e-6,
-        BigGamma=1e-7
+        BigGamma=1e-7,
+        BlockMode=True
     )
     test_mlu(RegularizedADMMLP, graph, tm, solver_params, feasibility_tol=FEASIBILITY_TOL, 
              feasibility_ratio=FEASIBILITY_RATIO, **kwargs)
@@ -77,5 +79,6 @@ if __name__ == '__main__':
     # centralized_test(MEDIUM_TOPOLOGY, RNG_SEED)
     # centralized_test(HUGE_TOPOLOGY, RNG_SEED)
     # regularized_admm_test(HUGE_TOPOLOGY, RNG_SEED)
+    # regularized_admm_test(SMALL_TOPOLOGY, RNG_SEED)
     unregulated_admm_test(SMALL_TOPOLOGY, RNG_SEED)
     # unregulated_admm_test(SMALL_MEDIUM_TOPOLOGY, RNG_SEED)
