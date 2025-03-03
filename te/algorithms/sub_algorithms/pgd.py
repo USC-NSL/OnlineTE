@@ -56,7 +56,7 @@ from te.algorithms.utils import careful_norm, careful_norm_squared, all_elements
 
 
 def do_plain_pgd(lambda_k: np.ndarray, x_k_0: np.ndarray, nnt: np.ndarray, n: np.ndarray, c: np.ndarray, 
-                 gamma: float, thresh: Optional[float], n_iter: int) -> Tuple[np.ndarray, np.ndarray]:
+                 gamma: float, thresh: Optional[float], n_iter: int) -> Tuple[np.ndarray, np.ndarray, int]:
     """
     The simplest type of PGD.
     Takes a constant step size, takes a Gradient Descent (GD) step and
@@ -67,17 +67,20 @@ def do_plain_pgd(lambda_k: np.ndarray, x_k_0: np.ndarray, nnt: np.ndarray, n: np
     forth between the worker and the controller (one RTT per column).
     """
     _c = x_k_0 + n @ c
-    for _ in range(n_iter):
-        lambda_k_old = lambda_k
-        lambda_k = np.clip(lambda_k - gamma * (nnt @ lambda_k + _c), a_min=0, a_max=None)
+    total_iterations = 0
+    for i in range(n_iter):
+        lambda_k_old = np.array(lambda_k)
+        lambda_k = np.clip(lambda_k_old - gamma * (nnt @ lambda_k_old + _c), a_min=0, a_max=None)
+        total_iterations += 1
         if thresh and careful_norm(lambda_k - lambda_k_old) < thresh:
             break
     y_k = c + n.T @ lambda_k
-    return lambda_k, y_k
+    return lambda_k, y_k, total_iterations
 
 
 def do_iterative_plain_pgd(lambda_block: np.ndarray, x_block_0: np.ndarray, nnt: np.ndarray, 
-                           n: np.ndarray, c_block: np.ndarray, gamma: float, thresh: Optional[float], n_iter: int) -> Tuple[np.ndarray, np.ndarray]:
+                           n: np.ndarray, c_block: np.ndarray, gamma: float, thresh: Optional[float], 
+                           n_iter: int) -> Tuple[np.ndarray, np.ndarray, int]:
     """
     Plain PGD, but receives the input in block (i.e. multiple columns per input).
     Drastically cuts down on the time spend communicating between the node and
@@ -87,25 +90,28 @@ def do_iterative_plain_pgd(lambda_block: np.ndarray, x_block_0: np.ndarray, nnt:
     """    
     big_c_block = x_block_0 + n @ c_block
     num_blocks = np.shape(lambda_block)[-1]
+    total_iterations = 0
     for k in range(num_blocks):
         for _ in range(n_iter):
-            lambda_k_old = lambda_block[:, k]
-            lambda_k = np.clip(lambda_k_old - gamma * (nnt @ lambda_k_old + big_c_block[:, k]), a_min=0, a_max=None)
-            lambda_block[:, k] = lambda_k
-            if thresh and careful_norm(lambda_k - lambda_k_old) < thresh:
+            lambda_k_old = np.array(lambda_block[:, k])
+            lambda_block[:, k] = np.clip(lambda_k_old - gamma * (nnt @ lambda_k_old + big_c_block[:, k]), a_min=0, a_max=None)
+            total_iterations += 1
+            if thresh and careful_norm(lambda_block[:, k] - lambda_k_old) < thresh:
                 break
     y_block = c_block + n.T @ lambda_block
-    return lambda_block, y_block
+    return lambda_block, y_block, total_iterations
 
 
 def do_iterative_pgd_with_exact_line_search(lambda_block: np.ndarray, x_block_0: np.ndarray, nnt: np.ndarray, 
-                                            n: np.ndarray, c_block: np.ndarray, thresh: Optional[float], n_iter: int) -> Tuple[np.ndarray, np.ndarray]:
+                                            n: np.ndarray, c_block: np.ndarray, thresh: Optional[float], 
+                                            n_iter: int) -> Tuple[np.ndarray, np.ndarray, int]:
     """
     PGD with exact line search over block input.
     The line search here is done on the unconstrained problem. Can be
     a bit dangerous but works pretty well in practice.
     Like `do_iterative_plain_pgd`, the actual operation is still sequential.
-    """    
+    """
+    total_iterations = 0
     big_c_block = x_block_0 + n @ c_block
     nnt_big_c_block = nnt @ big_c_block
     norm_1 = 0.5 * careful_norm_squared(big_c_block, axis=0)
@@ -124,29 +130,30 @@ def do_iterative_pgd_with_exact_line_search(lambda_block: np.ndarray, x_block_0:
     for k in range(num_blocks):
         i = 0
         while i < n_iter:
-            lambda_k_old = lambda_block[:, k]
+            lambda_k_old = np.array(lambda_block[:, k])
             grad = nnt @ lambda_k_old + big_c_block[:, k]
             alpha = get_alpha(lambda_k_old, k)
+            total_iterations += 1
             if alpha is None:
                 break
-            lambda_k = np.clip(lambda_k_old - alpha * grad, a_min=0, a_max=None)
-            lambda_block[:, k] = lambda_k
-            if careful_norm(lambda_k - lambda_k_old) < thresh:
+            lambda_block[:, k] = np.clip(lambda_k_old - alpha * grad, a_min=0, a_max=None)
+            if careful_norm(lambda_block[:, k] - lambda_k_old) < thresh:
                 break
             i += 1
     y_block = c_block + n.T @ lambda_block
-    return lambda_block, y_block
+    return lambda_block, y_block, total_iterations
 
 
 def do_block_plain_pgd(lambda_block: np.ndarray, x_block_0: np.ndarray, nnt: np.ndarray, 
                        n: np.ndarray, c_block: np.ndarray, gamma: float, thresh: Optional[float], 
-                       n_iter: int, check_conv: bool) -> Tuple[np.ndarray, np.ndarray]:
+                       n_iter: int, check_conv: bool) -> Tuple[np.ndarray, np.ndarray, int]:
     """
     Plain PGD with block operations, meaning that each step is done across the entire
     input matrix. Assuming that the matrix is not too massive, this performs much
     faster than the sequential method.
     """
     i = 0
+    total_iterations = 0
     big_c_block = x_block_0 + n @ c_block
     number_of_converged_columns = 0
     number_of_commodities = lambda_block.shape[-1]
@@ -154,10 +161,10 @@ def do_block_plain_pgd(lambda_block: np.ndarray, x_block_0: np.ndarray, nnt: np.
     converged_lambda_block = np.zeros_like(lambda_block)
     while number_of_converged_columns < number_of_commodities:
         # Do a block descent
-        lambda_block_old = np.copy(lambda_block)
+        lambda_block_old = np.array(lambda_block)
         grad_block = nnt @ lambda_block_old + big_c_block
         lambda_block = np.clip(lambda_block_old - gamma * grad_block, a_min=0, a_max=None)
-
+        total_iterations += lambda_block.shape[-1]
         # Check which columns seem to have converged
         if thresh and check_conv:
             converged_indices = np.where(careful_norm(lambda_block - lambda_block_old, axis=0) < thresh)[0]
@@ -182,17 +189,18 @@ def do_block_plain_pgd(lambda_block: np.ndarray, x_block_0: np.ndarray, nnt: np.
             else:
                 converged_lambda_block = lambda_block
             break
-    # print(f'Did {i} iterations')
+    
     y_block = c_block + n.T @ converged_lambda_block
-    return converged_lambda_block, y_block
+    return converged_lambda_block, y_block, total_iterations
 
 
 def do_block_pgd_with_exact_line_search(lambda_block: np.ndarray, x_block_0: np.ndarray, nnt: np.ndarray, 
                                         n: np.ndarray, c_block: np.ndarray, thresh: float, 
-                                        n_iter: int, check_conv: bool) -> Tuple[np.ndarray, np.ndarray]:
+                                        n_iter: int, check_conv: bool) -> Tuple[np.ndarray, np.ndarray, int]:
     """
     Same as `do_block_plain_pgd`, but with exact line search.
     """
+    total_iterations = 0
     big_c_block = x_block_0 + n @ c_block
     nnt_big_c_block = nnt @ big_c_block
     norm_1 = 0.5 * careful_norm_squared(big_c_block, axis=0)
@@ -215,11 +223,11 @@ def do_block_pgd_with_exact_line_search(lambda_block: np.ndarray, x_block_0: np.
     converged_lambda_block = np.zeros_like(lambda_block)
     while number_of_converged_columns < number_of_commodities:
         # Do a block descent
-        lambda_block_old = np.copy(lambda_block)
+        lambda_block_old = np.array(lambda_block)
         grad_block = nnt @ lambda_block_old + big_c_block
         alpha_block = get_alpha_block(lambda_block_old)
         lambda_block = np.clip(lambda_block_old - alpha_block * grad_block, a_min=0, a_max=None)
-
+        total_iterations += lambda_block.shape[-1]
         # Check which columns seem to have converged
         if thresh and check_conv:
             converged_indices = np.where(careful_norm(lambda_block - lambda_block_old, axis=0) < thresh)[0]
@@ -247,6 +255,6 @@ def do_block_pgd_with_exact_line_search(lambda_block: np.ndarray, x_block_0: np.
             else:
                 converged_lambda_block = lambda_block
             break
-    # print(f'Did {i} iterations')
+    
     y_block = c_block + n.T @ converged_lambda_block
-    return converged_lambda_block, y_block
+    return converged_lambda_block, y_block, total_iterations

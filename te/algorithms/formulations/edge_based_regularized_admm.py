@@ -507,13 +507,16 @@ class RegularizedADMMLP(TrafficEngineeringLP):
         t_start = time.time()
         lambda_holder: List[np.ndarray] = []
         Y_holder: List[np.ndarray] = []
+        total_iterations = 0
         for item in self.proc_pool.starmap(do_pgd, pgd_iterator()):
-            lambda_block, y_block = item
+            lambda_block, y_block, iters = item
             lambda_holder.append(lambda_block)
             Y_holder.append(y_block)
+            total_iterations += iters
         self._lambda_ek = np.hstack(lambda_holder)
         self._Y_tk = np.hstack(Y_holder)
         self._C_tk_old = C_TK
+        print(f"Average number of PGD iterations per commodity: {total_iterations / len(self._commodity_list)}")
         return time.time() - t_start
 
     def _reconvene_network_updates(self):

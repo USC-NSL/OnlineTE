@@ -57,18 +57,19 @@ def unregulated_admm_test(topology: str, seed: int, **kwargs):
     solver_params = UnregulatedADMMSolverParams(
         NumberOfEpochs=150,
         NumberOfNetworkUpdates=2,
-        PGDIterations=25,
+        PGDIterations=5,
         Gamma=None,
         Eta=10/(n**2),
         Rho=10/(n**2),
         # Eta=5e-2,
         # Rho=5e-2,
-        PGDConvTol=1e-12,
+        PGDConvTol=1e-4,
         NumWorkers=8,
         UseVariableRho=True,
         BigTheta=1e-6,
         BigGamma=1e-7,
-        BlockMode=True
+        BlockMode=True,
+        CheckBlockConv=True
     )
     test_mlu(UnregulatedADMMLP, graph, tm, solver_params, feasibility_tol=FEASIBILITY_TOL, 
              feasibility_ratio=FEASIBILITY_RATIO, **kwargs)
