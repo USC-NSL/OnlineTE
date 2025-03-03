@@ -76,7 +76,8 @@ def optimize_or_scream(model: gurobipy.Model):
 
 
 def get_solution_confusion_matrix(lp: TrafficEngineeringLP, feasibility_tol: Optional[float] = None, feasibility_ratio: Optional[float] = None, 
-                                  report: bool = False, report_unsat: bool = True, show: bool = True, save_fig: bool = True) -> Tuple[float, np.ndarray]:
+                                  report: bool = False, report_unsat: bool = True, show: bool = True, save_fig: bool = True,
+                                  trace_out_path: Optional[str] = 'res.txt') -> Tuple[float, np.ndarray]:
     """
     Check how many of the demands are not satisfied and report the solution.
     To check feasibility:
@@ -91,6 +92,28 @@ def get_solution_confusion_matrix(lp: TrafficEngineeringLP, feasibility_tol: Opt
         if optim < te.constants.FLOAT_RES:
             return abs(actual) < te.constants.FLOAT_RES
         return abs((optim - actual) / optim) < feasibility_ratio
+
+    def write_traces(_lp: TrafficEngineeringLP):
+        _solver_params = _lp.params
+        _objective_trace = _lp.objective_trace
+        _objective_gap_trace = _lp.objective_gap_trace
+        if _objective_trace is None:
+            _objective_trace = []
+        if _objective_gap_trace is None:
+            _objective_gap_trace = []
+        _rho_coeff_trace = []
+        _eta_coeff_trace = []
+        if hasattr(_solver_params, 'UseVariableRho'):
+            if _solver_params.UseVariableRho:
+                _rho_coeff_trace = _lp.rho_coeff_trace
+                _eta_coeff_trace = _lp.eta_coeff_trace
+        with open(trace_out_path, 'w') as traces:
+            traces.writelines([
+                f'objective_value: {",".join([str(item) for item in _objective_trace])}\n',
+                f'duality_gap: {",".join(str(item) for item in _objective_gap_trace)}\n',
+                f'admm_step_coeff_1: {",".join(str(item) for item in _rho_coeff_trace)}\n',
+                f'admm_step_coeff_2: {",".join(str(item) for item in _eta_coeff_trace)}\n'
+            ])
 
     def make_fig(_cm: np.ndarray, _lp: TrafficEngineeringLP) -> Figure:
         _objective_trace = _lp.objective_trace
@@ -224,6 +247,9 @@ def get_solution_confusion_matrix(lp: TrafficEngineeringLP, feasibility_tol: Opt
                 plt.show()
             if save_fig:
                 fig.savefig('res.png')
+    
+    if trace_out_path is not None:
+        write_traces(lp)
 
     return (unsatisfied, cm)
 

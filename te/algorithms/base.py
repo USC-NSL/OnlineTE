@@ -17,6 +17,8 @@ class SolverParams(ABC):
 
     @classmethod
     def field_names(cls) -> List[str]:
+        if cls.__base__ == ABC:
+            return []
         return [item.name for item in dataclasses.fields(cls)]
     
     @property

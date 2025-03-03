@@ -379,7 +379,6 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         self._lambda_ek = np.hstack(lambda_holder)
         self._Y_tk = np.hstack(Y_holder)
         self._C_tk_old = C_TK
-        print(f"Average number of PGD iterations per commodity: {total_iterations / len(self._commodity_list)}")
         return time.time() - t_start
     
     def _update_Y_bar(self):
@@ -585,8 +584,8 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         epoch = 0
         max_iters = PARAMS.NumberOfEpochs
         try:
-            # for _ in tqdm.tqdm(range(PARAMS.NumberOfEpochs)):
-            while True:
+            for _ in tqdm.tqdm(range(PARAMS.NumberOfEpochs)):
+            # while True:
                 if ((max_iters is not None) and (epoch == max_iters)):
                     break
                 t_network = 0

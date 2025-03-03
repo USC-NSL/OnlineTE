@@ -516,7 +516,6 @@ class RegularizedADMMLP(TrafficEngineeringLP):
         self._lambda_ek = np.hstack(lambda_holder)
         self._Y_tk = np.hstack(Y_holder)
         self._C_tk_old = C_TK
-        print(f"Average number of PGD iterations per commodity: {total_iterations / len(self._commodity_list)}")
         return time.time() - t_start
 
     def _reconvene_network_updates(self):
