@@ -19,9 +19,16 @@ from topologies.utils import load_zoo_topology, get_capacity_lower_bound, set_ed
 
 
 def get_baseline_solution(base_seed: int, topology_name: str, tm_model: str, 
-                          convergence_tol: float, feasibility_tol: float, barrier: bool = False):
+                          convergence_tol: float, feasibility_tol: float, 
+                          barrier: bool = False, crossover: bool = True):
     """This function generates the optimal basis for the base TM and all shifts"""
-    gurobi_sol_name = f'{topology_name}_{base_seed}_{tm_model}'
+    if barrier:
+        if crossover:
+            gurobi_sol_name = f'{topology_name}_{base_seed}_{tm_model}_barrier_crossed'
+        else:
+            gurobi_sol_name = f'{topology_name}_{base_seed}_{tm_model}_barrier'
+    else:
+        gurobi_sol_name = f'{topology_name}_{base_seed}_{tm_model}'
     solution_name = f'{gurobi_sol_name}.tesol'
     graph = load_zoo_topology(topology_name)
     tm_params = UniformTrafficMatrixParams(n = len(graph.nodes), min = 0.0, max = 1.0)
@@ -37,7 +44,7 @@ def get_baseline_solution(base_seed: int, topology_name: str, tm_model: str,
     else:
         solver_params.Method = gurobipy.GRB.METHOD_BARRIER
         # We need a basic solution, thus, we need to enable crossover
-        solver_params.Crossover = 1
+        solver_params.Crossover = int(crossover)
     solver_params.ConvTol = convergence_tol
     solver_params.FeasibilityTol = feasibility_tol
     
@@ -220,6 +227,9 @@ def test_warm_start(base_seed: int, topology_name: str, tm_model: str,
 
 
 if __name__ == '__main__':
+    get_baseline_solution(12345, 'Claranet', 'Uniform', convergence_tol=1e-4, feasibility_tol=1e-6)
+    get_baseline_solution(12345, 'Claranet', 'Uniform', convergence_tol=1e-4, feasibility_tol=1e-6, barrier=True, crossover=False)
+    get_baseline_solution(12345, 'Claranet', 'Uniform', convergence_tol=1e-4, feasibility_tol=1e-6, barrier=True, crossover=True)
     # get_baseline_solution(12345, 'Interoute', 'Uniform', convergence_tol=1e-4, feasibility_tol=1e-6)
     # get_baseline_solution(12345, 'Interoute', 'Uniform', convergence_tol=1e-4, feasibility_tol=1e-6)
     DELTA = 0.08
@@ -230,10 +240,10 @@ if __name__ == '__main__':
     #     converter_seed=6789, convergence_tol=1e-4, feasibility_tol=1e-6, number_of_shifts=30,
     #     sol_name_postfix=f'{DELTA}'
     # )
-    test_warm_start(
-        base_seed=12345, topology_name='Claranet', tm_model='Uniform',
-        converter_model='Uniform', 
-        converter_params=get_traffic_converter_params('Uniform')(delta_min=-DELTA, delta_max=DELTA),
-        converter_seed=6789, convergence_tol=1e-4, feasibility_tol=1e-6, number_of_shifts=1,
-        sol_name_postfix=f'{DELTA}'
-    )
+    # test_warm_start(
+    #     base_seed=12345, topology_name='Claranet', tm_model='Uniform',
+    #     converter_model='Uniform', 
+    #     converter_params=get_traffic_converter_params('Uniform')(delta_min=-DELTA, delta_max=DELTA),
+    #     converter_seed=6789, convergence_tol=1e-4, feasibility_tol=1e-6, number_of_shifts=1,
+    #     sol_name_postfix=f'{DELTA}'
+    # )

@@ -4,12 +4,93 @@ import dataclasses
 import numpy as np
 import gurobipy as gp
 import networkx as nx
-from typing import Any, Tuple, Optional
+from dataclasses import dataclass
+from abc import ABC, abstractmethod
+from typing import Any, Tuple, Optional, List
 from te.algorithms import SOLUTION_DIR
 from topologies.utils import load_zoo_topology, set_edge_capacity_to
+from te.algorithms.utils import as_warning
 from te.traffic_models import get_traffic_model, get_traffic_model_params, get_traffic_converter, get_traffic_converter_params
 from te.traffic_models.base import TrafficMatrixBase, TrafficMatrixConverterBase
 from te.algorithms.base import TrafficEngineeringLPSolution
+
+
+key_to_str = lambda key: ','.join([str(item) for item in key])
+
+
+class GurobiSolutionString(ABC):
+    @property
+    @abstractmethod
+    def value(self) -> str:
+        """The value of this variable as a whole"""
+    
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        """The name of this variable"""
+    
+    @classmethod
+    @abstractmethod
+    def type(self) -> str:
+        """Type of this variable"""
+    
+    def __str__(self) -> str:
+        return f'{self.name}@{self.type}:\n{self.value}\n'
+
+
+@dataclass
+class GurobiVarString(GurobiSolutionString):
+    _name: str
+    _value: str
+
+    @property
+    def value(self) -> str:
+        return f'{self._value}\n'
+
+    @property
+    def name(self) -> str:
+        return self._name
+    
+    @classmethod
+    @abstractmethod
+    def type(self):
+        return 'Var'
+
+
+@dataclass
+class GurobiTupleDictString(GurobiSolutionString):
+    _name: str
+    _keys: List[str]
+    _values: List[str]
+
+    def __post_init__(self):
+        assert len(self._keys) == len(self._values)
+
+    @property
+    def value(self) -> str:
+        return '\n'.join([f'[{k}]={v}' for k, v in zip(self._keys, self._values)]) + '\n'
+
+    @property
+    def name(self) -> str:
+        return self._name
+    
+    @classmethod
+    @abstractmethod
+    def type(self):
+        return 'TupleDict'
+
+
+def var_str_from_sol(sol: gp.Var, name: str) -> GurobiVarString:
+    return GurobiVarString(name, str(sol.X))
+
+
+def tupledict_str_from_sol(sol: gp.tupledict, name: str) -> GurobiTupleDictString:
+    keys = []
+    values = []
+    for k in sol.keys():
+        keys.append(key_to_str(k))
+        values.append(str(sol[k].X))
+    return GurobiTupleDictString(name, keys, values)
 
 
 class GurobiEdgeBasedMinimizeMaximumUtilitySolution(TrafficEngineeringLPSolution):
@@ -64,7 +145,10 @@ class GurobiEdgeBasedMinimizeMaximumUtilitySolution(TrafficEngineeringLPSolution
 
     def dump(self, model: gp.Model, name: str, path: str = None):
         path = path if path is not None else os.path.join(SOLUTION_DIR, name)
-        model.write(self.bas_path)
+        try:
+            model.write(self.bas_path)
+        except gp.GurobiError:
+            print(as_warning("Model did not use Simplex. Cannot write a basis file!"))
         model.write(self.sol_path)
         with open(path, 'wb') as f:
             d = self.__dict__

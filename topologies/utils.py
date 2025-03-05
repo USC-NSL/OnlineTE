@@ -318,6 +318,9 @@ if __name__ == '__main__':
     # if g:
     #     nx.draw(g)
     #     plt.show()
-    g = load_zoo_topology('Interoute')
-    print(f'Nodes: {len(g.nodes)}')
-    print(f'Edges: {len(g.edges)}')
+    # g = load_zoo_topology('Interoute')
+    # print(f'Nodes: {len(g.nodes)}')
+    # print(f'Edges: {len(g.edges)}')
+    g = load_zoo_topology('Claranet')
+    nx.draw(nx.to_undirected(g), pos=nx.kamada_kawai_layout(g, scale=3), with_labels=True)
+    plt.show()
