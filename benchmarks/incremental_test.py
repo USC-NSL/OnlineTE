@@ -60,7 +60,11 @@ def get_baseline_solution(base_seed: int, topology_name: str, tm_model: str,
                 seed=base_seed, topology_name=topology_name, capacity=c_min*10, tm_model_name=tm_model,
                 tm_model_params=tm_params, gurobi_sol_name=gurobi_sol_name, runtime=t
             )
-            solution.dump(model=lp._model, name=solution_name)
+            lp.add_solution_elements(solution)
+            solution.dump_basis(model=lp._model)
+            solution.dump_json(model=lp._model)
+            solution.dump_elements()
+            solution.dump(name=solution_name)
 
 
 def get_baseline_shifted_solutions(base_seed: int, topology_name: str, tm_model: str,
@@ -146,38 +150,38 @@ def test_warm_start(base_seed: int, topology_name: str, tm_model: str,
         raise NotImplementedError
     converter = get_traffic_converter(name=converter_model)(seed=converter_seed, params=converter_params)
     n = len(graph.edges)
-    # solver_params = UnregulatedADMMSolverParams(
-    #     NumberOfEpochs=100,
-    #     NumberOfNetworkUpdates=2,
-    #     PGDIterations=25,
-    #     Gamma=None,
-    #     Eta=10/(n**2),
-    #     Rho=10/(n**2),
-    #     NumWorkers=8,
-    #     UseVariableRho=False,
-    #     BigTheta=1e-2,
-    #     BigGamma=1e-4
-    # )
-    solver_params = RegularizedADMMSolverParams(
-        NumberOfEpochs=1,
-        NumberOfNetworkUpdates=3,
+    solver_params = UnregulatedADMMSolverParams(
+        NumberOfEpochs=100,
+        NumberOfNetworkUpdates=2,
         PGDIterations=25,
         Gamma=None,
-        Epsilon=1e-5,
         Eta=10/(n**2),
         Rho=10/(n**2),
-        # Eta=1e-3,
-        # Rho=1e-3,
         NumWorkers=8,
-        UseVariableRho=True,
-        BigTheta=1e-6,
-        BigGamma=1e-7
+        UseVariableRho=False,
+        BigTheta=1e-2,
+        BigGamma=1e-4
     )
+    # solver_params = RegularizedADMMSolverParams(
+    #     NumberOfEpochs=1,
+    #     NumberOfNetworkUpdates=3,
+    #     PGDIterations=25,
+    #     Gamma=None,
+    #     Epsilon=1e-5,
+    #     Eta=10/(n**2),
+    #     Rho=10/(n**2),
+    #     # Eta=1e-3,
+    #     # Rho=1e-3,
+    #     NumWorkers=8,
+    #     UseVariableRho=True,
+    #     BigTheta=1e-6,
+    #     BigGamma=1e-7
+    # )
     solver_params.ConvTol = convergence_tol
     solver_params.FeasibilityTol = feasibility_tol
     solution_times: List[float] = []
-    # with contextlib.closing(UnregulatedADMMLP(graph, tm, solver_params)) as lp:
-    with contextlib.closing(RegularizedADMMLP(graph, tm, solver_params)) as lp:
+    with contextlib.closing(UnregulatedADMMLP(graph, tm, solver_params)) as lp:
+    # with contextlib.closing(RegularizedADMMLP(graph, tm, solver_params)) as lp:
         lp.make_lp()
         # First, initiate to baseline solution
         lp.initialize_to(base_solution)
@@ -227,9 +231,9 @@ def test_warm_start(base_seed: int, topology_name: str, tm_model: str,
 
 
 if __name__ == '__main__':
-    get_baseline_solution(12345, 'Claranet', 'Uniform', convergence_tol=1e-4, feasibility_tol=1e-6)
-    get_baseline_solution(12345, 'Claranet', 'Uniform', convergence_tol=1e-4, feasibility_tol=1e-6, barrier=True, crossover=False)
-    get_baseline_solution(12345, 'Claranet', 'Uniform', convergence_tol=1e-4, feasibility_tol=1e-6, barrier=True, crossover=True)
+    # get_baseline_solution(12345, 'Claranet', 'Uniform', convergence_tol=1e-4, feasibility_tol=1e-6)
+    # get_baseline_solution(12345, 'Claranet', 'Uniform', convergence_tol=1e-4, feasibility_tol=1e-6, barrier=True, crossover=False)
+    # get_baseline_solution(12345, 'Claranet', 'Uniform', convergence_tol=1e-4, feasibility_tol=1e-6, barrier=True, crossover=True)
     # get_baseline_solution(12345, 'Interoute', 'Uniform', convergence_tol=1e-4, feasibility_tol=1e-6)
     # get_baseline_solution(12345, 'Interoute', 'Uniform', convergence_tol=1e-4, feasibility_tol=1e-6)
     DELTA = 0.08
@@ -240,10 +244,10 @@ if __name__ == '__main__':
     #     converter_seed=6789, convergence_tol=1e-4, feasibility_tol=1e-6, number_of_shifts=30,
     #     sol_name_postfix=f'{DELTA}'
     # )
-    # test_warm_start(
-    #     base_seed=12345, topology_name='Claranet', tm_model='Uniform',
-    #     converter_model='Uniform', 
-    #     converter_params=get_traffic_converter_params('Uniform')(delta_min=-DELTA, delta_max=DELTA),
-    #     converter_seed=6789, convergence_tol=1e-4, feasibility_tol=1e-6, number_of_shifts=1,
-    #     sol_name_postfix=f'{DELTA}'
-    # )
+    test_warm_start(
+        base_seed=12345, topology_name='Claranet', tm_model='Uniform',
+        converter_model='Uniform', 
+        converter_params=get_traffic_converter_params('Uniform')(delta_min=-DELTA, delta_max=DELTA),
+        converter_seed=6789, convergence_tol=1e-4, feasibility_tol=1e-6, number_of_shifts=1,
+        sol_name_postfix=f'{DELTA}'
+    )

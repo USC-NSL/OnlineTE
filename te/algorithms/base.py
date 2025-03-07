@@ -11,6 +11,23 @@ from te.algorithms import SOLUTION_DIR
 from te.traffic_models.base import TrafficMatrixBase, Commodity
 
 
+TE_SOLUTION_POSTFIX = '.tesol'
+SOLUTION_ELEMENTS_POSTFIX = '.gurobi.elems'
+JSON_SOLUTION_POSTFIX = '.gurobi.json'
+SIMPLEX_BASIS_POSTFIX = '.gurobi.bas'
+
+
+def with_postfix(name: str, postfix: str) -> str:
+    if not name.endswith(postfix):
+        return name + postfix
+    return name
+
+as_te_solution_name = lambda name: with_postfix(name, TE_SOLUTION_POSTFIX)
+as_solution_elements_name = lambda name: with_postfix(name, SOLUTION_ELEMENTS_POSTFIX)
+as_json_solution_name = lambda name: with_postfix(name, JSON_SOLUTION_POSTFIX)
+as_simplex_basis_name = lambda name: with_postfix(name, SIMPLEX_BASIS_POSTFIX)
+
+
 class SolverParams(ABC):
     LINE = "+" + "-"*65 + "+"
     PRINT_FORMAT = "| {:^30} : {:^30} |"
@@ -41,6 +58,31 @@ class SolverParams(ABC):
         ] + [self.LINE])
 
 
+@dataclass(frozen=True)
+class GurobiSolutionElementBase(ABC):
+    """Generic contrainer for Gurobi solution elements"""
+    name: str      # Variable(s) name
+    value: Any     # Variable(s) value
+
+    @classmethod
+    @abstractmethod
+    def type(self) -> str:
+        """Type of this variable"""
+    
+    @property
+    @abstractmethod
+    def str_value(self) -> str:
+        """Variable value to a string"""
+
+    @classmethod
+    @abstractmethod
+    def parse(cls, string: str):
+        """Parse a string into an instance of this class"""
+    
+    def __str__(self) -> str:
+        return f'{self.name}@{self.type()}:\n{self.str_value}'
+
+
 @dataclass
 class GurobiSolverParams(SolverParams):
     Method: int = te.constants.DEFAULT_SOLVER_METHOD
@@ -69,6 +111,14 @@ class TrafficEngineeringLPSolution(ABC):
         """
         Regenerate the graph and traffic matrix associated with this solution
         """
+    
+    @abstractmethod
+    def add_solution_element(self, element, name: str):
+        """Add a solution element to this TE solution instance"""
+    
+    @abstractmethod
+    def get_gurobi_solution_element_by_name(self, name: str) -> GurobiSolutionElementBase:
+        """Get a Gurobi solution element by name"""
 
 
 class TrafficEngineeringLP(ABC):
@@ -175,4 +225,10 @@ class TrafficEngineeringLP(ABC):
     def update_traffic_matrix(self, tm: TrafficMatrixBase):
         """
         Update the current traffic matrix and re-initialize the model
+        """
+    
+    @abstractmethod
+    def add_solution_elements(self, solution: TrafficEngineeringLPSolution):
+        """
+        Add solution elements to a given TE solution instance
         """

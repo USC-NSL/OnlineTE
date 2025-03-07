@@ -8,9 +8,8 @@ from multiprocessing import get_context
 from typing import List, Tuple, Optional
 from dataclasses import dataclass
 from gurobipy import GRB, GurobiError
-from utils.get_pypy import get_pypy_interpreter_path
 from te.algorithms.base import TrafficEngineeringLP, GurobiSolverParams, SolverParams
-from te.algorithms.solution import GurobiEdgeBasedMinimizeMaximumUtilitySolution
+from te.algorithms.solution import GurobiEdgeBasedMinimizeMaximumUtilitySolution, tuple_dict_to_np_array
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
 from te.algorithms.sub_algorithms.pgd import (do_iterative_plain_pgd, do_iterative_pgd_with_exact_line_search,
                                               do_block_plain_pgd, do_block_pgd_with_exact_line_search)
@@ -18,7 +17,7 @@ from topologies.utils import (get_edge_indexing, get_graph_M_matrix,
                               get_adjacency_null_space, get_feasible_flow_assignment)
 from te.algorithms.utils import (check_capacity_constraint, optimize_or_scream, make_model, 
                                  get_solution_maximum_utilization, as_fail,
-                                 careful_norm, careful_norm_squared, all_elements_within_threshold)
+                                 careful_norm, careful_norm_squared)
 
 
 @dataclass
@@ -710,79 +709,86 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         self._commodity_list = traffic_to_commodity(tm)
         self._set_initial_feasible_solution()
     
-    @staticmethod
-    def do_pgd_with_exact_line_search_for_optimal_lambda(x_k_0: np.ndarray, nnt: np.ndarray, n: np.ndarray, Y_t: np.ndarray, 
-                                                         thresh: float, n_iter: int) -> np.ndarray:
-        num_edges, _ = np.shape(n)
+    # @staticmethod
+    # def do_pgd_with_exact_line_search_for_optimal_lambda(x_k_0: np.ndarray, nnt: np.ndarray, n: np.ndarray, Y_t: np.ndarray, 
+    #                                                      thresh: float, n_iter: int) -> np.ndarray:
+    #     num_edges, _ = np.shape(n)
 
-        lambda_k = np.zeros((num_edges,))
-        big_c = x_k_0 + n @ Y_t
-        big_lambda = nnt @ big_c
-        norm_1 = 0.5 * careful_norm_squared(big_c)
-        norm_2 = careful_norm_squared(n.T @ big_c)
+    #     lambda_k = np.zeros((num_edges,))
+    #     big_c = x_k_0 + n @ Y_t
+    #     big_lambda = nnt @ big_c
+    #     norm_1 = 0.5 * careful_norm_squared(big_c)
+    #     norm_2 = careful_norm_squared(n.T @ big_c)
 
-        def get_alpha(current_lambda):
-            norm = careful_norm_squared(n.T @ current_lambda)
-            dot = np.dot(current_lambda, big_lambda)
-            return (norm + 1.5 * dot + norm_1) / (norm + norm_2 + 2 * dot)
+    #     def get_alpha(current_lambda):
+    #         norm = careful_norm_squared(n.T @ current_lambda)
+    #         dot = np.dot(current_lambda, big_lambda)
+    #         return (norm + 1.5 * dot + norm_1) / (norm + norm_2 + 2 * dot)
 
-        i = 0
-        while i < n_iter:
-            lambda_k_old = lambda_k
-            grad = nnt @ lambda_k + big_c
-            alpha = get_alpha(lambda_k_old)
-            lambda_k = np.clip(lambda_k_old - alpha * grad, a_min=0, a_max=None)
-            if careful_norm(lambda_k - lambda_k_old) < thresh:
-                break
-            i += 1
-        return lambda_k
+    #     i = 0
+    #     while i < n_iter:
+    #         lambda_k_old = lambda_k
+    #         grad = nnt @ lambda_k + big_c
+    #         alpha = get_alpha(lambda_k_old)
+    #         lambda_k = np.clip(lambda_k_old - alpha * grad, a_min=0, a_max=None)
+    #         if careful_norm(lambda_k - lambda_k_old) < thresh:
+    #             break
+    #         i += 1
+    #     return lambda_k
 
-    def get_optimal_lambda(self):
-        K = len(self._commodity_list)
-        GAMMA = self._solver_params.Gamma
-        assert GAMMA is None
-        PGD_ITERS = self._solver_params.PGDIterations
-        PGD_CONV_TOL = self._solver_params.PGDConvTol
-        NULL_M = self._NULL_M
-        NNT_M = self._NNT_M
-        Y_TK = self._Y_tk
-        X_EK_START = self._X_ek_start
+    # def get_optimal_lambda(self):
+    #     K = len(self._commodity_list)
+    #     GAMMA = self._solver_params.Gamma
+    #     assert GAMMA is None
+    #     PGD_ITERS = self._solver_params.PGDIterations
+    #     PGD_CONV_TOL = self._solver_params.PGDConvTol
+    #     NULL_M = self._NULL_M
+    #     NNT_M = self._NNT_M
+    #     Y_TK = self._Y_tk
+    #     X_EK_START = self._X_ek_start
 
-        def pgd_iterator():
-            for k in range(K):
-                yield (X_EK_START[:, k], NNT_M, NULL_M, Y_TK[:, k], PGD_CONV_TOL, PGD_ITERS)
+    #     def pgd_iterator():
+    #         for k in range(K):
+    #             yield (X_EK_START[:, k], NNT_M, NULL_M, Y_TK[:, k], PGD_CONV_TOL, PGD_ITERS)
 
-        obj = 0
-        for k, lambda_k in enumerate(self.proc_pool.starmap(self.do_pgd_with_exact_line_search_for_optimal_lambda, pgd_iterator())):
-            self._lambda_ek[:, k] = lambda_k
-            obj += (0.5 * careful_norm_squared(NULL_M.T @ lambda_k) + np.dot(lambda_k, X_EK_START[:, k] + NULL_M @ Y_TK[:, k]))
+    #     obj = 0
+    #     for k, lambda_k in enumerate(self.proc_pool.starmap(self.do_pgd_with_exact_line_search_for_optimal_lambda, pgd_iterator())):
+    #         self._lambda_ek[:, k] = lambda_k
+    #         obj += (0.5 * careful_norm_squared(NULL_M.T @ lambda_k) + np.dot(lambda_k, X_EK_START[:, k] + NULL_M @ Y_TK[:, k]))
     
     def initialize_to(self, solution: GurobiEdgeBasedMinimizeMaximumUtilitySolution):
         T = self._T
         NULL_M = self._NULL_M
-        assignments, u = solution.get_vars()
-        print(f"Target Utilization: {u}")
-        Xo_e = np.sum(assignments, axis=1)
+        RHO = self._solver_params.Rho * self._rho_coeff
+        ETA = self._solver_params.Eta * self._eta_coeff
+        utility = solution.get_gurobi_solution_element_by_name('utility')
+        assignments = solution.get_gurobi_solution_element_by_name('assignments')
+        capacity_constraints = solution.get_gurobi_solution_element_by_name('capacity_constraints')
+        non_negativity_constraints = solution.get_gurobi_solution_element_by_name('non_negativity_constraints')
+        print(f"Target Utilization: {utility.value}")
         # Both just vectors of length `n`
         assert self._Xo_e is not None
+        self._X_ek = tuple_dict_to_np_array(assignments)
+        Xo_e = np.sum(self._X_ek, axis=1)
         self._model_controller.update()
         self._Zo_e = np.copy(Xo_e)
         self._Zo_e_old = np.copy(Xo_e)
         self._Xo_e_sol = np.copy(Xo_e)
-        self._X_ek = assignments
         self._Y_tk = NULL_M.T @ (self._X_ek - self._X_ek_start)
         self._Y_bar_t = np.average(self._Y_tk, axis=1)
         self._P_bar_t = np.copy(self._Y_bar_t)
         self._Y_bar_t_old = np.copy(self._Y_bar_t)
         self._P_bar_t_old = np.copy(self._Y_bar_t)
         self._C_tk_old = np.copy(self._Y_tk)
-        self.get_optimal_lambda()
-        self._r_e = np.zeros_like(Xo_e)
-        self._r_e_old = np.zeros_like(Xo_e)
-        self._u_t = np.zeros(shape=(T,))
+        self._lambda_ek = tuple_dict_to_np_array(non_negativity_constraints)
+        self._r_e = np.array(capacity_constraints.value) / RHO
+        print(self._r_e)
+        self._r_e_old = np.zeros_like(self._r_e)
+        self._u_t = NULL_M.T @ np.average(self._lambda_ek, axis=1) / ETA
+        print(self._u_t)
 
         # Now, optimize the controller model
-        self._target_u = u
+        self._target_u = utility.value
         self._update_controller_objective()
         optimize_or_scream(self._model_controller)
         print("Finished warm start optimization problem")
@@ -795,8 +801,12 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         
         self._objective_trace = []
         self._objective_gap_trace = []
+        raise ValueError
     
     def set_target(self, solution: GurobiEdgeBasedMinimizeMaximumUtilitySolution):
-        _, u = solution.get_vars()
+        u = solution.get_gurobi_solution_element_by_name('utility').value
         self._target_u = u
+    
+    def add_solution_elements(self, solution):
+        raise NotImplementedError
 

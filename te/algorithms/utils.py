@@ -434,3 +434,5 @@ def test_mlu(lp_cls: Type[TrafficEngineeringLP], graph: nx.DiGraph, tm: TrafficM
             print(as_info(f"Solved in {str(round(t, 2))} seconds"))
             print(as_info(f"Final objective value: {str(round(lp.objective_value, 4))}"))
             print(as_info(f"Actual utilization: {str(round(get_solution_maximum_utilization(lp.assignments, lp.graph), 4))}"))
+            print(lp._r_e)
+            print(lp._u_t)

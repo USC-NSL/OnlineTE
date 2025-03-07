@@ -4,93 +4,181 @@ import dataclasses
 import numpy as np
 import gurobipy as gp
 import networkx as nx
+from functools import singledispatch
 from dataclasses import dataclass
-from abc import ABC, abstractmethod
-from typing import Any, Tuple, Optional, List
+from typing import Any, Tuple, Optional, List, Dict, Type, Union
 from te.algorithms import SOLUTION_DIR
 from topologies.utils import load_zoo_topology, set_edge_capacity_to
-from te.algorithms.utils import as_warning
+from te.algorithms.utils import as_warning, as_info
 from te.traffic_models import get_traffic_model, get_traffic_model_params, get_traffic_converter, get_traffic_converter_params
 from te.traffic_models.base import TrafficMatrixBase, TrafficMatrixConverterBase
-from te.algorithms.base import TrafficEngineeringLPSolution
+from te.algorithms.base import (
+    as_te_solution_name, as_json_solution_name, as_solution_elements_name, as_simplex_basis_name, 
+    TrafficEngineeringLPSolution, GurobiSolutionElementBase)
 
 
-key_to_str = lambda key: ','.join([str(item) for item in key])
+END_TOKEN = '----'
 
 
-class GurobiSolutionString(ABC):
-    @property
-    @abstractmethod
-    def value(self) -> str:
-        """The value of this variable as a whole"""
-    
-    @property
-    @abstractmethod
-    def name(self) -> str:
-        """The name of this variable"""
-    
+def get_name_type_value(string: str) -> Tuple[str, str, str]:
+    name, rest = string.split('@', maxsplit=1)
+    type, value = rest.split(':\n', maxsplit=1)
+    return name, type, value
+
+
+def str_to_tuple_of_ints(string: str) -> Tuple:
+    number_strings = string.replace('[', '').replace(']', '').split(',')
+    return tuple([int(num) for num in number_strings])
+
+
+def line_to_key_value(line: str) -> Tuple[Tuple, float]:
+    key_val_string = line.strip().split('=', maxsplit=1)
+    key = str_to_tuple_of_ints(key_val_string[0])
+    value = float(key_val_string[1])
+    return key, value
+
+
+"""To quickly get solution elements based on the type name"""
+_ELEMS: Dict[str, GurobiSolutionElementBase] = dict()
+
+
+def solution_element(cls: Type[GurobiSolutionElementBase]) -> GurobiSolutionElementBase:
+    """Decorator that registers a solution element"""
+    global _ELEMS
+
+    assert issubclass(cls, GurobiSolutionElementBase)
+    # Turn the class into a frozen dataclass
+    frozen_cls = dataclass(cls, frozen=True)
+    tpe = cls.type()
+    assert tpe not in _ELEMS
+    _ELEMS[tpe] = frozen_cls
+
+    return frozen_cls
+
+
+@solution_element
+class GurobiVarSolutionElement(GurobiSolutionElementBase):
+    value: float
+
     @classmethod
-    @abstractmethod
-    def type(self) -> str:
-        """Type of this variable"""
-    
-    def __str__(self) -> str:
-        return f'{self.name}@{self.type}:\n{self.value}\n'
-
-
-@dataclass
-class GurobiVarString(GurobiSolutionString):
-    _name: str
-    _value: str
-
-    @property
-    def value(self) -> str:
-        return f'{self._value}\n'
-
-    @property
-    def name(self) -> str:
-        return self._name
-    
-    @classmethod
-    @abstractmethod
     def type(self):
-        return 'Var'
-
-
-@dataclass
-class GurobiTupleDictString(GurobiSolutionString):
-    _name: str
-    _keys: List[str]
-    _values: List[str]
-
-    def __post_init__(self):
-        assert len(self._keys) == len(self._values)
-
+        return 'GurobiVar'
+    
     @property
-    def value(self) -> str:
-        return '\n'.join([f'[{k}]={v}' for k, v in zip(self._keys, self._values)]) + '\n'
-
-    @property
-    def name(self) -> str:
-        return self._name
+    def str_value(self) -> str:
+        return str(self.value)
     
     @classmethod
-    @abstractmethod
+    def parse(cls, string: str):
+        name, type, value = get_name_type_value(string)
+        assert type == cls.type()
+        return cls(name, float(value))
+
+
+@solution_element
+class GurobiTupleDictSolutionElement(GurobiSolutionElementBase):
+    value: Dict[Tuple, float]
+    
+    @classmethod
     def type(self):
-        return 'TupleDict'
+        return 'GurobiTupleDict'
+    
+    @property
+    def str_value(self) -> str:
+        return '\n'.join([f'[{",".join([str(item) for item in k])}]={v}' for k, v in self.value.items()])
+    
+    @classmethod
+    def parse(cls, string: str):
+        name, type, value = get_name_type_value(string)
+        assert type == cls.type()
+        return cls(name, dict([line_to_key_value(line) for line in value.split('\n')]))
 
 
-def var_str_from_sol(sol: gp.Var, name: str) -> GurobiVarString:
-    return GurobiVarString(name, str(sol.X))
+@solution_element
+class GurobiDualVariableSolutionElement(GurobiSolutionElementBase):
+    value: float
+    
+    @classmethod
+    def type(self):
+        return 'GurobiDualVar'
+
+    @property
+    def str_value(self) -> str:
+        return str(self.value)
+
+    @classmethod
+    def parse(cls, string: str):
+        name, type, value = get_name_type_value(string)
+        assert type == cls.type()
+        return cls(name, float(value))
 
 
-def tupledict_str_from_sol(sol: gp.tupledict, name: str) -> GurobiTupleDictString:
-    keys = []
-    values = []
-    for k in sol.keys():
-        keys.append(key_to_str(k))
-        values.append(str(sol[k].X))
-    return GurobiTupleDictString(name, keys, values)
+@solution_element
+class GurobiDualVariableListSolutionElement(GurobiSolutionElementBase):
+    value: List[float]
+    
+    @classmethod
+    def type(self):
+        return 'GurobiDualVarList'
+
+    @property
+    def str_value(self) -> str:
+        return '\n'.join([str(item) for item in self.value])
+
+    @classmethod
+    def parse(cls, string: str):
+        name, type, value = get_name_type_value(string)
+        assert type == cls.type()
+        return cls(name, [float(num_str) for num_str in value.split('\n')])
+
+
+@solution_element
+class GurobiDualVariableTupleDictSolutionElement(GurobiSolutionElementBase):
+    value: Dict[Tuple, float]
+    
+    @classmethod
+    def type(self):
+        return 'GurobiDualVarTupleDict'
+
+    @property
+    def str_value(self) -> str:
+        return '\n'.join([f'[{",".join([str(item) for item in k])}]={v}' for k, v in self.value.items()])
+
+    @classmethod
+    def parse(cls, string: str):
+        name, type, value = get_name_type_value(string)
+        assert type == cls.type()
+        return cls(name, dict([line_to_key_value(line) for line in value.split('\n')]))
+
+
+@singledispatch
+def from_sol(sol, _: str) -> GurobiSolutionElementBase:
+    raise ValueError(f'Unkown solution type: {type(sol)}')
+
+
+@from_sol.register
+def _(sol: gp.Var, name: str) -> GurobiVarSolutionElement:
+    return GurobiVarSolutionElement(name, sol.X)
+
+
+@from_sol.register
+def _(sol: gp.tupledict, name: str) -> GurobiTupleDictSolutionElement:
+    return GurobiTupleDictSolutionElement(name, {k: sol[k].X for k in sol.keys()})
+
+
+@from_sol.register
+def _(sol: gp.Constr, name: str) -> GurobiDualVariableSolutionElement:
+    return GurobiDualVariableSolutionElement(name, sol.Pi)
+
+
+@from_sol.register(list)
+def _(sol: List[gp.Constr], name: str) -> GurobiDualVariableListSolutionElement:
+    return GurobiDualVariableListSolutionElement(name, [c.Pi for c in sol])
+
+
+@from_sol.register(dict)
+def _(sol: Dict[Tuple, gp.Constr], name: str) -> GurobiDualVariableTupleDictSolutionElement:
+    return GurobiDualVariableTupleDictSolutionElement(name, {k: v.Pi for k, v in sol.items()})
 
 
 class GurobiEdgeBasedMinimizeMaximumUtilitySolution(TrafficEngineeringLPSolution):
@@ -125,49 +213,81 @@ class GurobiEdgeBasedMinimizeMaximumUtilitySolution(TrafficEngineeringLPSolution
             if gurobi_sol_path is not None \
             else f'$$SOLDIR/{gurobi_sol_name}'
         self.runtime = runtime
+        self.solution_elements: List[GurobiSolutionElementBase] = []
     
-    def initiate_model(self, model: gp.Model):
-        model.reset()
-        model.read(self.bas_path)
+    def add_solution_element(self, element, name: str):
+        self.solution_elements.append(from_sol(element, name))
     
     @property
     def bas_path(self):
         if self.gurobi_sol_path.startswith('$$SOLDIR/'):
             rest = self.gurobi_sol_path.replace('$$SOLDIR/', '')
-            return os.path.join(SOLUTION_DIR, f'{rest}.gurobi.bas')
-        return f'{self.gurobi_sol_path}.gurobi.bas'
+            name = os.path.join(SOLUTION_DIR, f'{rest}.gurobi.bas')
+        else:
+            name = self.gurobi_sol_path
+        return as_simplex_basis_name(name)
     @property
     def sol_path(self):
         if self.gurobi_sol_path.startswith('$$SOLDIR/'):
             rest = self.gurobi_sol_path.replace('$$SOLDIR/', '')
-            return os.path.join(SOLUTION_DIR, f'{rest}.gurobi.json')
-        return f'{self.gurobi_sol_path}.gurobi.json'
+            name = os.path.join(SOLUTION_DIR, f'{rest}.gurobi.json')
+        else:
+            name = self.gurobi_sol_path
+        return as_json_solution_name(name)
+    @property
+    def elem_path(self):
+        if self.gurobi_sol_path.startswith('$$SOLDIR/'):
+            rest = self.gurobi_sol_path.replace('$$SOLDIR/', '')
+            name = os.path.join(SOLUTION_DIR, as_solution_elements_name(rest))
+        else:
+            name = self.gurobi_sol_path
+        return as_solution_elements_name(name)
 
-    def dump(self, model: gp.Model, name: str, path: str = None):
-        path = path if path is not None else os.path.join(SOLUTION_DIR, name)
-        try:
-            model.write(self.bas_path)
-        except gp.GurobiError:
-            print(as_warning("Model did not use Simplex. Cannot write a basis file!"))
-        model.write(self.sol_path)
+    def dump(self, name: str, path: str = None):
+        path = as_te_solution_name(path if path is not None else os.path.join(SOLUTION_DIR, name))
         with open(path, 'wb') as f:
             d = self.__dict__
+            d.pop('solution_elements')
             d.update({
                 'tm_model_params': dataclasses.asdict(self.tm_model_params)
             })
             f.write(json.dumps(d, indent=4).encode())
     
+    def dump_basis(self, model: gp.Model):
+        try:
+            model.write(self.bas_path)
+            print(as_info("Wrote out Simplex basis"))
+        except gp.GurobiError:
+            print(as_warning("Model did not use Simplex. Cannot write a basis file!"))
+    
+    def dump_json(self, model: gp.Model):
+        model.write(self.sol_path)
+        print(as_info("Wrote out JSON solution"))
+    
+    def dump_elements(self):
+        if len(self.solution_elements) == 0:
+            print(as_warning("No solution elements were provided!"))
+        else:
+            with open(self.elem_path, 'w') as f:
+                sep = '\n' + END_TOKEN + '\n'
+                f.write(sep.join([str(elem) for elem in self.solution_elements]) + sep)
+            print(as_info("Wrote out solution elements"))
+    
     @classmethod
     def load(cls, name: str, path: str = None):
         path = path if path is not None else os.path.join(SOLUTION_DIR, name)
         with open(path, 'rb') as f:
-            d = json.loads(f.read().decode())
+            d: Dict = json.loads(f.read().decode())
             d.update({
                 'tm_model_params': get_traffic_model_params(d['tm_model_name'])(**d['tm_model_params'])
             })
             return cls(**d)
+
+    def initiate_model_from_basis(self, model: gp.Model):
+        model.reset()
+        model.read(self.bas_path)
     
-    def get_vars(self) -> Tuple[np.ndarray, float]:
+    def get_vars_from_json(self) -> Tuple[np.ndarray, float]:
         with open(self.sol_path) as f:
             d = json.loads(f.read())['Vars']
             graph = load_zoo_topology(name=self.topology_name)
@@ -186,12 +306,44 @@ class GurobiEdgeBasedMinimizeMaximumUtilitySolution(TrafficEngineeringLPSolution
                     assert name == 'U'
                     u = item['X']
         return assignments, u
+    
+    def _load_element_strings(self) -> List[str]:
+        holder = ''
+        element_strings = []
+        with open(self.elem_path) as f:
+            for line in f:
+                if END_TOKEN in line:
+                    element_strings.append(holder.strip())
+                    holder = ''
+                else:
+                    holder += line
+        return element_strings
+    
+    @staticmethod
+    def _parse_element_strings(element_strings: List[str]) -> List[GurobiSolutionElementBase]:
+        out = []
+        for elem_string in element_strings:
+            _, type, _ = get_name_type_value(elem_string)
+            cls = _ELEMS[type]
+            out.append(cls.parse(elem_string))
+        return out
+
+    def load_solution_elements(self):
+        self.solution_elements = self._parse_element_strings(self._load_element_strings())
 
     def regenerate(self) -> Tuple[nx.DiGraph, TrafficMatrixBase]:
         graph = load_zoo_topology(name=self.topology_name)
         set_edge_capacity_to(graph=graph, capacity=self.capacity)
         tm = get_traffic_model(self.tm_model_name)(seed=self.seed, params=self.tm_model_params)
         return (graph, tm)
+
+    def get_gurobi_solution_element_by_name(self, name: str) -> GurobiSolutionElementBase:
+        if len(self.solution_elements) == 0:
+            self.load_solution_elements()
+        for elem in self.solution_elements:
+            if elem.name == name:
+                return elem
+        raise ValueError
 
 
 class GurobiEdgeBasedMinimizeMaximumUtilityShiftedSolution(GurobiEdgeBasedMinimizeMaximumUtilitySolution):
@@ -236,6 +388,14 @@ class GurobiEdgeBasedMinimizeMaximumUtilityShiftedSolution(GurobiEdgeBasedMinimi
         for _ in range(self.iteration + 1):
             tm = converter.convert(tm)
         return (graph, tm)
+    
+    def get_gurobi_solution_element_by_name(self, name):
+        if len(self.solution_elements) == 0:
+            self.load_solution_elements()
+        for elem in self.solution_elements:
+            if elem.name == name:
+                return elem
+        raise ValueError
 
 
 class EdgeBasedMinimizeMaximumUtilitySolution(TrafficEngineeringLPSolution):
@@ -248,19 +408,47 @@ class EdgeBasedMinimizeMaximumUtilitySolution(TrafficEngineeringLPSolution):
         self.tm_model_params = tm_model_params
         self.assignments = assignments
         self.runtime = runtime
+        self.solution_elements: List[GurobiSolutionElementBase] = []
     
     def regenerate(self) -> Tuple[nx.DiGraph, TrafficMatrixBase]:
         graph = load_zoo_topology(name=self.topology_name)
         set_edge_capacity_to(graph=graph, capacity=self.capacity)
         tm = get_traffic_model(self.tm_model_name)(seed=self.seed, params=self.tm_model_params)
         return (graph, tm)
+    
+    def add_solution_element(self, element, name: str):
+        self.solution_elements.append(from_sol(element, name))
+
+    def get_gurobi_solution_element_by_name(self, name: str) -> GurobiSolutionElementBase:
+        for elem in self.solution_elements:
+            if elem.name == name:
+                return elem
+        raise ValueError
+
+
+def tuple_dict_to_np_array(element: Union[GurobiTupleDictSolutionElement, GurobiDualVariableTupleDictSolutionElement]) -> np.ndarray:
+    tpdict = element.value
+    keys_iter = iter(tpdict)
+    shape = next(keys_iter)
+    while True:
+        try:
+            key = next(keys_iter)
+            shape = tuple(max(a, b) for a, b in zip(shape, key))
+        except StopIteration:
+            shape = tuple(item+1 for item in shape)
+            break
+    out = np.zeros(shape=shape)
+    for k, v in tpdict.items():
+        out[k] = v
+    return out
 
 
 if __name__ == '__main__':
-    from te.traffic_models.models import UniformTrafficMatrixParams
     SEED = 12345
-    TOPOLOGY_NAME = 'Interoute'
+    TOPOLOGY_NAME = 'Claranet'
     TM_MODEL = 'Uniform'
     SOLUTION_NAME = f'{TOPOLOGY_NAME}_{SEED}_{TM_MODEL}.tesol'
     solution = GurobiEdgeBasedMinimizeMaximumUtilitySolution.load(name=SOLUTION_NAME)
-    assignments, u = solution.get_vars()
+    assignments, u = solution.get_vars_from_json()
+    solution.load_solution_elements()
+    print(solution.solution_elements)

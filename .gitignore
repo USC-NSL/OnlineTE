@@ -8,3 +8,4 @@
 *.tesol
 *.gurobi.json
 *.gurobi.bas
+*.gurobi.elems

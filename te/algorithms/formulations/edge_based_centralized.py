@@ -2,14 +2,14 @@ import tqdm
 import gurobipy
 import numpy as np
 import networkx as nx
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 from collections import defaultdict
 from gurobipy import GRB, GurobiError
-from te.algorithms.base import TrafficEngineeringLP, SolverParams, GurobiSolverParams
+from te.algorithms.base import TrafficEngineeringLP, SolverParams, GurobiSolverParams, TrafficEngineeringLPSolution
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
 from topologies.utils import get_edge_indexing
 from te.algorithms.solution import GurobiEdgeBasedMinimizeMaximumUtilitySolution
-from te.algorithms.utils import check_centralized_flow_conservation, check_capacity_constraint, make_model, get_solution_maximum_utilization
+from te.algorithms.utils import check_centralized_flow_conservation, check_capacity_constraint, make_model
 
 
 class CentralizedEdgeBasedLP(TrafficEngineeringLP):
@@ -25,6 +25,7 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
         self._utility: gurobipy.Var = None
         self._objective: gurobipy.LinExpr = None
         self._commodity_list: List[Commodity] = traffic_to_commodity(self._traffic)
+        self._non_negativity_constraints: Dict[Tuple, gurobipy.Constr] = None
         self._demand_constraints: List[Tuple[gurobipy.Constr, gurobipy.Constr]] = None
         self._capacity_constraints: gurobipy.tupledict = None
         self._X_ek: np.ndarray = None
@@ -75,7 +76,7 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
 
     def initialize_to(self, solution: GurobiEdgeBasedMinimizeMaximumUtilitySolution):
         assert self._model is not None and self._flows is not None
-        solution.initiate_model(self._model)
+        solution.initiate_model_from_basis(self._model)
 
     def _set_X_ek(self):
         K = len(self._commodity_list)
@@ -107,7 +108,7 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
         self._model = MODEL
 
         # This implicitly encodes the condition for `X_{ke} >= 0`
-        self._flows = MODEL.addVars(N, K, lb=0.0, vtype=GRB.CONTINUOUS, name='X')
+        self._flows = MODEL.addVars(N, K, lb=-float('inf'), vtype=GRB.CONTINUOUS, name='X')
         # Link utilization upper bound, may not be important based on what we need
         self._utility = MODEL.addVar(lb=0.0, ub=1.0, vtype=GRB.CONTINUOUS, name='U')
     
@@ -127,10 +128,14 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
         capacity_constraints: List[gurobipy.Constr] = []
         pbar = tqdm.tqdm(total=NUM_EDGES)
         for e, (_, _, c_e) in enumerate(GRAPH.edges.data('capacity')):
-            scaled_total_flow = gurobipy.LinExpr()
+            # scaled_total_flow = gurobipy.LinExpr()
+            # for k in range(K):
+            #     scaled_total_flow.addTerms(1/c_e, FLOWS[e, k])
+            # capacity_constraints.append(MODEL.addConstr(scaled_total_flow <= UTILITY))
+            total_flow = gurobipy.LinExpr()
             for k in range(K):
-                scaled_total_flow.addTerms(1/c_e, FLOWS[e, k])
-            capacity_constraints.append(MODEL.addConstr(scaled_total_flow <= UTILITY))
+                total_flow.addTerms(1, FLOWS[e, k])
+            capacity_constraints.append(MODEL.addConstr(total_flow <= UTILITY * c_e))
             pbar.update()
         pbar.close()
         self._capacity_constraints = capacity_constraints
@@ -192,6 +197,11 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
             demand_constraints.append((source_constraint, destination_constraint))
             pbar.update()
         self._demand_constraints = demand_constraints
+
+        """
+        Non-negativity constraints
+        """
+        self._non_negativity_constraints = {k: MODEL.addConstr(0 <= v) for k, v in FLOWS.items()}
 
     def _add_objective(self):
         assert self._model is not None and \
@@ -287,3 +297,9 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
         
         # Record the new TM
         self._traffic = tm
+    
+    def add_solution_elements(self, solution: TrafficEngineeringLPSolution):
+        solution.add_solution_element(self._utility, 'utility')
+        solution.add_solution_element(self._flows, 'assignments')
+        solution.add_solution_element(self._capacity_constraints, 'capacity_constraints')
+        solution.add_solution_element(self._non_negativity_constraints, 'non_negativity_constraints')
