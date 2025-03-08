@@ -2,6 +2,7 @@ from te.algorithms.base import GurobiSolverParams
 from te.algorithms.formulations.edge_based_centralized import CentralizedEdgeBasedLP
 from te.algorithms.formulations.edge_based_regularized_admm import RegularizedADMMLP, RegularizedADMMSolverParams
 from te.algorithms.formulations.edge_based_unregulated_admm import UnregulatedADMMLP, UnregulatedADMMSolverParams
+from te.algorithms.formulations.edge_based_unregulated_admm_gpu import GPUUnregulatedADMMLP, GPUUnregulatedADMMSolverParams
 from te.algorithms.utils import test_mlu
 from topologies.utils import get_uniform_tm_problem_with_capacity_heuristic
 
@@ -64,10 +65,10 @@ def unregulated_admm_test(topology: str, seed: int, **kwargs):
         # Eta=1e-4,
         # Rho=1e-5,
         Eta=10/n**2,
-        Rho=1/n**2,
+        Rho=1.125/n**2,
         PGDConvTol=1e-4,
         NumWorkers=8,
-        UseVariableRho=False,
+        UseVariableRho=True,
         BigTheta=1e-6,
         BigGamma=1e-7,
         BlockMode=True,
@@ -77,12 +78,36 @@ def unregulated_admm_test(topology: str, seed: int, **kwargs):
              feasibility_ratio=FEASIBILITY_RATIO, **kwargs)
 
 
+def gpu_unregulated_admm_test(topology: str, seed: int, **kwargs):
+    c, graph, tm = get_uniform_tm_problem_with_capacity_heuristic(topology, seed)
+    print(f"Network link capacity is: {str(round(c, 2))}")
+    n = graph.number_of_nodes()
+
+    solver_params = GPUUnregulatedADMMSolverParams(
+        NumberOfEpochs=100,
+        NumberOfNetworkUpdates=2,
+        PGDIterations=2,
+        Gamma=0.5,
+        Eta=10/n**2,
+        Rho=1.125/n**2,
+        PGDConvTol=1e-4,
+        UseVariableRho=True,
+        BigTheta=1e-6,
+        BigGamma=1e-7,
+        CheckBlockConv=False
+    )
+    test_mlu(GPUUnregulatedADMMLP, graph, tm, solver_params, feasibility_tol=FEASIBILITY_TOL, 
+             feasibility_ratio=FEASIBILITY_RATIO, **kwargs)
+
+
 if __name__ == '__main__':
     # centralized_test(SMALL_MEDIUM_TOPOLOGY, RNG_SEED)
     # centralized_test(MEDIUM_TOPOLOGY, RNG_SEED)
-    centralized_test(HUGE_TOPOLOGY, RNG_SEED)
+    # centralized_test(HUGE_TOPOLOGY, RNG_SEED)
     # regularized_admm_test(HUGE_TOPOLOGY, RNG_SEED)
     # regularized_admm_test(SMALL_TOPOLOGY, RNG_SEED)
     # unregulated_admm_test(SMALL_TOPOLOGY, RNG_SEED, trace_out_path=None)
     # unregulated_admm_test(SMALL_MEDIUM_TOPOLOGY, RNG_SEED, trace_out_path=None)
     # unregulated_admm_test(MEDIUM_TOPOLOGY, RNG_SEED)
+    # gpu_unregulated_admm_test(MEDIUM_TOPOLOGY, RNG_SEED)
+    gpu_unregulated_admm_test(HUGE_TOPOLOGY, RNG_SEED)

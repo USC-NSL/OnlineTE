@@ -1,5 +1,6 @@
 import os
 import json
+import cupy as cp
 import numpy as np
 import networkx as nx
 from scipy.linalg import null_space
@@ -308,6 +309,23 @@ def get_feasible_flow_assignment(graph: nx.DiGraph, commodities: List[Commodity]
             edge = (path[i], path[i+1])
             X_KE[EDGE_INDEXING[edge], k] = DEMAND
     return X_KE
+
+
+# def get_feasible_flow_assignment_gpu(graph: nx.DiGraph, commodities: List[Commodity]):
+#     N = len(graph.edges())
+#     K = len(commodities)
+#     X_KE = cp.zeros(shape=(N, K))
+#     EDGE_INDEXING = get_edge_indexing(graph)
+    
+#     for k, commodity in enumerate(commodities):
+#         SOURCE = commodity.source
+#         DESTINATION = commodity.destination
+#         DEMAND = commodity.demand
+#         path = nx.shortest_path(graph, SOURCE, DESTINATION)
+#         for i in range(len(path) - 1):
+#             edge = (path[i], path[i+1])
+#             X_KE[EDGE_INDEXING[edge], k] = DEMAND
+#     return X_KE
 
 
 if __name__ == '__main__':

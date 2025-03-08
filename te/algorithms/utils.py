@@ -1,5 +1,6 @@
 import gurobipy
 import contextlib
+import cupy as cp
 import numpy as np
 import seaborn as sns
 import networkx as nx
@@ -397,26 +398,28 @@ def check_distributed_flow_conservation(
                     f"Commodity {k}: Node {v} --> Transit demand conservation does not hold: {fin_str} --> {fout_str}"
 
 
-all_elements_within_threshold = lambda x, thresh: np.all(np.abs(x) < thresh)
+all_elements_within_threshold = lambda x, thresh, mod: mod.all(mod.abs(x) < thresh)
 
 
 def careful_norm(x: np.ndarray, scaled: bool = False, axis: Optional[int] = None) -> float:
+    mod = cp.get_array_module(x)
     if scaled:
         scale_factor = np.sqrt(x.size)
-        if all_elements_within_threshold(x, te.constants.MINIMUM_NORM / scale_factor):
+        if all_elements_within_threshold(x, te.constants.MINIMUM_NORM / scale_factor, mod):
             return 0
-        return np.linalg.norm(x) / scale_factor
-    if all_elements_within_threshold(x, te.constants.MINIMUM_NORM) and axis is None:
+        return mod.linalg.norm(x) / scale_factor
+    if all_elements_within_threshold(x, te.constants.MINIMUM_NORM, mod) and axis is None:
         return 0
-    return np.linalg.norm(x, axis=axis)
+    return mod.linalg.norm(x, axis=axis)
 
 
 def careful_norm_squared(x: np.ndarray, axis: Optional[int] = None) -> float:
-    if all_elements_within_threshold(x, te.constants.MINIMUM_NORM) and axis is None:
+    mod = cp.get_array_module(x)
+    if all_elements_within_threshold(x, te.constants.MINIMUM_NORM, mod) and axis is None:
         return 0
     if axis is None:
-        return np.dot(x, x)
-    return np.linalg.norm(x, axis=axis) ** 2
+        return mod.dot(x, x)
+    return mod.linalg.norm(x, axis=axis) ** 2
 
 
 def test_mlu(lp_cls: Type[TrafficEngineeringLP], graph: nx.DiGraph, tm: TrafficMatrixBase, solver_params: SolverParams,
