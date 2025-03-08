@@ -260,3 +260,32 @@ def do_block_pgd_with_exact_line_search(lambda_block: np.ndarray, x_block_0: np.
     
     y_block = c_block + n.T @ converged_lambda_block
     return converged_lambda_block, y_block, total_iterations
+
+
+# def do_block_pgd_with_backtracing(lambda_block: np.ndarray, x_block_0: np.ndarray, nnt: np.ndarray, n: np.ndarray, c_block: np.ndarray, 
+#                                   gamma: float, thresh: Optional[float], n_iter: int) -> Tuple[np.ndarray, np.ndarray, int]:
+#     """
+#     Plain PGD with block operations, meaning that each step is done across the entire
+#     input matrix. Assuming that the matrix is not too massive, this performs much
+#     faster than the sequential method.
+#     """
+#     mod = cp.get_array_module(lambda_block)
+#     i = 0
+#     total_iterations = 0
+#     big_c_block = x_block_0 + n @ c_block
+#     number_of_converged_columns = 0
+#     number_of_commodities = lambda_block.shape[-1]
+#     converged_lambda_block = mod.zeros_like(lambda_block)
+#     while number_of_converged_columns < number_of_commodities:
+#         # Do a block descent
+#         lambda_block_old = mod.array(lambda_block)
+#         grad_block = nnt @ lambda_block_old + big_c_block
+#         lambda_block = mod.clip(lambda_block_old - gamma * grad_block, a_min=0, a_max=None)
+#         total_iterations += lambda_block.shape[-1]
+#         i += 1
+#         if i == n_iter:
+#             converged_lambda_block = lambda_block
+#             break
+    
+#     y_block = c_block + n.T @ converged_lambda_block
+#     return converged_lambda_block, y_block, total_iterations

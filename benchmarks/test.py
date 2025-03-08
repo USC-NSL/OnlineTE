@@ -84,12 +84,12 @@ def gpu_unregulated_admm_test(topology: str, seed: int, **kwargs):
     n = graph.number_of_nodes()
 
     solver_params = GPUUnregulatedADMMSolverParams(
-        NumberOfEpochs=100,
+        NumberOfEpochs=150,
         NumberOfNetworkUpdates=2,
         PGDIterations=2,
-        Gamma=0.5,
-        Eta=10/n**2,
-        Rho=1.125/n**2,
+        Gamma=1,
+        Eta=1/n**2,
+        Rho=1e-1/n**2,
         PGDConvTol=1e-4,
         UseVariableRho=True,
         BigTheta=1e-6,
@@ -109,5 +109,5 @@ if __name__ == '__main__':
     # unregulated_admm_test(SMALL_TOPOLOGY, RNG_SEED, trace_out_path=None)
     # unregulated_admm_test(SMALL_MEDIUM_TOPOLOGY, RNG_SEED, trace_out_path=None)
     # unregulated_admm_test(MEDIUM_TOPOLOGY, RNG_SEED)
-    # gpu_unregulated_admm_test(MEDIUM_TOPOLOGY, RNG_SEED)
-    gpu_unregulated_admm_test(HUGE_TOPOLOGY, RNG_SEED)
+    gpu_unregulated_admm_test(MEDIUM_TOPOLOGY, RNG_SEED, report_unsat=False)
+    # gpu_unregulated_admm_test(HUGE_TOPOLOGY, RNG_SEED)

@@ -1,3 +1,4 @@
+import time
 import gurobipy
 import contextlib
 import cupy as cp
@@ -438,3 +439,14 @@ def test_mlu(lp_cls: Type[TrafficEngineeringLP], graph: nx.DiGraph, tm: TrafficM
             print(as_info(f"Solved in {str(round(t, 2))} seconds"))
             print(as_info(f"Final objective value: {str(round(lp.objective_value, 4))}"))
             print(as_info(f"Actual utilization: {str(round(get_solution_maximum_utilization(lp.assignments, lp.graph), 4))}"))
+
+
+def show_runtime(name: str):
+    def inner(f):
+        def wrapper(*args, **kwargs):
+            start = time.time()
+            res = f(*args, **kwargs)
+            # print(as_info(f'Execution of {name} took: {str(round((time.time() - start) * 1000, 1))} ms'))
+            return res
+        return wrapper
+    return inner
