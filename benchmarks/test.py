@@ -80,9 +80,9 @@ def unregulated_admm_test(topology: str, seed: int, **kwargs):
 if __name__ == '__main__':
     # centralized_test(SMALL_MEDIUM_TOPOLOGY, RNG_SEED)
     # centralized_test(MEDIUM_TOPOLOGY, RNG_SEED)
-    # centralized_test(HUGE_TOPOLOGY, RNG_SEED)
+    centralized_test(HUGE_TOPOLOGY, RNG_SEED)
     # regularized_admm_test(HUGE_TOPOLOGY, RNG_SEED)
     # regularized_admm_test(SMALL_TOPOLOGY, RNG_SEED)
-    unregulated_admm_test(SMALL_TOPOLOGY, RNG_SEED, trace_out_path=None)
+    # unregulated_admm_test(SMALL_TOPOLOGY, RNG_SEED, trace_out_path=None)
     # unregulated_admm_test(SMALL_MEDIUM_TOPOLOGY, RNG_SEED, trace_out_path=None)
     # unregulated_admm_test(MEDIUM_TOPOLOGY, RNG_SEED)

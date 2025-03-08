@@ -38,7 +38,7 @@ method_to_str = {
 }
 
 
-def make_model(name: str, params: SolverParams, env: Optional[gurobipy.Env], **kwargs):
+def make_model(name: str, params: SolverParams, env: Optional[gurobipy.Env], verbose: bool = True, **kwargs):
     assert issubclass(params.__class__, GurobiSolverParams)
     model = gurobipy.Model(name=name, env=env)
     model.Params.Method = params.Method
@@ -58,12 +58,13 @@ def make_model(name: str, params: SolverParams, env: Optional[gurobipy.Env], **k
         for k, v in kwargs.items():
             setattr(model.Params, k, v)
 
-    print(as_bold(
-        "Created Gurobi Model With:\n"
-        f"\tMethod: {method_to_str[params.Method]}\n"
-        f"\tOptimality Tolerance (OptimalityTol/BarConvTol): {params.ConvTol}\n"
-        f"\tCosntraint Feasibility Tolerance (FeasibilityTol): {params.FeasibilityTol}\n"
-    ))
+    if verbose:
+        print(as_bold(
+            "Created Gurobi Model With:\n"
+            f"\tMethod: {method_to_str[params.Method]}\n"
+            f"\tOptimality Tolerance (OptimalityTol/BarConvTol): {params.ConvTol}\n"
+            f"\tCosntraint Feasibility Tolerance (FeasibilityTol): {params.FeasibilityTol}\n"
+        ))
 
     return model
 
@@ -434,5 +435,3 @@ def test_mlu(lp_cls: Type[TrafficEngineeringLP], graph: nx.DiGraph, tm: TrafficM
             print(as_info(f"Solved in {str(round(t, 2))} seconds"))
             print(as_info(f"Final objective value: {str(round(lp.objective_value, 4))}"))
             print(as_info(f"Actual utilization: {str(round(get_solution_maximum_utilization(lp.assignments, lp.graph), 4))}"))
-            print(lp._r_e)
-            print(lp._u_t)

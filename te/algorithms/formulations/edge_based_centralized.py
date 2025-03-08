@@ -21,11 +21,11 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
         self._solver_params: GurobiSolverParams = solver_params
         self._env: gurobipy.Env = None
         self._model: gurobipy.Model = None
-        self._flows: gurobipy.tupledict = None
+        self._flows: List[gurobipy.tupledict] = None
         self._utility: gurobipy.Var = None
         self._objective: gurobipy.LinExpr = None
         self._commodity_list: List[Commodity] = traffic_to_commodity(self._traffic)
-        self._non_negativity_constraints: Dict[Tuple, gurobipy.Constr] = None
+        # self._non_negativity_constraints: Dict[Tuple, gurobipy.Constr] = None
         self._demand_constraints: List[Tuple[gurobipy.Constr, gurobipy.Constr]] = None
         self._capacity_constraints: gurobipy.tupledict = None
         self._X_ek: np.ndarray = None
@@ -82,9 +82,9 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
         K = len(self._commodity_list)
         N = len(self._graph.edges)
         X_EK = np.ndarray(shape=(N, K))
-        for key, value in self._flows.items():
-            e, k = key
-            X_EK[e, k] = value.X
+        for k in range(K):
+            for e, v in self._flows[k].items():
+                X_EK[e, k] = v.X
         self._X_ek = X_EK
     
     def _make_variables(self):
@@ -108,7 +108,11 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
         self._model = MODEL
 
         # This implicitly encodes the condition for `X_{ke} >= 0`
-        self._flows = MODEL.addVars(N, K, lb=-float('inf'), vtype=GRB.CONTINUOUS, name='X')
+        self._flows = []
+        print("Adding commodity assignment variables")
+        for k in tqdm.tqdm(range(K)):
+            self._flows.append(MODEL.addVars(N, lb=0.0, vtype=GRB.CONTINUOUS, name=f'X_{k}'))
+            # self._flows.append(MODEL.addVars(N, K, lb=-float('inf'), vtype=GRB.CONTINUOUS, name='X'))
         # Link utilization upper bound, may not be important based on what we need
         self._utility = MODEL.addVar(lb=0.0, ub=1.0, vtype=GRB.CONTINUOUS, name='U')
     
@@ -134,7 +138,8 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
             # capacity_constraints.append(MODEL.addConstr(scaled_total_flow <= UTILITY))
             total_flow = gurobipy.LinExpr()
             for k in range(K):
-                total_flow.addTerms(1, FLOWS[e, k])
+                total_flow.addTerms(1, FLOWS[k][e])
+                # total_flow.addTerms(1, FLOWS[e, k])
             capacity_constraints.append(MODEL.addConstr(total_flow <= UTILITY * c_e))
             pbar.update()
         pbar.close()
@@ -174,8 +179,10 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
             flow_out = defaultdict(gurobipy.LinExpr)
             flow_in = defaultdict(gurobipy.LinExpr)
             for e, edge in enumerate(GRAPH.edges()):
-                flow_out[edge[0]].addTerms(1, FLOWS[e, k])
-                flow_in[edge[1]].addTerms(1, FLOWS[e, k])
+                # flow_out[edge[0]].addTerms(1, FLOWS[e, k])
+                # flow_in[edge[1]].addTerms(1, FLOWS[e, k])
+                flow_out[edge[0]].addTerms(1, FLOWS[k][e])
+                flow_in[edge[1]].addTerms(1, FLOWS[k][e])
             
             source_constraint = None
             destination_constraint = None
@@ -198,10 +205,10 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
             pbar.update()
         self._demand_constraints = demand_constraints
 
-        """
-        Non-negativity constraints
-        """
-        self._non_negativity_constraints = {k: MODEL.addConstr(0 <= v) for k, v in FLOWS.items()}
+        # """
+        # Non-negativity constraints
+        # """
+        # self._non_negativity_constraints = {k: MODEL.addConstr(0 <= v) for k, v in FLOWS.items()}
 
     def _add_objective(self):
         assert self._model is not None and \
@@ -247,11 +254,11 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
         assert (feasibility_tol is None) ^ (feasibility_ratio is None)
         PARAMS: GurobiSolverParams = self._solver_params
         check_centralized_flow_conservation(
-            self._flows, self._graph, self._commodity_list,
+            self._X_ek, self._graph, self._commodity_list,
             PARAMS.FeasibilityTol
         )
         check_capacity_constraint(
-            self._flows, self._graph, self._commodity_list,
+            self._X_ek, self._graph, self._commodity_list,
             feasibility_tol=feasibility_tol, feasibility_ratio=feasibility_ratio
         )
     
@@ -267,7 +274,7 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
                     source=commodity.source,
                     destination=commodity.destination,
                     demand=sum([
-                        FLOWS[INDICES[(v, commodity.destination)], i].X \
+                        FLOWS[i][INDICES[(v, commodity.destination)]].X \
                             for v in GRAPH.predecessors(commodity.destination)
                     ])
                 ),
@@ -275,7 +282,7 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
                     source=commodity.source,
                     destination=commodity.destination,
                     demand=sum([
-                        FLOWS[INDICES[(commodity.source, v)], i].X \
+                        FLOWS[i][INDICES[(commodity.source, v)]].X \
                             for v in GRAPH.successors(commodity.source)
                     ])
                 )
@@ -302,4 +309,4 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
         solution.add_solution_element(self._utility, 'utility')
         solution.add_solution_element(self._flows, 'assignments')
         solution.add_solution_element(self._capacity_constraints, 'capacity_constraints')
-        solution.add_solution_element(self._non_negativity_constraints, 'non_negativity_constraints')
+        # solution.add_solution_element(self._non_negativity_constraints, 'non_negativity_constraints')
