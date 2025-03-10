@@ -50,10 +50,21 @@ class SolverParams(ABC):
         for key in parent_fields:
             child_dict.pop(key)
         return child_dict
+    
+    def _num_to_str(self, value) -> str:
+        if isinstance(value, int):
+            return str(value)
+        elif isinstance(value, float):
+            return f'{value:.2e}'
+        elif isinstance(value, bool):
+            return str(value)
+        elif isinstance(value, str):
+            return value
+        raise ValueError(f'Unexpected instance: {type(value)}')
 
     def __str__(self) -> str:
         return '\n'.join([self.LINE]+ [
-            self.PRINT_FORMAT.format(key, str(value))
+            self.PRINT_FORMAT.format(key, self._num_to_str(value))
             for key, value in self.child_fields.items()
         ] + [self.LINE])
 

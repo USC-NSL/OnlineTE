@@ -1,4 +1,7 @@
+import os
+import sys
 import time
+import shutil
 import gurobipy
 import contextlib
 import cupy as cp
@@ -450,3 +453,13 @@ def show_runtime(name: str):
             return res
         return wrapper
     return inner
+
+
+def create_temp_folder(name: str) -> str:
+    TMP = os.environ['TEMP'] if sys.platform == 'win32' else '/tmp'
+    path = os.path.join(TMP, name)
+    try:
+        os.mkdir(path)
+    except FileExistsError:
+        pass
+    return path

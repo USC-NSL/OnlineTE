@@ -6,7 +6,6 @@ from te.algorithms.formulations.edge_based_unregulated_admm_gpu import GPUUnregu
 from te.algorithms.utils import test_mlu
 from topologies.utils import get_uniform_tm_problem_with_capacity_heuristic
 
-
 RNG_SEED = 12345
 
 FEASIBILITY_TOL = None
@@ -46,7 +45,8 @@ def regularized_admm_test(topology: str, seed: int, **kwargs):
         BigTheta=1e-6,
         BigGamma=1e-7,
         BlockMode=True,
-        CheckBlockConv=False
+        CheckBlockConv=False,
+        Seed=RNG_SEED
     )
     test_mlu(RegularizedADMMLP, graph, tm, solver_params, feasibility_tol=FEASIBILITY_TOL, 
              feasibility_ratio=FEASIBILITY_RATIO, **kwargs)
@@ -72,7 +72,8 @@ def unregulated_admm_test(topology: str, seed: int, **kwargs):
         BigTheta=1e-6,
         BigGamma=1e-7,
         BlockMode=True,
-        CheckBlockConv=False
+        CheckBlockConv=False,
+        Seed=RNG_SEED
     )
     test_mlu(UnregulatedADMMLP, graph, tm, solver_params, feasibility_tol=FEASIBILITY_TOL, 
              feasibility_ratio=FEASIBILITY_RATIO, **kwargs)
@@ -85,16 +86,17 @@ def gpu_unregulated_admm_test(topology: str, seed: int, **kwargs):
 
     solver_params = GPUUnregulatedADMMSolverParams(
         NumberOfEpochs=150,
-        NumberOfNetworkUpdates=2,
-        PGDIterations=2,
-        Gamma=1,
+        NumberOfNetworkUpdates=3,
+        PGDIterations=3,
+        Gamma=2,
         Eta=1/n**2,
-        Rho=1e-1/n**2,
-        PGDConvTol=1e-4,
-        UseVariableRho=True,
+        Rho=0.25/n**2,
+        UseVariableRho=False,
         BigTheta=1e-6,
         BigGamma=1e-7,
-        CheckBlockConv=False
+        Kappa=0.1,
+        FloatPrecision='half',
+        Seed=RNG_SEED
     )
     test_mlu(GPUUnregulatedADMMLP, graph, tm, solver_params, feasibility_tol=FEASIBILITY_TOL, 
              feasibility_ratio=FEASIBILITY_RATIO, **kwargs)
@@ -109,5 +111,7 @@ if __name__ == '__main__':
     # unregulated_admm_test(SMALL_TOPOLOGY, RNG_SEED, trace_out_path=None)
     # unregulated_admm_test(SMALL_MEDIUM_TOPOLOGY, RNG_SEED, trace_out_path=None)
     # unregulated_admm_test(MEDIUM_TOPOLOGY, RNG_SEED)
-    gpu_unregulated_admm_test(MEDIUM_TOPOLOGY, RNG_SEED, report_unsat=False)
-    # gpu_unregulated_admm_test(HUGE_TOPOLOGY, RNG_SEED)
+    # gpu_unregulated_admm_test(SMALL_TOPOLOGY, RNG_SEED)
+    # gpu_unregulated_admm_test(SMALL_MEDIUM_TOPOLOGY, RNG_SEED)
+    # gpu_unregulated_admm_test(MEDIUM_TOPOLOGY, RNG_SEED)
+    gpu_unregulated_admm_test(HUGE_TOPOLOGY, RNG_SEED)

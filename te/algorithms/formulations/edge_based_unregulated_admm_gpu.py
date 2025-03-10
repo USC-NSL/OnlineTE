@@ -1,3 +1,4 @@
+import math
 import time
 import tqdm
 import gurobipy
@@ -5,63 +6,70 @@ import cupy as cp
 import numpy as np
 import networkx as nx
 import te.constants
-# from multiprocessing import get_context
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Literal
 from dataclasses import dataclass
 from gurobipy import GRB, GurobiError
 from te.algorithms.base import TrafficEngineeringLP, GurobiSolverParams, SolverParams
 from te.algorithms.solution import GurobiEdgeBasedMinimizeMaximumUtilitySolution
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
-from te.algorithms.sub_algorithms.pgd import (do_iterative_plain_pgd, do_iterative_pgd_with_exact_line_search,
-                                              do_block_plain_pgd, do_block_pgd_with_exact_line_search)
+from te.algorithms.sub_algorithms.pgd import do_gpu_plain_pgd_with_step_reduction
+from te.algorithms.sub_algorithms.feasible_assignment import get_feasible_flow_assignment
 from topologies.utils import (get_edge_indexing, get_graph_M_matrix, 
-                              get_adjacency_null_space, get_feasible_flow_assignment)
+                              get_adjacency_null_space)
 from te.algorithms.utils import (check_capacity_constraint, optimize_or_scream, make_model, 
-                                 get_solution_maximum_utilization, as_fail,
-                                 careful_norm, careful_norm_squared, show_runtime)
+                                 get_solution_maximum_utilization, check_centralized_flow_conservation,
+                                 careful_norm, careful_norm_squared, show_runtime, 
+                                 as_fail, as_warning)
+from te.algorithms.gpu_utils import *
 
 
 @dataclass
 class GPUUnregulatedADMMSolverParams(GurobiSolverParams):
     """
-    :param `NumberOfEpochs`: If not `None`, we only do this many iterations, otherwise,
-                             will keep hammering until stopping criterion has been met.
+    :param `NumberOfEpochs`: Number of total controller + network iterations
     :param `NumberOfNetworkUpdates`: Number of network updates for each epoch
     :param `Rho`: Outer ADMM step size
     :param `Eta`: Inner ADMM step size
-    :param `Gamma`: PGD step size (if `None`, will use exact line search)
-    :param `PGDConvTol: PGD convergence tolerance
+    :param `Gamma`: PGD step size (mandatory, cannot use exact line-search here)
     :param `PGDIterations`: Number of PGD iterations for each commodity
+    :param `Kappa`: PGD step size reduction factor. Must be
     :param `UseVariableRho`: Whether or not to use variable step sizes for ADMM
     :param `Mu`: Primal/Dual residual bound factor
     :param `TauIncrease`: Multiplicative step size increase factor
     :param `TauDecrease`: Multiplicative step size decrease factor
     :param `BigTheta`: Loose error bound for the whole solution
     :param `BigGamma`: Tight error bound for controller solution
-    :param `Alpha`: Over-relaxation parameter
-    :param `BlockMode`: If `True`, distributes commodities in big blocks among
-                        worker nodes rather than one-by-one.
-    :param `CheckBlockConv`: If `True`, checks individual commodity convergence
-                             when running under `BlockMode`. Reduces processing
-                             time if we have high degree of multi-processing.
+    :param `FloatPrecision`: Floating point operation precision. A string choice
+                             between `double`, `single` and `half`
     :param `Seed`: RNG seed
     """
-    NumberOfEpochs: Optional[int] = None
+    NumberOfEpochs: int = 20
     NumberOfNetworkUpdates: int = te.constants.DEFAULT_NUMBER_OF_NETWORK_UPDATES
     Rho: float = te.constants.DEFAULT_RHO
     Eta: float = te.constants.DEFAULT_ETA
-    Gamma: Optional[float] = None
-    PGDConvTol: Optional[float] = 1e-8
+    Gamma: float = 1.0
     PGDIterations: int = 5
     UseVariableRho: bool = True
+    Kappa: float = 0.5
     Mu: float = te.constants.DEFAULT_MU
     TauIncrease: float = te.constants.DEFAULT_TAU_INC 
     TauDecrease: float = te.constants.DEFAULT_TAU_DEC 
     BigTheta: float = te.constants.DEFAULT_BIG_THETA
     BigGamma: float = te.constants.DEFAULT_BIG_GAMMA
-    Alpha: float = 1
-    CheckBlockConv: bool = False
+    FloatPrecision: Literal['half', 'single', 'double'] = 'single'
     Seed: int = te.constants.DEFAULT_SEED
+
+    def __post_init__(self):
+        if self.Mu < 2:
+            as_warning(f"Mu = {self.Mu}: Small values of `Mu` can hinder convergence.")
+        assert self.Kappa >= 0 and self.Kappa <=1,\
+            as_fail(f"Kappa = {self.Kappa}: Values of `Kappa` MUST be within `[0, 1]`")
+        if self.Rho > self.Eta:
+            as_warning(f"Outer ADMM step size (`Rho`) = {self.Rho} is strictly larger "
+                       f"than inner ADMM step size (`Eta`) = {self.Eta}. This is almost never beneficial.")
+        assert self.FloatPrecision in {'half', 'single', 'double'}, \
+            as_fail(f"Unknown float precision string specifier {self.FloatPrecision}")
+        set_global_precision(self.FloatPrecision)
 
 
 class GPUUnregulatedADMMLP(TrafficEngineeringLP):
@@ -75,8 +83,17 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
         self._commodity_list = traffic_to_commodity(self._traffic)
 
         self._edge_indexing = get_edge_indexing(graph)
-        self._NULL_M: np.ndarray = None
-        self._NNT_M: np.ndarray = None
+
+        """
+        These two matrixes always appear next to Y_tk,
+        which lives in the GPU memory. As such, we would be
+        much better off keeping them in GPU as well.
+        They each require `m x T` and `m x m` entries, and are quite
+        small compared to other matrices, so they have little memory
+        footprint.
+        """
+        self._NULL_M: Optional[GPUArray] = None
+        self._NNT_M: Optional[GPUArray] = None
         
         self._T: Optional[int] = None
         self._NUM_EDGES: Optional[int] = None
@@ -87,44 +104,68 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
         self._objective_controller: Optional[gurobipy.QuadExpr] = None
         self._target_u: Optional[float] = None
 
-        # List of edge capacities
-        self._capacities: Optional[np.ndarray] = None
-        # Both just vectors of length `n`
-        self._Xo_e_start: Optional[np.ndarray] = None
+        self._capacities: Optional[CPUArray] = None
+        self._Xo_e_start: Optional[CPUArray] = None
         self._Xo_e: Optional[gurobipy.tupledict] = None
-        self._Zo_e: Optional[np.ndarray] = None
-        self._Xo_e_sol: Optional[np.ndarray] = None
-        self._Zo_e_old: Optional[np.ndarray] = None
-        self._r_e_old: Optional[np.ndarray] = None
-        self._C_tk_old: Optional[cp.ndarray] = None
-        # Just a variable between 0 and 1
+        self._Zo_e: Optional[CPUArray] = None
+        self._Xo_e_sol: Optional[CPUArray] = None
+        self._Zo_e_old: Optional[CPUArray] = None
+        self._r_e_old: Optional[CPUArray] = None
         self._utility: Optional[gurobipy.Var] = None
-        # List of capacity constraints
         self._capacity_constraints: List[gurobipy.Constr] = None
 
-        # This need not be managed by Gurobi
-        self._X_ek_start: Optional[np.ndarray] = None
-        self._X_ek: Optional[np.ndarray] = None
-        # Global value. A `T x K` matrix
-        self._Y_tk: Optional[cp.ndarray] = None
-        self._Y_tk_old: Optional[cp.ndarray] = None
-        # ADMM running average variable. A vector of length `T`.
-        self._P_bar_t: Optional[cp.ndarray] = None
-        self._P_bar_t_old: Optional[cp.ndarray] = None
-        self._Y_bar_t: Optional[cp.ndarray] = None
-        self._Y_bar_t_old: Optional[cp.ndarray] = None
-
-        # For PGD, an `N x K` matrix
-        self._lambda_ek: Optional[cp.ndarray] = None
-
-        # self._proc_context = get_context('spawn')
-        # self._proc_context.set_executable(get_pypy_interpreter_path())
-        # self.proc_pool = self._proc_context.Pool(processes=self._solver_params.NumWorkers)
-
-        # Dual vairable of outer ADMM. A vector of length `n`.
-        self._r_e: Optional[np.ndarray] = None
-        # Dual vairable of inner ADMM. A vector of length `T`.
-        self._u_t: Optional[cp.ndarray] = None
+        self._X_ek_start: Optional[GPUArray] = None
+        """
+        An `n x K` matrix, this is our first heavy hitter in terms of
+        memory. This matrix is involved in the PGD step as input, and
+        as such must be kept in GPU memory.
+        """
+        self._X_ek: Optional[CPUArray] = None
+        """
+        The `n x K` assignment matrix, we need not keep this matrix in the
+        GPU memory, as it is only reconstructed when the algorithm is finished.
+        """
+        self._Y_tk: Optional[GPUArray] = None
+        """
+        This matrix is one of the inputs of the inner PGD loop, and
+        is updated at the end of it.
+        It is much better to keep it in GPU memory, but it is very large
+        (it has `T x K` entries).
+        """
+        self._Y_tk_old: Optional[GPUArray] = None
+        """
+        This matrix is involved in calculating the dual residual of the 
+        inner ADMM loop, which adjusts the step size.
+        This matrix can get large, and passing it to CPU is a big hit.
+        For very large problems where memory is tight, we would be much
+        better off just disabling variable step sizes.
+        """
+        self._P_bar_t: Optional[GPUArray] = None
+        self._Y_bar_t: Optional[GPUArray] = None
+        """
+        These running means are updated within the inner ADMM loop.
+        They are small enough to be kept in GPU memory comfortably.
+        """
+        self._P_bar_t_old: Optional[GPUArray] = None
+        self._Y_bar_t_old: Optional[GPUArray] = None
+        """
+        This matrix is involved in calculating the dual residual of the 
+        inner ADMM loop, which adjusts the step size.
+        Small enough to be kept in GPU memory, but can be ignored when
+        step size is fixed.
+        """
+        self._lambda_ek: Optional[GPUArray] = None
+        """
+        The main entity to keep in GPU memory. This is the main heavy-hitter,
+        it has `n x K` elements.
+        """
+        self._r_e: Optional[CPUArray] = None
+        self._u_t: Optional[GPUArray] = None
+        """
+        Outer and inner ADMM dual variables.
+        There is no reason to keep the outer one in GPU, but
+        there are benefits to keeping the inner one.
+        """
 
         self._outer_primal_residual_norm: float = None
         self._outer_dual_residual_norm: float = None
@@ -185,22 +226,20 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
         return self._objective_gap_trace
     
     @property
-    def assignments(self) -> np.ndarray:
+    def assignments(self) -> CPUArray:
         assert self._X_ek is not None
-        return cp.asnumpy(self._X_ek)
+        return self._X_ek
 
     def _set_initial_feasible_solution(self):
-        self._X_ek_start = cp.array(get_feasible_flow_assignment(self._graph, self._commodity_list))
-        self._Xo_e_start = cp.asnumpy(cp.sum(self._X_ek_start, axis=1))
-        # Just a sanity check ...
-        # check_centralized_flow_conservation(self._X_ek_start, self._graph, self._commodity_list, self._solver_params.FeasibilityTol)
+        self._X_ek_start = as_gpu_array(get_feasible_flow_assignment(self._graph, self._commodity_list))
+        self._Xo_e_start = as_cpu_array(cp.sum(self._X_ek_start, axis=1))
     
     def _set_NULL_M(self):
         M = self._M
         assert len(M.shape) == 2
         m, n = M.shape
         assert m < n
-        N = cp.array(get_adjacency_null_space(M))
+        N = as_gpu_array(get_adjacency_null_space(M))
         T = N.shape[1]
         # TODO: This is off by 1, since the columns of `M` are not independent
         # assert T == (n - m), f'{n}, {m}, {T}'
@@ -215,15 +254,15 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
         T = self._T
         K = len(self._commodity_list)
         NUM_EDGES = self._NUM_EDGES
-        self._capacities = np.array([item[-1] for item in self._graph.edges(data='capacity')])
-        self._r_e = np.zeros(shape=(NUM_EDGES,))
-        self._u_t = cp.zeros(shape=(T,))
-        self._Zo_e = np.array(self._Xo_e_start)
-        self._P_bar_t = cp.zeros((T,))
-        self._Y_bar_t = cp.zeros((T,))
-        self._Y_tk = cp.zeros((T, K))
-        self._X_ek = cp.asnumpy(self._X_ek_start)
-        self._lambda_ek = cp.zeros((NUM_EDGES, K))
+        self._capacities = as_cpu_array([item[-1] for item in self._graph.edges(data='capacity')])
+        self._r_e = cpu_zeros(shape=(NUM_EDGES,))
+        self._u_t = gpu_zeros(shape=(T,))
+        self._Zo_e = as_cpu_array(self._Xo_e_start)
+        self._P_bar_t = gpu_zeros((T,))
+        self._Y_bar_t = gpu_zeros((T,))
+        self._Y_tk = gpu_zeros((T, K))
+        self._X_ek = as_cpu_array(self._X_ek_start)
+        self._lambda_ek = gpu_zeros((NUM_EDGES, K))
     
     def _report_problem_size(self):
         M = len(self._graph.nodes)
@@ -244,7 +283,7 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
               f"\t NUMBER OF VARIABLES PER QP PER NODE: {T}\n"
               f"\t NUMBER CONSTRAINTS PER QP PER NODE: {T}\n")
 
-    def initialize_to(self, assignment: np.ndarray):
+    def initialize_to(self, assignment: CPUArray):
         raise NotImplementedError
         
     def _make_variables(self):
@@ -266,16 +305,16 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
         # Set starting values ...
         self._model_controller = MODEL_CONTROLLER
     
-    def _get_F(self) -> cp.ndarray:
-        return cp.array(self._Zo_e + self._r_e - self._Xo_e_start)
+    def _get_F(self) -> GPUArray:
+        return as_gpu_array(self._Zo_e + self._r_e - self._Xo_e_start)
     
     def _set_X_ek(self):
-        self._X_ek = cp.asnumpy(self._X_ek_start + self._NULL_M @ self._Y_tk)
+        self._X_ek = as_cpu_array(self._X_ek_start + self._NULL_M @ self._Y_tk)
     
     @show_runtime('GetXKSum')
-    def _get_X_k_sum(self) -> np.ndarray:
+    def _get_X_k_sum(self) -> CPUArray:
         assert self._X_ek is not None
-        return cp.asnumpy(cp.sum(self._X_ek_start + self._NULL_M @ self._Y_tk, axis=1))
+        return as_cpu_array(cp.sum(self._X_ek_start + self._NULL_M @ self._Y_tk, axis=1))
     
     def _add_constraints(self):
         assert self._model_controller is not None
@@ -319,7 +358,7 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
 
         self._update_controller_objective()
 
-    def _get_current_C(self) -> cp.ndarray:
+    def _get_current_C(self) -> GPUArray:
         Y_TK = self._Y_tk
         Y_BAR = self._Y_bar_t
         P_BAR = self._P_bar_t
@@ -327,43 +366,33 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
         return Y_TK - cp.expand_dims(Y_BAR - P_BAR + U_T, axis=1)
 
     @show_runtime('NetworkUpdate')
-    def _do_network_update(self) -> float:
-        GAMMA = self._solver_params.Gamma
-        PGD_ITERS = self._solver_params.PGDIterations
-        PGD_CONV_TOL = self._solver_params.PGDConvTol
-        CHECK_BLOCK_CONV = self._solver_params.CheckBlockConv
+    def _do_network_update(self, epoch: int) -> float:
+        PARAMS = self._solver_params
+        GAMMA = PARAMS.Gamma
+        KAPPA = PARAMS.Kappa
+        PGD_ITERS = PARAMS.PGDIterations
         NULL_M = self._NULL_M
         NNT_M = self._NNT_M
         C_TK = self._get_current_C()
         LAMBDA_EK = self._lambda_ek
         X_EK_START = self._X_ek_start
         
-        if GAMMA is None:
-            do_pgd = do_block_pgd_with_exact_line_search
-        else:
-            do_pgd = do_block_plain_pgd
-        
         t_start = time.time()
-        if GAMMA is None:
-            lambda_block, y_block, _ = do_pgd(LAMBDA_EK, X_EK_START, NNT_M, NULL_M, C_TK, PGD_CONV_TOL, PGD_CONV_TOL, CHECK_BLOCK_CONV)
-        else:
-            lambda_block, y_block, _ = do_pgd(LAMBDA_EK, X_EK_START, NNT_M, NULL_M, C_TK, GAMMA, PGD_CONV_TOL, PGD_ITERS, CHECK_BLOCK_CONV)
+        lambda_block, y_block = do_gpu_plain_pgd_with_step_reduction(
+            LAMBDA_EK, X_EK_START, NNT_M, NULL_M, C_TK, GAMMA, 
+            PGD_ITERS, KAPPA, epoch)
         
-        # for item in self.proc_pool.starmap(do_pgd, pgd_iterator()):
-        #     lambda_block, y_block, iters = item
-        #     lambda_holder.append(lambda_block)
-        #     Y_holder.append(y_block)
-        #     total_iterations += iters
         self._lambda_ek = lambda_block
         self._Y_tk = y_block
-        self._C_tk_old = C_TK
         return time.time() - t_start
     
     @show_runtime('YBar-Update')
     def _update_Y_bar(self):
-        self._Y_bar_t_old = np.copy(self._Y_bar_t)
-        self._Y_tk_old = np.copy(self._Y_tk)
-        self._Y_bar_t = np.average(self._Y_tk, axis=1)
+        # Record old `Y_tk` and `Y_bar_t` value only when using variable step sizes
+        if self._solver_params.UseVariableRho:
+            self._Y_bar_t_old = np.copy(self._Y_bar_t)
+            self._Y_tk_old = cp.copy(self._Y_tk)
+        self._Y_bar_t = cp.average(self._Y_tk, axis=1)
     
     @show_runtime('PBar-Update')
     def _update_P_bar(self):
@@ -372,11 +401,10 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
         """
         The update rule for `P_bar` is:
 
-            P_bar \gets (NULL_M^T F + alpha * (\eta/\rho) (u + alpha * Y_bar)) / (K + alpha^2 * (\eta/\rho))
+            P_bar \gets (NULL_M^T F + (\eta/\rho) (u + Y_bar)) / (K + (\eta/\rho))
         """
 
         K = len(self._commodity_list)
-        ALPHA = self._solver_params.Alpha
         PARAMS = self._solver_params
         ETA = PARAMS.Eta * self._eta_coeff
         RHO = PARAMS.Rho * self._rho_coeff
@@ -384,11 +412,11 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
         Y_BAR_T = self._Y_bar_t
         F_E = self._get_F()
         NULL_M = self._NULL_M
-        self._P_bar_t_old = cp.array(self._P_bar_t)
-        P_BAR_T = (NULL_M.T @ F_E + ALPHA * (ETA/RHO) * (U_T + ALPHA * Y_BAR_T)) / (K + ALPHA**2 * (ETA/RHO))
+        P_BAR_T = (NULL_M.T @ F_E + (ETA/RHO) * (U_T + Y_BAR_T)) / (K + (ETA/RHO))
         self._P_bar_t = P_BAR_T
 
         if PARAMS.UseVariableRho:
+            self._P_bar_t_old = cp.array(self._P_bar_t)
             self._inner_primal_residual_norm = careful_norm((P_BAR_T - Y_BAR_T), scaled=True)
             self._inner_dual_residual_norm = careful_norm(
                 (self._Y_tk - self._Y_tk_old) + 
@@ -404,15 +432,14 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
         """
         The update rule for `u` is:
 
-            u \gets u + alpha * (Y_bar - P_bar)
+            u \gets u + (Y_bar - P_bar)
         """
 
         U_T = self._u_t
         Y_BAR_T = self._Y_bar_t
         P_BAR_T = self._P_bar_t
-        ALPHA = self._solver_params.Alpha
 
-        self._u_t = U_T + ALPHA * (Y_BAR_T - P_BAR_T)
+        self._u_t = U_T + (Y_BAR_T - P_BAR_T)
     
     def _reconvene_network_updates(self):
         self._update_Y_bar()
@@ -431,11 +458,11 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
         
         NUM_EDGES = self._NUM_EDGES
         XO_E = self._Xo_e
-        XO_E_ = np.array([XO_E[e].X for e in range(NUM_EDGES)])
+        XO_E_ = np.array([XO_E[e].X for e in range(NUM_EDGES)], dtype=np.float16)
         X_KE_SUM_E = self._get_X_k_sum()
         PARAMS = self._solver_params
         Zo_e = (XO_E_ + X_KE_SUM_E) / 2
-        self._Zo_e_old = np.array(self._Zo_e)
+        self._Zo_e_old = np.array(self._Zo_e, dtype=np.float16)
         self._Xo_e_sol = XO_E_
         self._Zo_e = Zo_e
         if PARAMS.UseVariableRho:
@@ -476,72 +503,52 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
 
         """
         The update rule for r_e is:
-            r_e \gets r_e + alpha(X_oe - \sum_k X_ke)/2
+            r_e \gets r_e + (X_oe - \sum_k X_ke)/2
         """
 
         R_E = self._r_e
         XO_E = self._Xo_e
         NUM_EDGES = self._NUM_EDGES
         X_KE_SUM_E = self._get_X_k_sum()
-        ALPHA = self._solver_params.Alpha
 
         r_e = np.zeros((NUM_EDGES,))
         for e in range(NUM_EDGES):
-            r_e[e] = R_E[e] + ALPHA * (XO_E[e].X - X_KE_SUM_E[e]) / 2
+            r_e[e] = R_E[e] + (XO_E[e].X - X_KE_SUM_E[e]) / 2
         self._r_e_old = np.copy(self._r_e)
         self._r_e = r_e
     
-    def _get_controller_objective_shifts(self) -> Tuple[float, float]:
-        XO_E = self._Xo_e_sol
-        Z_HAT_OLD = self._Zo_e_old - self._r_e_old
-        Z_HAT = self._Zo_e - self._r_e
-        RHO = self._solver_params.Rho * self._rho_coeff
-        LAMBDA_E = np.array([constr.Pi for constr in self._capacity_constraints])
-        C_E = self._capacities
+    # def _get_controller_objective_shifts(self) -> Tuple[float, float]:
+    #     XO_E = self._Xo_e_sol
+    #     Z_HAT_OLD = self._Zo_e_old - self._r_e_old
+    #     Z_HAT = self._Zo_e - self._r_e
+    #     RHO = self._solver_params.Rho * self._rho_coeff
+    #     LAMBDA_E = np.array([constr.Pi for constr in self._capacity_constraints])
+    #     C_E = self._capacities
 
-        primal_shift = (RHO/2) * (careful_norm_squared(XO_E - Z_HAT) - careful_norm_squared(XO_E - Z_HAT_OLD))
-        dual_shift = -(RHO/2) * (careful_norm_squared(Z_HAT) - careful_norm_squared(Z_HAT_OLD)) \
-                     -np.dot(np.divide(LAMBDA_E, C_E), (Z_HAT - Z_HAT_OLD))
-        return primal_shift, dual_shift
+    #     primal_shift = (RHO/2) * (careful_norm_squared(XO_E - Z_HAT) - careful_norm_squared(XO_E - Z_HAT_OLD))
+    #     dual_shift = -(RHO/2) * (careful_norm_squared(Z_HAT) - careful_norm_squared(Z_HAT_OLD)) \
+    #                  -np.dot(np.divide(LAMBDA_E, C_E), (Z_HAT - Z_HAT_OLD))
+    #     return primal_shift, dual_shift
     
-    def _get_network_objective(self) -> float:
-        Y_TK = self._Y_tk
-        C_TK_OLD = self._C_tk_old
-        return (1/2) * careful_norm_squared(Y_TK - C_TK_OLD)
-    
-    def _get_network_objective_shifts(self) -> Tuple[float, float]:
-        n = self._NULL_M
-        K = len(self._commodity_list)
-        RHO = self._solver_params.Rho * self._rho_coeff
-        LAMBDA_EK = self._lambda_ek
-        Y_TK = self._Y_tk
-        C_TK = self._get_current_C()
-        C_TK_OLD = self._C_tk_old
-
-        # TODO: We need RHO here ... right?
-        primal_shift = (RHO/2) * (careful_norm_squared(Y_TK - C_TK) - careful_norm_squared(Y_TK - C_TK_OLD))
-        dual_shift = -(RHO/2) * np.sum([np.dot(LAMBDA_EK[:, k].T, n @ (C_TK[:, k] - C_TK_OLD[:, k])) for k in range(K)])
-        return primal_shift, dual_shift
-    
-    def _check_objective_gap(self) -> bool:
-        BIG_THETA = self._solver_params.BigTheta
-        if self._target_u:
-            actual_utilization = get_solution_maximum_utilization(self._X_ek, self.graph)
-            apparent_utulization = self._utility.X
-            actual_gap = np.abs(actual_utilization - self._target_u) / self._target_u
-            apparent_gap = np.abs(apparent_utulization - self._target_u) / self._target_u
-            relative_gap = max(actual_gap, apparent_gap)
-            print(f"Utilization gap: {str(round(max(actual_gap, apparent_gap) * 100, 4))} percent")
-        else:
-            primal_shift_controller, dual_shift_controller = self._get_controller_objective_shifts()
-            primal_shift_network, dual_shift_network = self._get_network_objective_shifts()
-            primal_objective = self._model_controller.ObjVal + self._get_network_objective()
-            primal_shift = primal_shift_controller + primal_shift_network
-            dual_shift = dual_shift_controller + dual_shift_network
-            relative_gap = (np.abs(primal_shift) + np.abs(dual_shift)) / np.abs(primal_objective + primal_shift)
-            print(f"Objective gap: {str(round(relative_gap * 100, 4))} percent")
-        self._objective_gap_trace.append(relative_gap)
-        return relative_gap <= BIG_THETA
+    # def _check_objective_gap(self) -> bool:
+    #     BIG_THETA = self._solver_params.BigTheta
+    #     if self._target_u:
+    #         actual_utilization = get_solution_maximum_utilization(self._X_ek, self.graph)
+    #         apparent_utulization = self._utility.X
+    #         actual_gap = np.abs(actual_utilization - self._target_u) / self._target_u
+    #         apparent_gap = np.abs(apparent_utulization - self._target_u) / self._target_u
+    #         relative_gap = max(actual_gap, apparent_gap)
+    #         print(f"Utilization gap: {str(round(max(actual_gap, apparent_gap) * 100, 4))} percent")
+    #     else:
+    #         primal_shift_controller, dual_shift_controller = self._get_controller_objective_shifts()
+    #         primal_shift_network, dual_shift_network = self._get_network_objective_shifts()
+    #         primal_objective = self._model_controller.ObjVal + self._get_network_objective()
+    #         primal_shift = primal_shift_controller + primal_shift_network
+    #         dual_shift = dual_shift_controller + dual_shift_network
+    #         relative_gap = (np.abs(primal_shift) + np.abs(dual_shift)) / np.abs(primal_objective + primal_shift)
+    #         print(f"Objective gap: {str(round(relative_gap * 100, 4))} percent")
+    #     self._objective_gap_trace.append(relative_gap)
+    #     return relative_gap <= BIG_THETA
     
     def close(self):
         if self._model_controller:
@@ -574,7 +581,7 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
         epoch = 0
         max_iters = PARAMS.NumberOfEpochs
         try:
-            for _ in tqdm.tqdm(range(PARAMS.NumberOfEpochs)):
+            for epoch in tqdm.tqdm(range(PARAMS.NumberOfEpochs)):
             # while True:
                 if ((max_iters is not None) and (epoch == max_iters)):
                     break
@@ -586,7 +593,7 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
 
                 # Now, do in-network optimization
                 for i in reversed(range(PARAMS.NumberOfNetworkUpdates)):
-                    t_network += self._do_network_update()
+                    t_network += self._do_network_update(epoch)
                     """
                     Defer the update for the last iteration.
                     This final update is moot, since the controller has to
@@ -630,13 +637,17 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
         T = self._T
         PARAMS = self._solver_params
 
+        _atol = 0.0 if feasibility_tol is None else feasibility_tol
+        _rtol = 0.0 if feasibility_ratio is None else feasibility_ratio
+
         # TODO: This is not numerically stable ...
         def in_consensus(primal, pair):
             if abs(primal - pair) < te.constants.FLOAT_RES:
                 return True
-            if feasibility_tol is not None:
-                return abs(primal - pair) < feasibility_tol
-            return abs((primal - pair) / (primal + te.constants.FLOAT_RES)) < feasibility_ratio
+            return math.isclose(primal, pair, rel_tol=_rtol, abs_tol=_atol)
+            # if feasibility_tol is not None:
+            #     return abs(primal - pair) < feasibility_tol
+            # return abs((primal - pair) / (primal + te.constants.FLOAT_RES)) < feasibility_ratio
 
         # Are outer ADMM pairs in consensus?
         XO_E = self._Xo_e
@@ -644,8 +655,8 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
         for e in range(NUM_EDGES):
             primal = XO_E[e].X
             pair = ZO_E[e]
-            primal_str = str(np.round(primal, 4))
-            pair_str = str(np.round(pair, 4))
+            primal_str = f'{primal:.4f}'
+            pair_str = f'{pair:.4f}'
             if not in_consensus(primal, pair):
                 print(as_fail(f"Edge {e} --> Outer ADMM pairing is not in consensus with primal variable: {primal_str} vs {pair_str}"))
         
@@ -655,8 +666,8 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
         for t in range(T):
             primal = Y_BAR_T[t]
             pair = P_BAR_T[t]
-            primal_str = str(np.round(primal, 4))
-            pair_str = str(np.round(pair, 4))
+            primal_str = f'{primal:.4f}'
+            pair_str = f'{pair:.4f}'
             if not in_consensus(primal, pair):
                 print(as_fail(f"Axis {t} --> Inner ADMM pairing is not in consensus with primal variable: {primal_str} vs {pair_str}"))
         
