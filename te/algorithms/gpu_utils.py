@@ -1,6 +1,6 @@
 import numpy as np
 import cupy as cp
-from typing import TypeAlias, Optional, Tuple, Callable, NewType
+from typing import Optional, Tuple, Callable, NewType
 
 """
 Gurobi cannot utilize a GPU (and it really cannot benefit from it as-is
@@ -12,7 +12,7 @@ memory, since going over the bus to convert them would be huge hit
 in terms of performance.
 """
 
-CPUArray: TypeAlias = np.ndarray
+CPUArray = np.ndarray
 """Alias for `numpy.ndarray`, an array that lives on the RAM. Plenty of space usually."""
 GPUArray = NewType('GPUArray', cp.ndarray)
 """Alias for `cupy.ndarray`, an array that lives on the GPU memory. Usually quite limited."""
