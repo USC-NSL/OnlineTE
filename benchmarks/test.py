@@ -113,5 +113,5 @@ if __name__ == '__main__':
     # unregulated_admm_test(MEDIUM_TOPOLOGY, RNG_SEED)
     # gpu_unregulated_admm_test(SMALL_TOPOLOGY, RNG_SEED)
     # gpu_unregulated_admm_test(SMALL_MEDIUM_TOPOLOGY, RNG_SEED)
-    # gpu_unregulated_admm_test(MEDIUM_TOPOLOGY, RNG_SEED)
-    gpu_unregulated_admm_test(HUGE_TOPOLOGY, RNG_SEED)
+    gpu_unregulated_admm_test(MEDIUM_TOPOLOGY, RNG_SEED)
+    # gpu_unregulated_admm_test(HUGE_TOPOLOGY, RNG_SEED)
