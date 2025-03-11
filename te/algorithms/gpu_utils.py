@@ -26,6 +26,9 @@ DOUBLE_PRECISION = 'double'  # float 64
 SINGLE_PRECISION = 'single'  # float 32
 HALF_PRECISION = 'half'      # float 16
 
+NUMBER_OF_GPU_DEVICES: int = cp.cuda.runtime.getDeviceCount()
+GPU_MEM_MANAGER: cp.cuda.MemoryPool = cp.get_default_memory_pool()
+
 
 _GLOBAL_PRECISION: Optional[int] = None
 """
@@ -55,9 +58,31 @@ def set_global_precision(precision: str):
         raise ValueError
 
 
+def get_total_reserved_gpu_memory_usage() -> int:
+    """The amount of allocated GPU memory usage across all devices (including caches ...)"""
+    total = 0
+    for i in range(NUMBER_OF_GPU_DEVICES):
+        with cp.cuda.Device(i):
+            total += GPU_MEM_MANAGER.total_bytes()
+    return total
+
+
+def get_total_used_gpu_memory_usage() -> int:
+    """The GPU working set, across all devices"""
+    total = 0
+    for i in range(NUMBER_OF_GPU_DEVICES):
+        with cp.cuda.Device(i):
+            total += GPU_MEM_MANAGER.used_bytes()
+    return total
+
+
 cpu_zeros: Callable[[Tuple[int]], CPUArray]  = lambda shape: np.zeros(shape=shape, dtype=_CPU_DTYPE)
+"""Wrapper for `nump.zeros`. Enforces the global data type."""
 gpu_zeros: Callable[[Tuple[int]], GPUArray]  = lambda shape: cp.zeros(shape=shape, dtype=_GPU_DTYPE)
+"""Wrapper for `cupy.zeros`. Enforces the global data type."""
 as_gpu_array: Callable[[CPUArray], GPUArray] = lambda array: cp.array(array, dtype=_GPU_DTYPE)
+"""Move array into GPU memory."""
 as_cpu_array: Callable[[GPUArray], CPUArray] = lambda array: cp.asnumpy(array)
+"""Move array into CPU memory."""
 cpu_memmap: Callable[[str, Tuple[int], str], CPUArray] = \
     lambda path, shape, mode: np.memmap(shape=shape, filename=path, mode=mode, dtype=_CPU_DTYPE)

@@ -581,8 +581,8 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
         epoch = 0
         max_iters = PARAMS.NumberOfEpochs
         try:
-            for epoch in tqdm.tqdm(range(PARAMS.NumberOfEpochs)):
-            # while True:
+            # for epoch in tqdm.tqdm(range(PARAMS.NumberOfEpochs)):
+            while True:
                 if ((max_iters is not None) and (epoch == max_iters)):
                     break
                 t_network = 0

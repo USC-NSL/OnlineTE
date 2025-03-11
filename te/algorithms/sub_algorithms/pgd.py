@@ -2,7 +2,8 @@ import cupy as cp
 import numpy as np
 import te.constants
 from typing import Optional, Tuple
-from te.algorithms.utils import careful_norm, careful_norm_squared, all_elements_within_threshold
+from te.algorithms.utils import careful_norm, careful_norm_squared, all_elements_within_threshold, show_runtime
+from te.algorithms.gpu_utils import GPUArray
 
 
 """Different Projected Gradient Descent (PGD) algorithms for non-negative constraints"""
@@ -262,9 +263,10 @@ def do_block_pgd_with_exact_line_search(lambda_block: np.ndarray, x_block_0: np.
     return converged_lambda_block, y_block, total_iterations
 
 
-def do_gpu_plain_pgd_with_step_reduction(lambda_block: np.ndarray, x_block_0: np.ndarray, nnt: np.ndarray, 
-                                         n: np.ndarray, c_block: np.ndarray, gamma: float, n_iter: int, 
-                                         kappa: float, epoch: int) -> Tuple[np.ndarray, np.ndarray]:
+@show_runtime('PGD-STEP')
+def do_gpu_plain_pgd_with_step_reduction(lambda_block: GPUArray, x_block_0: GPUArray, nnt: GPUArray, 
+                                         n: GPUArray, c_block: GPUArray, gamma: float, n_iter: int, 
+                                         kappa: float, epoch: int) -> Tuple[GPUArray, GPUArray]:
     """
     A plain block oriented PGD operation, with step size heuristic.
     This will run a GPU, as such, norm-2 and selective operations (like
@@ -282,8 +284,9 @@ def do_gpu_plain_pgd_with_step_reduction(lambda_block: np.ndarray, x_block_0: np
     big_c_block = x_block_0 + n @ c_block
     step_size = gamma / (epoch+1) ** kappa
     for _ in range(n_iter):
-        lambda_block_old = mod.array(lambda_block, dtype=mod.float16)
-        grad_block = nnt @ lambda_block_old + big_c_block
-        lambda_block = mod.clip(lambda_block_old - step_size * grad_block, a_min=0, a_max=None)
+        grad_block = nnt @ lambda_block + big_c_block
+        lambda_block = mod.clip(lambda_block - step_size * grad_block, a_min=0, a_max=None)
+    del big_c_block
+    del grad_block
     y_block = c_block + n.T @ lambda_block
     return lambda_block, y_block

@@ -447,9 +447,11 @@ def test_mlu(lp_cls: Type[TrafficEngineeringLP], graph: nx.DiGraph, tm: TrafficM
 def show_runtime(name: str):
     def inner(f):
         def wrapper(*args, **kwargs):
+            cp.cuda.runtime.deviceSynchronize()
             start = time.time()
             res = f(*args, **kwargs)
-            # print(as_info(f'Execution of {name} took: {str(round((time.time() - start) * 1000, 1))} ms'))
+            cp.cuda.runtime.deviceSynchronize()
+            print(as_info(f'Execution of {name} took: {str(round((time.time() - start) * 1000, 5))} ms'))
             return res
         return wrapper
     return inner
