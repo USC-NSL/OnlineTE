@@ -86,3 +86,11 @@ as_cpu_array: Callable[[GPUArray], CPUArray] = lambda array: cp.asnumpy(array)
 """Move array into CPU memory."""
 cpu_memmap: Callable[[str, Tuple[int], str], CPUArray] = \
     lambda path, shape, mode: np.memmap(shape=shape, filename=path, mode=mode, dtype=_CPU_DTYPE)
+
+
+synchronize_to_device: Callable[[int], None] = lambda dev: cp.cuda.Device(dev).synchronize()
+"""Wait until all operations on the slected device finish"""
+def synchronize_to_all():
+    """Wait until all operations on all GPU devices finish"""
+    for dev in range(NUMBER_OF_GPU_DEVICES):
+        synchronize_to_device(dev)

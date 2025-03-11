@@ -85,12 +85,9 @@ def gpu_unregulated_admm_test(topology: str, seed: int, **kwargs):
     n = graph.number_of_nodes()
 
     solver_params = GPUUnregulatedADMMSolverParams(
-        # NumberOfEpochs=150,
-        NumberOfEpochs=1,
-        # NumberOfNetworkUpdates=3,
-        NumberOfNetworkUpdates=1,
-        # PGDIterations=3,
-        PGDIterations=1,
+        NumberOfEpochs=150,
+        NumberOfNetworkUpdates=3,
+        PGDIterations=3,
         Gamma=2,
         Eta=1/n**2,
         Rho=0.25/n**2,

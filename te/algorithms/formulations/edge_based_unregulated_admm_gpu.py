@@ -18,8 +18,9 @@ from topologies.utils import (get_edge_indexing, get_graph_M_matrix,
                               get_adjacency_null_space)
 from te.algorithms.utils import (check_capacity_constraint, optimize_or_scream, make_model, 
                                  get_solution_maximum_utilization, check_centralized_flow_conservation,
-                                 careful_norm, careful_norm_squared, show_runtime, 
-                                 as_fail, as_warning)
+                                 careful_norm, careful_norm_squared, as_fail, as_warning)
+from te.algorithms.statistics.helpers import (record_cpu_runtime, record_gpu_runtime, record_reserved_gpu_memory, 
+                                              record_used_gpu_memory)
 from te.algorithms.gpu_utils import *
 
 
@@ -311,7 +312,7 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
     def _set_X_ek(self):
         self._X_ek = as_cpu_array(self._X_ek_start + self._NULL_M @ self._Y_tk)
     
-    @show_runtime('GetXKSum')
+    @record_gpu_runtime('GeetXKSum')
     def _get_X_k_sum(self) -> CPUArray:
         assert self._X_ek is not None
         return as_cpu_array(cp.sum(self._X_ek_start + self._NULL_M @ self._Y_tk, axis=1))
@@ -330,7 +331,7 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
                 for i, (_, _, c_e) in enumerate(GRAPH.edges(data='capacity'))
         ]
     
-    @show_runtime('ControllerObjectiveUpdate')
+    @record_cpu_runtime('ControllerObjectiveUpdate')
     def _update_controller_objective(self):
         NUM_EDGES = self._NUM_EDGES
         UTILITY = self._utility
@@ -358,6 +359,7 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
 
         self._update_controller_objective()
 
+    @record_gpu_runtime('GetCurrentC')
     def _get_current_C(self) -> GPUArray:
         Y_TK = self._Y_tk
         Y_BAR = self._Y_bar_t
@@ -365,7 +367,8 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
         U_T = self._u_t
         return Y_TK - cp.expand_dims(Y_BAR - P_BAR + U_T, axis=1)
 
-    @show_runtime('NetworkUpdate')
+    @record_gpu_runtime('NetworkUpdate')
+    @record_reserved_gpu_memory('reserverd-NetworkUpdate')
     def _do_network_update(self, epoch: int) -> float:
         PARAMS = self._solver_params
         GAMMA = PARAMS.Gamma
@@ -386,7 +389,7 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
         self._Y_tk = y_block
         return time.time() - t_start
     
-    @show_runtime('YBar-Update')
+    @record_gpu_runtime('YBarUpdate')
     def _update_Y_bar(self):
         # Record old `Y_tk` and `Y_bar_t` value only when using variable step sizes
         if self._solver_params.UseVariableRho:
@@ -394,7 +397,7 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
             self._Y_tk_old = cp.copy(self._Y_tk)
         self._Y_bar_t = cp.average(self._Y_tk, axis=1)
     
-    @show_runtime('PBar-Update')
+    @record_gpu_runtime('PBarUpdate')
     def _update_P_bar(self):
         assert self._model_controller is not None
         
@@ -425,7 +428,7 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
                 scaled=True
             ) * self._eta_coeff
     
-    @show_runtime('U-Update')
+    @record_gpu_runtime('UUpdate')
     def _update_u_t(self):
         assert self._model_controller is not None
         
@@ -441,13 +444,15 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
 
         self._u_t = U_T + (Y_BAR_T - P_BAR_T)
     
+    @record_gpu_runtime('Reconvene')
+    @record_reserved_gpu_memory('reserverd-Reconvene')
     def _reconvene_network_updates(self):
         self._update_Y_bar()
         self._update_P_bar()
         self._update_eta_coeff()
         self._update_u_t()
 
-    @show_runtime('Z-Update')
+    @record_cpu_runtime('ZOUpdate')
     def _update_Zo_e(self):
         assert self._model_controller is not None
 
@@ -469,7 +474,6 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
             self._outer_primal_residual_norm = careful_norm((Zo_e - XO_E_), scaled=True) + careful_norm((Zo_e - X_KE_SUM_E), scaled=True)
             self._outer_dual_residual_norm = careful_norm((Zo_e - self._Zo_e_old), scaled=True) * self._rho_coeff
     
-    @show_runtime('Rho-update')
     def _update_rho_coeff(self):
         PARAMS = self._solver_params
         primal_norm = self._outer_primal_residual_norm
@@ -483,7 +487,6 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
                 self._rho_coeff /= PARAMS.TauDecrease
                 self._r_e = (self._r_e * PARAMS.TauDecrease)
     
-    @show_runtime('Eta-update')
     def _update_eta_coeff(self):
         PARAMS = self._solver_params
         primal_norm = self._inner_primal_residual_norm
@@ -497,7 +500,7 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
                 self._eta_coeff /= PARAMS.TauDecrease
                 self._u_t = (self._u_t * PARAMS.TauDecrease)
     
-    @show_runtime('R-update')
+    @record_cpu_runtime('REUpdate')
     def _update_r_e(self):
         assert self._model_controller is not None
 
@@ -570,7 +573,8 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
         if with_params:
             self._model_controller.resetParams()
     
-    # @show_runtime('SOLVE')
+    @record_cpu_runtime('Solve')
+    @record_reserved_gpu_memory('reserved-Solve')
     def solve(self, params: SolverParams = None) -> float:
         assert params is None
         

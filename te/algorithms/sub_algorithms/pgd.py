@@ -2,7 +2,7 @@ import cupy as cp
 import numpy as np
 import te.constants
 from typing import Optional, Tuple
-from te.algorithms.utils import careful_norm, careful_norm_squared, all_elements_within_threshold, show_runtime
+from te.algorithms.utils import careful_norm, careful_norm_squared, all_elements_within_threshold
 from te.algorithms.gpu_utils import GPUArray
 
 
@@ -263,7 +263,6 @@ def do_block_pgd_with_exact_line_search(lambda_block: np.ndarray, x_block_0: np.
     return converged_lambda_block, y_block, total_iterations
 
 
-@show_runtime('PGD-STEP')
 def do_gpu_plain_pgd_with_step_reduction(lambda_block: GPUArray, x_block_0: GPUArray, nnt: GPUArray, 
                                          n: GPUArray, c_block: GPUArray, gamma: float, n_iter: int, 
                                          kappa: float, epoch: int) -> Tuple[GPUArray, GPUArray]:

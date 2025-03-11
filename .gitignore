@@ -9,3 +9,5 @@
 *.gurobi.json
 *.gurobi.bas
 *.gurobi.elems
+*.nsys-rep
+*.txt

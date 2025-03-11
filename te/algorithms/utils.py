@@ -1,7 +1,3 @@
-import os
-import sys
-import time
-import shutil
 import gurobipy
 import contextlib
 import cupy as cp
@@ -15,6 +11,7 @@ from typing import List, Tuple, Dict, Union, Optional, Type
 from collections import defaultdict
 from te.traffic_models.base import Commodity, TrafficMatrixBase
 from te.algorithms.base import TrafficEngineeringLP, SolverParams, GurobiSolverParams
+from te.algorithms.statistics.base import get_global_statistics
 
 
 class ANSIColors:
@@ -442,26 +439,6 @@ def test_mlu(lp_cls: Type[TrafficEngineeringLP], graph: nx.DiGraph, tm: TrafficM
             print(as_info(f"Solved in {str(round(t, 2))} seconds"))
             print(as_info(f"Final objective value: {str(round(lp.objective_value, 4))}"))
             print(as_info(f"Actual utilization: {str(round(get_solution_maximum_utilization(lp.assignments, lp.graph), 4))}"))
-
-
-def show_runtime(name: str):
-    def inner(f):
-        def wrapper(*args, **kwargs):
-            cp.cuda.runtime.deviceSynchronize()
-            start = time.perf_counter_ns()
-            res = f(*args, **kwargs)
-            cp.cuda.runtime.deviceSynchronize()
-            print(as_info(f'Execution of {name} took: {str(round((time.perf_counter_ns() - start) * 1e-3, 5))} us'))
-            return res
-        return wrapper
-    return inner
-
-
-def create_temp_folder(name: str) -> str:
-    TMP = os.environ['TEMP'] if sys.platform == 'win32' else '/tmp'
-    path = os.path.join(TMP, name)
-    try:
-        os.mkdir(path)
-    except FileExistsError:
-        pass
-    return path
+        stats = get_global_statistics()
+        if stats is not None:
+            print(as_info(stats))

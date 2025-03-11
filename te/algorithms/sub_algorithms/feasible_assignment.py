@@ -1,4 +1,5 @@
 import os
+import sys
 import shutil
 import contextlib
 import numpy as np
@@ -6,7 +7,7 @@ import networkx as nx
 from joblib import Parallel, delayed
 from typing import List, Dict, Tuple
 from topologies.utils import get_edge_indexing, Commodity
-from te.algorithms.utils import as_info, create_temp_folder
+from te.algorithms.utils import as_info
 from te.algorithms.gpu_utils import cpu_memmap, cpu_zeros
 
 
@@ -16,10 +17,23 @@ TEMP_FOLDER_NAME = 'feasible_assignment'
 MEMMAP_FILE_NAME = 'X_KE'
 
 
+
 class TempHelper:
+    """Simple class for working with temporary files"""
+    
+    @staticmethod
+    def create_temp_folder(name: str) -> str:
+        TMP = os.environ['TEMP'] if sys.platform == 'win32' else '/tmp'
+        path = os.path.join(TMP, name)
+        try:
+            os.mkdir(path)
+        except FileExistsError:
+            pass
+        return path
+    
     def __init__(self, temp_folder: str):
         self.temp_folder = temp_folder
-        self.temp_path = create_temp_folder(temp_folder)
+        self.temp_path = self.create_temp_folder(temp_folder)
     
     def get_file_path(self, name: str) -> str:
         return os.path.join(self.temp_path, name)
