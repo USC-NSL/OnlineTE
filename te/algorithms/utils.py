@@ -448,10 +448,10 @@ def show_runtime(name: str):
     def inner(f):
         def wrapper(*args, **kwargs):
             cp.cuda.runtime.deviceSynchronize()
-            start = time.time()
+            start = time.perf_counter_ns()
             res = f(*args, **kwargs)
             cp.cuda.runtime.deviceSynchronize()
-            print(as_info(f'Execution of {name} took: {str(round((time.time() - start) * 1000, 5))} ms'))
+            print(as_info(f'Execution of {name} took: {str(round((time.perf_counter_ns() - start) * 1e-3, 5))} us'))
             return res
         return wrapper
     return inner
