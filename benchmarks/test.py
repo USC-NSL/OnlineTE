@@ -2,7 +2,8 @@ from te.algorithms.base import GurobiSolverParams
 from te.algorithms.formulations.edge_based_centralized import CentralizedEdgeBasedLP
 from te.algorithms.formulations.edge_based_regularized_admm import RegularizedADMMLP, RegularizedADMMSolverParams
 from te.algorithms.formulations.edge_based_unregulated_admm import UnregulatedADMMLP, UnregulatedADMMSolverParams
-from te.algorithms.formulations.edge_based_unregulated_admm_gpu import GPUUnregulatedADMMLP, GPUUnregulatedADMMSolverParams
+# from te.algorithms.formulations.edge_based_unregulated_admm_gpu import GPUUnregulatedADMMLP, GPUUnregulatedADMMSolverParams
+from te.algorithms.formulations.edge_based_gpu_debug import GPUUnregulatedADMMLP, GPUUnregulatedADMMSolverParams
 from te.algorithms.utils import test_mlu
 from topologies.utils import get_uniform_tm_problem_with_capacity_heuristic
 

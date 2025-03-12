@@ -289,3 +289,33 @@ def do_gpu_plain_pgd_with_step_reduction(lambda_block: GPUArray, x_block_0: GPUA
     del grad_block
     y_block = c_block + n.T @ lambda_block
     return lambda_block, y_block
+
+import torch
+from te.algorithms.tensor_utils import Tensor
+
+def do_tensor_plain_pgd_with_step_reduction(lambda_block: Tensor, x_block_0: Tensor, nnt: Tensor, 
+                                            n: Tensor, c_block: Tensor, gamma: float, n_iter: int, 
+                                            kappa: float, epoch: int) -> Tuple[Tensor, Tensor]:
+    """
+    A plain block oriented PGD operation, with step size heuristic.
+    This will run a GPU, as such, norm-2 and selective operations (like
+    checking for converged columns) become extremely slow.
+    Matrix operations on the other hand benefit greatly.
+    As such, this implementation is meant to be very small fast.
+
+    The step size heuristic is:
+
+        step_size <- (gamma / epoch**kappa)
+    
+    For 0 <= `kappa` <= 1.
+    """
+    big_c_block = x_block_0 + n @ c_block
+    step_size = gamma / (epoch+1) ** kappa
+    for _ in range(n_iter):
+        grad_block = nnt @ lambda_block + big_c_block
+        lambda_block = lambda_block - step_size * grad_block
+        lambda_block = torch.clamp(lambda_block, min=0)
+    del big_c_block
+    del grad_block
+    y_block = c_block + n.T @ lambda_block
+    return lambda_block, y_block
