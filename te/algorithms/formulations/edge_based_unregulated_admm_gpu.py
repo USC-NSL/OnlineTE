@@ -368,7 +368,7 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
         return Y_TK - cp.expand_dims(Y_BAR - P_BAR + U_T, axis=1)
 
     @record_gpu_runtime('NetworkUpdate')
-    @record_reserved_gpu_memory('reserverd-NetworkUpdate')
+    @record_reserved_gpu_memory('reserved-NetworkUpdate')
     def _do_network_update(self, epoch: int) -> float:
         PARAMS = self._solver_params
         GAMMA = PARAMS.Gamma
@@ -445,7 +445,7 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
         self._u_t = U_T + (Y_BAR_T - P_BAR_T)
     
     @record_gpu_runtime('Reconvene')
-    @record_reserved_gpu_memory('reserverd-Reconvene')
+    @record_reserved_gpu_memory('reserved-Reconvene')
     def _reconvene_network_updates(self):
         self._update_Y_bar()
         self._update_P_bar()
@@ -585,8 +585,8 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
         epoch = 0
         max_iters = PARAMS.NumberOfEpochs
         try:
-            # for epoch in tqdm.tqdm(range(PARAMS.NumberOfEpochs)):
-            while True:
+            for epoch in tqdm.tqdm(range(PARAMS.NumberOfEpochs)):
+            # while True:
                 if ((max_iters is not None) and (epoch == max_iters)):
                     break
                 t_network = 0
@@ -629,7 +629,7 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
                 # Check primal-dual objective gap
                 # if ((epoch > 0) and (self._check_objective_gap())):
                 #     break
-                epoch += 1
+                # epoch += 1
             self._set_X_ek()
             return total_runtime
         except GurobiError as e:

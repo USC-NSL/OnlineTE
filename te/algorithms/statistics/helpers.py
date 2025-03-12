@@ -1,6 +1,7 @@
 import time
 from typing import Dict, Callable, Optional, Any
-from te.algorithms.statistics.base import StatisticsCollectorBase, get_global_collector
+from te.algorithms.statistics.base import (StatisticsCollectorBase, get_global_memory_usage_collecotor, 
+                                           get_global_execution_time_collector)
 from te.algorithms.gpu_utils import (synchronize_to_all, synchronize_to_device, get_total_reserved_gpu_memory_usage, 
                                      get_total_used_gpu_memory_usage)
 
@@ -46,12 +47,12 @@ def synchronize_and_get_elapsed_time_ns(start: int, dev: Optional[int] = None):
 
 def record_cpu_runtime(element_name: str, collector: Optional[StatisticsCollectorBase] = None):
     if collector is None:
-        collector = get_global_collector()
+        collector = get_global_execution_time_collector()
     return before_and_after_helper(collector, element_name, get_elapsed_time_ns, record_time_ns)
 
 def record_gpu_runtime(element_name: str, dev: Optional[int] = None, collector: Optional[StatisticsCollectorBase] = None):
     if collector is None:
-        collector = get_global_collector()
+        collector = get_global_execution_time_collector()
     def _synchronize_and_get_elapsed_time_ns(start: int):
         return synchronize_and_get_elapsed_time_ns(start=start, dev=dev)
     return before_and_after_helper(collector, element_name, _synchronize_and_get_elapsed_time_ns, record_time_ns)
@@ -61,9 +62,9 @@ def record_gpu_runtime(element_name: str, dev: Optional[int] = None, collector: 
 
 def record_reserved_gpu_memory(element_name: str, collector: Optional[StatisticsCollectorBase] = None):
     if collector is None:
-        collector = get_global_collector()
+        collector = get_global_memory_usage_collecotor()
     return before_and_after_helper(collector, element_name, get_total_reserved_gpu_memory_usage)
 def record_used_gpu_memory(element_name: str, collector: Optional[StatisticsCollectorBase] = None):
     if collector is None:
-        collector = get_global_collector()
+        collector = get_global_memory_usage_collecotor()
     return before_and_after_helper(collector, element_name, get_total_used_gpu_memory_usage)

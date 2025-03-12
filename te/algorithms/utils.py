@@ -11,7 +11,7 @@ from typing import List, Tuple, Dict, Union, Optional, Type
 from collections import defaultdict
 from te.traffic_models.base import Commodity, TrafficMatrixBase
 from te.algorithms.base import TrafficEngineeringLP, SolverParams, GurobiSolverParams
-from te.algorithms.statistics.base import get_global_statistics
+from te.algorithms.statistics.base import stringify_collected_stats
 
 
 class ANSIColors:
@@ -439,6 +439,6 @@ def test_mlu(lp_cls: Type[TrafficEngineeringLP], graph: nx.DiGraph, tm: TrafficM
             print(as_info(f"Solved in {str(round(t, 2))} seconds"))
             print(as_info(f"Final objective value: {str(round(lp.objective_value, 4))}"))
             print(as_info(f"Actual utilization: {str(round(get_solution_maximum_utilization(lp.assignments, lp.graph), 4))}"))
-        stats = get_global_statistics()
+        stats = stringify_collected_stats()
         if stats is not None:
             print(as_info(stats))
