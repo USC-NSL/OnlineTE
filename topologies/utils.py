@@ -4,7 +4,7 @@ import cupy as cp
 import numpy as np
 import networkx as nx
 from scipy.linalg import null_space
-from typing import Dict, Tuple, Union, List
+from typing import Dict, Tuple, Union, List, Optional
 from topologies import (
     TOPOLOGIES_PATH, TOPOLOGY_ZOO_DIR_NAME, 
     TOPOLOGY_ZOO_INDEX_FILE_NAME
@@ -28,8 +28,15 @@ IMPORTANT NOTE:
 """
 
 
-def load_zoo_topology(name: str) -> nx.DiGraph:
+is_artificial = lambda name: name.lower().startswith('artificial-')
+get_artificial_size = lambda name: int(name.lower().split('artificial-')[-1])
+
+
+def load_zoo_topology(name: str, seed: Optional[int] = None) -> nx.DiGraph:
     """Load the topology zoo model as an instance of `nx.DiGraph`"""
+
+    if is_artificial(name):
+        return get_artificial_topology(get_artificial_size(name), seed=seed)
 
     # First, check for a GraphML file
     graphml_path = os.path.join(TOPOLGOY_ZOO_PATH, f"{name}.graphml")
@@ -58,6 +65,67 @@ def load_zoo_topology(name: str) -> nx.DiGraph:
         print(f"Removing {len(isolateds)} isolated nodes")
 
     return g.to_directed()
+
+
+def _get_graph_list_to_join(n_nodes: int, num: int = 1, seed: Optional[int] = None) -> List[nx.DiGraph]:
+    """
+    This tries to find `num` zoo topologies such that their total number of nodes is
+    at least `n_nodes`.
+    To do this, we first attempt to find a graph of size `n_nodes / num`. If found, we
+    subtract its size from `n_nodes` and repeat with `num = 1`. This is done to encourage
+    variety in size of chosen graphs (we would prefer a small graph and a big one, instead
+    of many small ones ...).
+    If such a graph is not found, we increase `num` by 1 and repeat.
+    """
+    if num == 10 or n_nodes == num or n_nodes == 0:
+        # Give up on the 10th iteration ....
+        return []
+    upper_bound_tol = int(np.sqrt(n_nodes))
+    g = get_zoo_topology_at_least_as_large_as(n=n_nodes//num, m=(n_nodes + upper_bound_tol)//num)
+    if g:
+        return [g] + _get_graph_list_to_join(max(n_nodes, (n_nodes + upper_bound_tol)//num) - g.number_of_nodes(), seed=seed)
+    else:
+        return _get_graph_list_to_join(n_nodes, num=num+1, seed=seed)
+
+
+def _compose_undirected_graphs(graphs: List[nx.Graph]) -> Tuple[nx.Graph, List[int]]:
+    sizes = [0]
+    for g in graphs:
+        sizes.append(g.number_of_nodes() + sizes[-1])
+    sizes.pop(-1)
+    composite = nx.Graph()
+    for i, g in enumerate(graphs):
+        size_until_now = sizes[i]
+        composite.add_nodes_from(range(size_until_now, size_until_now + g.number_of_nodes()))
+        edges = [(s+size_until_now, d+size_until_now) for s, d in g.edges(data=False)]
+        composite.add_edges_from(edges)
+    return composite, sizes
+
+
+def get_artificial_topology(n_nodes: int, seed: Optional[int] = None) -> nx.DiGraph:
+    """
+    Creates a network by randomly picking some networks from the zoo and
+    Frakensteining them together.
+    The result will contain _at least_ `n_nodes` nodes. There are no
+    guarantees about the number of edges though.
+
+    To join `n` graphs together, we choose `sqrt(n_nodes)/n` nodes
+    from each graph, and then randomly connect them to eachother
+    in a ring.
+    """
+
+    graph_list = _get_graph_list_to_join(n_nodes, seed=seed)
+    if len(graph_list) == 1:
+        return graph_list[0]
+    undirs = [g.to_undirected() for g in graph_list]
+    composite_graph, sizes = _compose_undirected_graphs(undirs)
+    n_connections = int(np.sqrt(n_nodes) / len(undirs))
+    rng = np.random.default_rng(seed=seed)
+    chosen_nodes = [sizes[i] + rng.choice(g.number_of_nodes(), size=n_connections) for i, g in enumerate(undirs)]
+    for i in range(len(undirs)):
+        for s, d in zip(chosen_nodes[i], chosen_nodes[(i+1) % len(undirs)]):
+            composite_graph.add_edge(s, d)
+    return composite_graph.to_directed()
 
 
 def get_edge_indexing(graph: nx.DiGraph) -> Dict[Tuple[int, int], int]:
@@ -147,7 +215,7 @@ def load_index() -> Dict[str, int]:
         return json.load(findex)
 
 
-def get_zoo_topology_at_least_as_large_as(n: int, m: int = -1) -> nx.DiGraph:
+def get_zoo_topology_at_least_as_large_as(n: int, m: int = -1, seed: Optional[int] = None) -> nx.DiGraph:
     """Pick a random topology that has at least `n` nodes and at most `m`, if given."""
     
     assert os.path.exists(TOPOLGOY_ZOO_PATH)
@@ -165,7 +233,10 @@ def get_zoo_topology_at_least_as_large_as(n: int, m: int = -1) -> nx.DiGraph:
             print(f"No topology of size at least {n} and at most {m} exists in the zoo.")
         return None
     
-    chosen = np.random.choice(list(choices.keys()))
+    if seed:
+        chosen = np.random.default_rng(seed).choice(list(choices.keys()))
+    else:
+        chosen = np.random.choice(list(choices.keys()))
     print(f"Chose topology {chosen} of size {index[chosen]}")
     
     return load_zoo_topology(chosen)
@@ -339,6 +410,7 @@ if __name__ == '__main__':
     # g = load_zoo_topology('Interoute')
     # print(f'Nodes: {len(g.nodes)}')
     # print(f'Edges: {len(g.edges)}')
-    g = load_zoo_topology('Claranet')
+    # g = load_zoo_topology('Claranet')
+    g = get_artificial_topology(300, seed=12345)
     nx.draw(nx.to_undirected(g), pos=nx.kamada_kawai_layout(g, scale=3), with_labels=True)
     plt.show()

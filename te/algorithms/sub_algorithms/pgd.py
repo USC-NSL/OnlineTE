@@ -3,7 +3,7 @@ import numpy as np
 import te.constants
 from typing import Optional, Tuple
 from te.algorithms.utils import careful_norm, careful_norm_squared, all_elements_within_threshold
-from te.algorithms.gpu_utils import GPUArray
+from te.algorithms.gpu_utils import GPUArray, PartitionedGPUArray, ScatteredGPUArray, zip_map
 
 
 """Different Projected Gradient Descent (PGD) algorithms for non-negative constraints"""
@@ -318,4 +318,32 @@ def do_tensor_plain_pgd_with_step_reduction(lambda_block: Tensor, x_block_0: Ten
     del big_c_block
     del grad_block
     y_block = c_block + n.T @ lambda_block
+    return lambda_block, y_block
+
+
+def do_multi_gpu_plain_pgd_with_step_reduction(lambda_block: PartitionedGPUArray, x_block_0: PartitionedGPUArray, 
+                                               nnt: ScatteredGPUArray, n: ScatteredGPUArray, 
+                                               c_block: PartitionedGPUArray, gamma: float, n_iter: int, 
+                                               kappa: float, epoch: int) -> Tuple[PartitionedGPUArray, PartitionedGPUArray]:
+    """
+    A plain block oriented PGD operation, with step size heuristic.
+    This will run a GPU, as such, norm-2 and selective operations (like
+    checking for converged columns) become extremely slow.
+    Matrix operations on the other hand benefit greatly.
+    As such, this implementation is meant to be very small fast.
+
+    The step size heuristic is:
+
+        step_size <- (gamma / epoch**kappa)
+    
+    For 0 <= `kappa` <= 1.
+    """
+    big_c_block = zip_map([x_block_0, n, c_block], lambda x0, _n, c: x0 + _n @ c)
+    step_size = gamma / (epoch+1) ** kappa
+    for _ in range(n_iter):
+        grad_block = zip_map([nnt, lambda_block, big_c_block], lambda nn, l, c: nn @ l + c)
+        lambda_block = zip_map([lambda_block, grad_block], lambda l, g: cp.clip(l - step_size * g, a_min=0, a_max=None))
+    del big_c_block
+    del grad_block
+    y_block = zip_map([c_block, n, lambda_block], lambda c, _n, l: c + _n.T @ l)
     return lambda_block, y_block

@@ -1,6 +1,6 @@
 import numpy as np
 import cupy as cp
-from typing import Optional, Tuple, Callable, NewType
+from typing import Optional, Union, Tuple, Callable, NewType, List
 
 """
 Gurobi cannot utilize a GPU (and it really cannot benefit from it as-is
@@ -16,6 +16,10 @@ CPUArray = np.ndarray
 """Alias for `numpy.ndarray`, an array that lives on the RAM. Plenty of space usually."""
 GPUArray = NewType('GPUArray', cp.ndarray)
 """Alias for `cupy.ndarray`, an array that lives on the GPU memory. Usually quite limited."""
+ScatteredGPUArray = NewType('ScatteredGPUArray', Tuple[GPUArray])
+"""Designates arrays that are shared among all devices as-is"""
+PartitionedGPUArray = NewType('PartitionedGPUArray', List[GPUArray])
+"""A 2D matrix that has been partitioned column-wise over GPU devices"""
 
 """
 For very large topologies, GPU memory becomes very tight.
@@ -94,3 +98,68 @@ def synchronize_to_all():
     """Wait until all operations on all GPU devices finish"""
     for dev in range(NUMBER_OF_GPU_DEVICES):
         synchronize_to_device(dev)
+
+
+"""Multi-GPU functions"""
+
+
+def partitions(total: int, parts: int) -> List[int]:
+    assert (total > parts)
+    out = [total // parts for _ in range(parts)]
+    out[0] += (total % parts)
+    return out
+
+
+def as_scattered_gpu_arrray(array: CPUArray) -> ScatteredGPUArray:
+    out = []
+    for dev in range(NUMBER_OF_GPU_DEVICES):
+        with cp.cuda.Device(dev):
+            out.append(as_gpu_array(array))
+    return tuple(out)
+
+
+def as_partitioned_gpu_array(array: CPUArray) -> PartitionedGPUArray:
+    shape = array.shape
+    assert len(shape) == 2
+    columns = partitions(shape[-1], NUMBER_OF_GPU_DEVICES)
+    out = []
+    sum_col = 0
+    for dev in range(NUMBER_OF_GPU_DEVICES):
+        with cp.cuda.Device(dev):
+            out.append(as_gpu_array(array[:, sum_col:columns[dev]]))
+            sum_col += columns[dev]
+    assert sum_col == shape[-1]
+    return out
+
+
+def gpu_partitioned_zeros(shape: Tuple[int]) -> PartitionedGPUArray:
+    assert len(shape) == 2
+    columns = partitions(shape[-1], NUMBER_OF_GPU_DEVICES)
+    out = []
+    for dev in range(NUMBER_OF_GPU_DEVICES):
+        with cp.cuda.Device(dev):
+            out.append(gpu_zeros((shape[0], columns[dev])))
+    return out
+
+
+def gpu_scattered_zeros(shape: Tuple[int]) -> ScatteredGPUArray:
+    out = []
+    for dev in range(NUMBER_OF_GPU_DEVICES):
+        with cp.cuda.Device(dev):
+            out.append(gpu_zeros(shape))
+    return tuple(out)
+
+
+def zip_map(arrays: List[Union[ScatteredGPUArray, PartitionedGPUArray]], f: Callable,
+            *args, **kwargs) -> Union[ScatteredGPUArray, PartitionedGPUArray]:
+    l = len(arrays[0])
+    assert all(len(array) == l for array in arrays), f'Len = {[len(array) for array in arrays]}'
+    return [f(*partition, *args, **kwargs) for partition in zip(*arrays)]
+
+
+def reduce_to_cpu(array: PartitionedGPUArray, f: Callable, *args, **kwargs) -> CPUArray:
+    return f(np.array([as_cpu_array(item) for item in array]).T, *args, **kwargs)
+
+
+def rebuild_to_cpu(array: PartitionedGPUArray) -> CPUArray:
+    return np.hstack([as_cpu_array(item) for item in array])
