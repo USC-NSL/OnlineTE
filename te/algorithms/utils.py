@@ -33,6 +33,12 @@ as_success = lambda msg: f"{ANSIColors.BOLD}{ANSIColors.OKGREEN}{msg}{ANSIColors
 as_fail = lambda msg: f"{ANSIColors.BOLD}{ANSIColors.FAIL}{msg}{ANSIColors.ENDC}"
 
 
+def str_round(value, digits: int) -> str:
+    """For float16, `np.round` / `round` can easily return `inf`. So we cast to `float32` always"""
+    val32 = np.float32(value)
+    return str(round(val32, digits))
+
+
 method_to_str = {
     gurobipy.GRB.METHOD_BARRIER: "BARRIER",
     gurobipy.GRB.METHOD_PRIMAL: "PRIMAL-SIMPLEX",
@@ -218,9 +224,9 @@ def get_solution_confusion_matrix(lp: TrafficEngineeringLP, feasibility_tol: Opt
         if report:
             report_str = "{:<4} -> {:<4}".format(ideal.source, ideal.destination) + \
                 "{:^10}    {:^7} <--> {:^7}".format(
-                    str(np.round(ideal.demand, 2)),
-                    str(np.round(actual[0].demand, 2)),
-                    str(np.round(actual[1].demand, 2))
+                    str_round(ideal.demand, 2),
+                    str_round(actual[0].demand, 2),
+                    str_round(actual[1].demand, 2)
                 )
             if is_not_satisfied:
                 print(as_fail(report_str))
@@ -230,9 +236,9 @@ def get_solution_confusion_matrix(lp: TrafficEngineeringLP, feasibility_tol: Opt
             if report_unsat and is_not_satisfied:
                 report_str = "{:<4} -> {:<4}".format(ideal.source, ideal.destination) + \
                     "{:^10}    {:^7} <--> {:^7}".format(
-                        str(np.round(ideal.demand, 2)),
-                        str(np.round(actual[0].demand, 2)),
-                        str(np.round(actual[1].demand, 2))
+                        str_round(ideal.demand, 2),
+                        str_round(actual[0].demand, 2),
+                        str_round(actual[1].demand, 2)
                     )
                 print(as_fail(report_str))
     
@@ -298,9 +304,9 @@ def check_centralized_flow_conservation(
             fout = sum(flow_out[v])
             fin  = sum(flow_in[v])
 
-            demand_str = str(np.round(DEMAND, 4))
-            fout_str = str(np.round(fout, 4))
-            fin_str = str(np.round(fin, 4))
+            demand_str = str_round(DEMAND, 4)
+            fout_str = str_round(fout, 4)
+            fin_str = str_round(fin, 4)
 
             if v == SOURCE:
                 assert abs(fout - DEMAND) < feasibility_tol , \
@@ -346,8 +352,8 @@ def check_capacity_constraint(
         demand = X_O_E[e]
         if is_congested(c_e, demand):
             if report:
-                cap_str = str(np.round(c_e, 4))
-                demand_str = str(np.round(demand, 4))
+                cap_str = str_round(c_e, 4)
+                demand_str = str_round(demand, 4)
                 print(f"Link {s} --> {d} Is Congested: {demand_str} > {cap_str}")
             c += 1
     
@@ -380,9 +386,9 @@ def check_distributed_flow_conservation(
             fout = sum(flow_out[v])
             fin  = sum(flow_in[v])
 
-            demand_str = str(np.round(DEMAND, 4))
-            fout_str = str(np.round(fout, 4))
-            fin_str = str(np.round(fin, 4))
+            demand_str = str_round(DEMAND, 4)
+            fout_str = str_round(fout, 4)
+            fin_str = str_round(fin, 4)
         
             if v == SOURCE:
                 assert abs(fout - DEMAND) < 2*feasibility_tol , \
@@ -436,9 +442,9 @@ def test_mlu(lp_cls: Type[TrafficEngineeringLP], graph: nx.DiGraph, tm: TrafficM
         if t > 0:
             lp.check(feasibility_tol=feasibility_tol, feasibility_ratio=feasibility_ratio)
             get_solution_confusion_matrix(lp, feasibility_tol=feasibility_tol, feasibility_ratio=feasibility_ratio, **kwargs)
-            print(as_info(f"Solved in {str(round(t, 2))} seconds"))
-            print(as_info(f"Final objective value: {str(round(lp.objective_value, 4))}"))
-            print(as_info(f"Actual utilization: {str(round(get_solution_maximum_utilization(lp.assignments, lp.graph), 4))}"))
+            print(as_info(f"Solved in {str_round(t, 2)} seconds"))
+            print(as_info(f"Final objective value: {str_round(lp.objective_value, 4)}"))
+            print(as_info(f"Actual utilization: {str_round(get_solution_maximum_utilization(lp.assignments, lp.graph), 4)}"))
         stats = stringify_collected_stats()
         if stats is not None:
             print(as_info(stats))

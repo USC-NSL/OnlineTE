@@ -63,21 +63,21 @@ def set_global_precision(precision: str):
 
 
 def get_total_reserved_gpu_memory_usage() -> int:
-    """The amount of allocated GPU memory usage across all devices (including caches ...)"""
+    """The average amount of allocated GPU memory usage across all devices (including caches ...)"""
     total = 0
     for i in range(NUMBER_OF_GPU_DEVICES):
         with cp.cuda.Device(i):
             total += GPU_MEM_MANAGER.total_bytes()
-    return total
+    return total // NUMBER_OF_GPU_DEVICES
 
 
 def get_total_used_gpu_memory_usage() -> int:
-    """The GPU working set, across all devices"""
+    """The average GPU working set, across all devices"""
     total = 0
     for i in range(NUMBER_OF_GPU_DEVICES):
         with cp.cuda.Device(i):
             total += GPU_MEM_MANAGER.used_bytes()
-    return total
+    return total // NUMBER_OF_GPU_DEVICES
 
 
 cpu_zeros: Callable[[Tuple[int]], CPUArray]  = lambda shape: np.zeros(shape=shape, dtype=_CPU_DTYPE)
@@ -103,6 +103,10 @@ def synchronize_to_all():
 """Multi-GPU functions"""
 
 
+def scattered_shape(array: Union[ScatteredGPUArray, PartitionedGPUArray]) -> Tuple[int]:
+    return tuple([len(array)] + [a.shape for a in array])
+
+
 def partitions(total: int, parts: int) -> List[int]:
     assert (total > parts)
     out = [total // parts for _ in range(parts)]
@@ -126,7 +130,7 @@ def as_partitioned_gpu_array(array: CPUArray) -> PartitionedGPUArray:
     sum_col = 0
     for dev in range(NUMBER_OF_GPU_DEVICES):
         with cp.cuda.Device(dev):
-            out.append(as_gpu_array(array[:, sum_col:columns[dev]]))
+            out.append(as_gpu_array(array[:, sum_col:sum_col+columns[dev]]))
             sum_col += columns[dev]
     assert sum_col == shape[-1]
     return out
@@ -154,7 +158,11 @@ def zip_map(arrays: List[Union[ScatteredGPUArray, PartitionedGPUArray]], f: Call
             *args, **kwargs) -> Union[ScatteredGPUArray, PartitionedGPUArray]:
     l = len(arrays[0])
     assert all(len(array) == l for array in arrays), f'Len = {[len(array) for array in arrays]}'
-    return [f(*partition, *args, **kwargs) for partition in zip(*arrays)]
+    out = []
+    for dev, partition in enumerate(zip(*arrays)):
+        with cp.cuda.Device(dev):
+            out.append(f(*partition, *args, **kwargs))
+    return out
 
 
 def reduce_to_cpu(array: PartitionedGPUArray, f: Callable, *args, **kwargs) -> CPUArray:

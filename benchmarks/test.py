@@ -9,6 +9,9 @@ from te.algorithms.formulations.edge_based_multi_gpu import MultiGPUUnregulatedA
 from te.algorithms.utils import test_mlu
 from topologies.utils import get_uniform_tm_problem_with_capacity_heuristic
 
+import warnings
+warnings.filterwarnings("error")
+
 RNG_SEED = 12345
 
 FEASIBILITY_TOL = None
@@ -113,23 +116,23 @@ def gpu_unregulated_admm_test(topology: str, seed: int, **kwargs):
 
 
 def multi_gpu_unregulated_admm_test(topology: str, seed: int, **kwargs):
-    c, graph, tm = get_uniform_tm_problem_with_capacity_heuristic(topology, seed)
+    c, graph, tm = get_uniform_tm_problem_with_capacity_heuristic(topology, seed, scale_factor=20)
     print(f"Network link capacity is: {str(round(c, 2))}")
     m = graph.number_of_nodes()
     n = graph.number_of_edges()
 
     solver_params = MultiGPUUnregulatedADMMSolverParams(
-        NumberOfEpochs=150,
+        NumberOfEpochs=500,
         NumberOfNetworkUpdates=3,
         PGDIterations=3,
         Gamma=2,
-        # Eta=10/(n * c ** 2),
-        # Rho=50/(n * c ** 2),
-        Eta=1/m**2,
-        Rho=0.25/m**2,
+        Eta=10/(n * c ** 2),
+        Rho=5e-2/(n * c ** 2),
+        # Eta=1/m**2,
+        # Rho=0.25/m**2,
         BigTheta=1e-6,
         BigGamma=1e-7,
-        Kappa=0.1,
+        Kappa=0.02,
         FloatPrecision='single',
         Seed=RNG_SEED
     )
@@ -153,4 +156,6 @@ if __name__ == '__main__':
     # gpu_unregulated_admm_test(ARTIFICIAL_MEDIUM_TOPOLOGY_1, RNG_SEED)
     # gpu_unregulated_admm_test(ARTIFICIAL_MEDIUM_TOPOLOGY_2, RNG_SEED)
     # multi_gpu_unregulated_admm_test(SMALL_TOPOLOGY, RNG_SEED)
-    multi_gpu_unregulated_admm_test(MEDIUM_TOPOLOGY, RNG_SEED)
+    # multi_gpu_unregulated_admm_test(MEDIUM_TOPOLOGY, RNG_SEED)
+    # multi_gpu_unregulated_admm_test(ARTIFICIAL_MEDIUM_TOPOLOGY_1, RNG_SEED)
+    multi_gpu_unregulated_admm_test(HUGE_TOPOLOGY, RNG_SEED, report_unsat=False)

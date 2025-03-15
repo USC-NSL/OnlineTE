@@ -11,3 +11,13 @@
 *.gurobi.elems
 *.nsys-rep
 *.txt
+
+# VENV
+*.env
+*.cfg
+lib/
+lib64/
+bin/
+include/
+share/
+lib64
