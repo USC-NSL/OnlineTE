@@ -4,6 +4,7 @@ import numpy as np
 import networkx as nx
 import te.constants
 import dataclasses
+from multiprocessing import cpu_count
 from typing import List, Optional, Tuple, Dict, Any
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -102,6 +103,7 @@ class GurobiSolverParams(SolverParams):
     ConvTol: float = te.constants.DEFAULT_OPTIMALITY_TOLERANCE
     FeasibilityTol: float = te.constants.DEFAULT_FEASIBILITY_TOLERANCE
     Presolve: int = te.constants.DEFAULT_PRESOLVE
+    Threads: int = min(cpu_count(), 32)
     LogFile: str = te.constants.DEFAULT_GUROBI_LOG_FILE
 
 
@@ -165,7 +167,7 @@ class TrafficEngineeringLP(ABC):
 
     @property
     @abstractmethod
-    def objective_trace(self) -> Optional[List[float]]:
+    def objective_trace(self) -> Optional[List]:
         """List of objective values during algorithm iterations"""
 
     @property

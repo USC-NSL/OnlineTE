@@ -62,6 +62,8 @@ def make_model(name: str, params: SolverParams, env: Optional[gurobipy.Env], ver
     model.Params.LogFile = params.LogFile
     model.Params.Presolve = params.Presolve
 
+    model.Params.Threads = params.Threads
+
     if len(kwargs) > 0:
         for k, v in kwargs.items():
             setattr(model.Params, k, v)
@@ -145,8 +147,18 @@ def get_solution_confusion_matrix(lp: TrafficEngineeringLP, feasibility_tol: Opt
                     sns.heatmap(cm)
                 elif _objective_trace is not None and _objective_gap_trace is None:
                     _fig = plt.figure(figsize=(8, 3))
+                    traces = []
+                    if len(_objective_trace) > 0:
+                        item0 = _objective_trace[0]
+                        if isinstance(item0, float):
+                            traces.append(_objective_trace)
+                        elif isinstance(item0, (tuple, list)):
+                            traces.extend(list(zip(*_objective_trace)))
+                        else:
+                            as_warning(f'No idea how to plot objective samples of type: {type(item0)}')
                     plt.subplot(1, 2, 1)
-                    plt.plot(_objective_trace)
+                    for trace in traces:
+                        plt.plot(trace)
                     plt.subplot(1, 2, 2)
                     sns.heatmap(_cm, vmin=0, vmax=1)
                 else:
@@ -264,8 +276,10 @@ def get_solution_confusion_matrix(lp: TrafficEngineeringLP, feasibility_tol: Opt
 
 
 def get_solution_maximum_utilization(assignments: np.ndarray, graph: nx.DiGraph) -> float:
-    assert len(np.shape(assignments)) == 2
-    flows = np.sum(assignments, axis=1)
+    if len(np.shape(assignments)) == 1:
+        flows = assignments
+    else:
+        flows = np.sum(assignments, axis=1)
     u = 0
     for e, (_, _, c_e) in enumerate(graph.edges(data='capacity')):
         this_u = flows[e] / c_e

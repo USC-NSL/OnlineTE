@@ -395,7 +395,7 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
         if self._solver_params.UseVariableRho:
             self._Y_bar_t_old = np.copy(self._Y_bar_t)
             self._Y_tk_old = cp.copy(self._Y_tk)
-        self._Y_bar_t = cp.average(self._Y_tk, axis=1)
+        self._Y_bar_t = cp.mean(self._Y_tk, axis=1)
     
     @record_gpu_runtime('PBarUpdate')
     def _update_P_bar(self):

@@ -336,7 +336,7 @@ def get_uniform_tm_problem_with_capacity_heuristic(
     """
     
     graph = load_zoo_topology(topo_name)
-    tm_params = UniformTrafficMatrixParams(n = len(graph.nodes), min = 0.0, max = 0.5)
+    tm_params = UniformTrafficMatrixParams(n = len(graph.nodes), min = 0.0, max = 1.0)
     tm = UniformTrafficMatrix(seed=tm_seed, params=tm_params)
     c_min = get_capacity_lower_bound(graph, tm)
     c = c_min * scale_factor

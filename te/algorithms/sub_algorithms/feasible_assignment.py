@@ -12,7 +12,7 @@ from te.algorithms.gpu_utils import cpu_memmap, cpu_zeros
 
 
 MAX_NUMBER_OF_COMMODITIES_PER_CORE = 5000
-MAX_NUMBER_OF_WORKERS = 12
+MAX_NUMBER_OF_WORKERS = 24
 TEMP_FOLDER_NAME = 'feasible_assignment'
 MEMMAP_FILE_NAME = 'X_KE'
 

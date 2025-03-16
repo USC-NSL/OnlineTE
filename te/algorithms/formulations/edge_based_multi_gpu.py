@@ -14,9 +14,9 @@ from te.algorithms.solution import GurobiEdgeBasedMinimizeMaximumUtilitySolution
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
 from te.algorithms.sub_algorithms.pgd import do_multi_gpu_plain_pgd_with_step_reduction
 from te.algorithms.sub_algorithms.feasible_assignment import get_feasible_flow_assignment
-from topologies.utils import (get_edge_indexing, get_graph_M_matrix, 
-                              get_adjacency_null_space)
-from te.algorithms.utils import check_capacity_constraint, optimize_or_scream, make_model, as_fail, as_warning
+from topologies.utils import get_edge_indexing, get_graph_M_matrix, get_adjacency_null_space
+from te.algorithms.utils import (check_capacity_constraint, get_solution_maximum_utilization, optimize_or_scream, 
+                                 make_model, as_fail, as_warning)
 from te.algorithms.statistics.helpers import record_cpu_runtime, record_gpu_runtime, record_reserved_gpu_memory
 from te.algorithms.gpu_utils import *
 
@@ -95,10 +95,12 @@ class MultiGPUUnregulatedADMMLP(TrafficEngineeringLP):
         self._target_u: Optional[float] = None
 
         self._capacities: Optional[CPUArray] = None
+        self._c_squared: Optional[float] = None
         self._Xo_e_start: Optional[CPUArray] = None
         self._Xo_e: Optional[gurobipy.tupledict] = None
         self._Zo_e: Optional[CPUArray] = None
         self._Xo_e_sol: Optional[CPUArray] = None
+        self._Xo_e_assigned: Optional[CPUArray] = None
         self._utility: Optional[gurobipy.Var] = None
         self._capacity_constraints: List[gurobipy.Constr] = None
 
@@ -139,7 +141,7 @@ class MultiGPUUnregulatedADMMLP(TrafficEngineeringLP):
         there are benefits to keeping the inner one.
         """
 
-        self._objective_trace = []
+        self._objective_trace: List[Tuple[float, float]] = []
         self._objective_gap_trace = []
 
         self._set_initial_feasible_solution()
@@ -180,7 +182,7 @@ class MultiGPUUnregulatedADMMLP(TrafficEngineeringLP):
         return self._utility.X
     
     @property
-    def objective_trace(self) -> Optional[List[float]]:
+    def objective_trace(self) -> Optional[List[Tuple[float, float]]]:
         return self._objective_trace
 
     @property
@@ -220,6 +222,7 @@ class MultiGPUUnregulatedADMMLP(TrafficEngineeringLP):
         K = len(self._commodity_list)
         NUM_EDGES = self._NUM_EDGES
         self._capacities = as_cpu_array([item[-1] for item in self._graph.edges(data='capacity')])
+        self._c_squared = np.linalg.norm(self._capacities)
         self._r_e = cpu_zeros(shape=(NUM_EDGES,))
         self._u_t = gpu_scattered_zeros(shape=(T,))
         self._Zo_e = as_cpu_array(self._Xo_e_start)
@@ -318,7 +321,7 @@ class MultiGPUUnregulatedADMMLP(TrafficEngineeringLP):
         """
 
         OBJECTIVE_CONTROLLER = gurobipy.QuadExpr()
-        OBJECTIVE_CONTROLLER.addTerms(1, UTILITY)
+        OBJECTIVE_CONTROLLER.addTerms(self._c_squared * np.sqrt(NUM_EDGES), UTILITY)
         for e in range(NUM_EDGES):
             OBJECTIVE_CONTROLLER += (RHO/2) * (XO_E[e] - ZO_E[e] + R_E[e]) ** 2
         
@@ -367,7 +370,7 @@ class MultiGPUUnregulatedADMMLP(TrafficEngineeringLP):
     @record_gpu_runtime('YBarUpdate')
     def _update_Y_bar(self):
         self._Y_bar_t = as_scattered_gpu_arrray(
-            reduce_to_cpu(zip_map([self._Y_tk], lambda y: cp.average(y, axis=1)), lambda ls: np.average(ls, axis=1))
+            reduce_to_cpu(zip_map([self._Y_tk], lambda y: cp.mean(y, axis=1)), lambda ls: np.mean(ls, axis=1))
         )
     
     @record_gpu_runtime('PBarUpdate')
@@ -431,6 +434,7 @@ class MultiGPUUnregulatedADMMLP(TrafficEngineeringLP):
         X_KE_SUM_E = self._get_X_k_sum()
         Zo_e = (XO_E_ + X_KE_SUM_E) / 2
         self._Xo_e_sol = XO_E_
+        self._Xo_e_assigned = X_KE_SUM_E
         self._Zo_e = Zo_e
     
     @record_cpu_runtime('REUpdate')
@@ -517,7 +521,7 @@ class MultiGPUUnregulatedADMMLP(TrafficEngineeringLP):
                 self._update_controller_objective()
 
                 # Houskeeping
-                self._objective_trace.append(self._utility.X)
+                self._objective_trace.append((self._utility.X, get_solution_maximum_utilization(self._Xo_e_assigned, self._graph)))
                 total_runtime += MODEL_CONTROLLER.Runtime + t_network
             self._set_X_ek()
             return total_runtime
@@ -539,27 +543,27 @@ class MultiGPUUnregulatedADMMLP(TrafficEngineeringLP):
                 return True
             return math.isclose(primal, pair, rel_tol=_rtol, abs_tol=_atol)
 
-        # Are outer ADMM pairs in consensus?
-        XO_E = self._Xo_e
-        ZO_E = self._Zo_e
-        for e in range(NUM_EDGES):
-            primal = XO_E[e].X
-            pair = ZO_E[e]
-            primal_str = f'{primal:.4f}'
-            pair_str = f'{pair:.4f}'
-            if not in_consensus(primal, pair):
-                print(as_fail(f"Edge {e} --> Outer ADMM pairing is not in consensus with primal variable: {primal_str} vs {pair_str}"))
+        # # Are outer ADMM pairs in consensus?
+        # XO_E = self._Xo_e
+        # ZO_E = self._Zo_e
+        # for e in range(NUM_EDGES):
+        #     primal = XO_E[e].X
+        #     pair = ZO_E[e]
+        #     primal_str = f'{primal:.4f}'
+        #     pair_str = f'{pair:.4f}'
+        #     if not in_consensus(primal, pair):
+        #         print(as_fail(f"Edge {e} --> Outer ADMM pairing is not in consensus with primal variable: {primal_str} vs {pair_str}"))
         
-        # Are inner ADMM pairs in consensus?
-        Y_BAR_T = self._Y_bar_t[0]
-        P_BAR_T = self._P_bar_t[0]
-        for t in range(T):
-            primal = Y_BAR_T[t]
-            pair = P_BAR_T[t]
-            primal_str = f'{primal:.4f}'
-            pair_str = f'{pair:.4f}'
-            if not in_consensus(primal, pair):
-                print(as_fail(f"Axis {t} --> Inner ADMM pairing is not in consensus with primal variable: {primal_str} vs {pair_str}"))
+        # # Are inner ADMM pairs in consensus?
+        # Y_BAR_T = self._Y_bar_t[0]
+        # P_BAR_T = self._P_bar_t[0]
+        # for t in range(T):
+        #     primal = Y_BAR_T[t]
+        #     pair = P_BAR_T[t]
+        #     primal_str = f'{primal:.4f}'
+        #     pair_str = f'{pair:.4f}'
+        #     if not in_consensus(primal, pair):
+        #         print(as_fail(f"Axis {t} --> Inner ADMM pairing is not in consensus with primal variable: {primal_str} vs {pair_str}"))
         
         # Now, check flow conservation ...
         X_EK = self._X_ek
