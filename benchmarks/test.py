@@ -97,13 +97,15 @@ def gpu_unregulated_admm_test(topology: str, seed: int, scale_factor: float = 10
 
     solver_params = GPUUnregulatedADMMSolverParams(
         NumberOfEpochs=150,
-        NumberOfNetworkUpdates=3,
-        PGDIterations=3,
+        NumberOfNetworkUpdates=2,
+        PGDIterations=2,
         Gamma=2,
         # Eta=10/(n * c ** 2),
         # Rho=50/(n * c ** 2),
-        Eta=1/m**2,
-        Rho=0.25/m**2,
+        # Eta=1/m**2,
+        # Rho=0.25/m**2,
+        Eta=8,
+        Rho=1,
         UseVariableRho=False,
         BigTheta=1e-6,
         BigGamma=1e-7,
@@ -122,17 +124,17 @@ def multi_gpu_unregulated_admm_test(topology: str, seed: int, scale_factor: floa
     n = graph.number_of_edges()
 
     solver_params = MultiGPUUnregulatedADMMSolverParams(
-        NumberOfEpochs=150,
+        NumberOfEpochs=250,
         NumberOfNetworkUpdates=3,
         PGDIterations=3,
-        Gamma=0.1,
+        Gamma=1,
         # Eta=10/(n * c ** 2),
         # Rho=5e-2/(n * c ** 2),
         Eta=8,
-        Rho=1,
+        Rho=1e-1,
         BigTheta=1e-6,
         BigGamma=1e-7,
-        Kappa=0.5,
+        Kappa=0.1,
         FloatPrecision='half',
         Seed=RNG_SEED
     )
@@ -142,8 +144,8 @@ def multi_gpu_unregulated_admm_test(topology: str, seed: int, scale_factor: floa
 
 if __name__ == '__main__':
     # centralized_test(SMALL_MEDIUM_TOPOLOGY, RNG_SEED)
-    centralized_test(MEDIUM_TOPOLOGY, RNG_SEED)
-    # centralized_test(HUGE_TOPOLOGY, RNG_SEED)
+    # centralized_test(MEDIUM_TOPOLOGY, RNG_SEED)
+    # centralized_test(HUGE_TOPOLOGY, RNG_SEED, scale_factor=200)
     # regularized_admm_test(HUGE_TOPOLOGY, RNG_SEED, scale_factor=200)
     # regularized_admm_test(SMALL_TOPOLOGY, RNG_SEED)
     # unregulated_admm_test(SMALL_TOPOLOGY, RNG_SEED, trace_out_path=None)
@@ -159,4 +161,4 @@ if __name__ == '__main__':
     # multi_gpu_unregulated_admm_test(SMALL_MEDIUM_TOPOLOGY, RNG_SEED)
     # multi_gpu_unregulated_admm_test(MEDIUM_TOPOLOGY, RNG_SEED)
     # multi_gpu_unregulated_admm_test(ARTIFICIAL_MEDIUM_TOPOLOGY_1, RNG_SEED)
-    # multi_gpu_unregulated_admm_test(HUGE_TOPOLOGY, RNG_SEED, report_unsat=False, scale_factor=200)
+    multi_gpu_unregulated_admm_test(HUGE_TOPOLOGY, RNG_SEED, report_unsat=False, scale_factor=200)

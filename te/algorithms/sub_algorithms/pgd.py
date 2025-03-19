@@ -281,7 +281,7 @@ def do_gpu_plain_pgd_with_step_reduction(lambda_block: GPUArray, x_block_0: GPUA
     """
     mod = cp.get_array_module(lambda_block)
     big_c_block = x_block_0 + n @ c_block
-    step_size = gamma / (epoch+1) ** kappa
+    step_size = gamma / ((epoch+1) ** kappa)
     for _ in range(n_iter):
         grad_block = nnt @ lambda_block + big_c_block
         lambda_block = mod.clip(lambda_block - step_size * grad_block, a_min=0, a_max=None)
@@ -289,6 +289,25 @@ def do_gpu_plain_pgd_with_step_reduction(lambda_block: GPUArray, x_block_0: GPUA
     del grad_block
     y_block = c_block + n.T @ lambda_block
     return lambda_block, y_block
+
+
+def do_gpu_pgd_with_exact_line_search(lambda_block: GPUArray, x_block_0: GPUArray, nnt: GPUArray, 
+                                      n: GPUArray, c_block: GPUArray, n_iter: int) -> Tuple[GPUArray, GPUArray]:
+    def get_step(d: GPUArray, grad_block: GPUArray) -> GPUArray:
+        term1 = cp.sum(cp.multiply(d, grad_block), axis=0)
+        term2 = cp.einsum('...i,...i->...', cp.dot(d.T, nnt), d.T) + cp.ones_like(term1) * cp.float16(1e-3)
+        return term1 / term2
+    
+    big_c_block = x_block_0 + n @ c_block
+    for _ in range(n_iter):
+        grad_block = nnt @ lambda_block + big_c_block
+        d = lambda_block - cp.clip(lambda_block - grad_block, a_min=0, a_max=None)
+        lambda_block = cp.clip(lambda_block - get_step(d, grad_block) * grad_block, a_min=0, a_max=None)
+    del big_c_block
+    del grad_block
+    y_block = c_block + n.T @ lambda_block
+    return lambda_block, y_block
+
 
 import torch
 from te.algorithms.tensor_utils import Tensor
@@ -339,7 +358,21 @@ def do_multi_gpu_plain_pgd_with_step_reduction(lambda_block: PartitionedGPUArray
     For 0 <= `kappa` <= 1.
     """
     big_c_block = zip_map([x_block_0, n, c_block], lambda x0, _n, c: x0 + _n @ c)
-    step_size = gamma / (epoch+1) ** kappa
+    step_size = gamma / ((epoch+1) ** kappa)
+    for _ in range(n_iter):
+        grad_block = zip_map([nnt, lambda_block, big_c_block], lambda nn, l, c: nn @ l + c)
+        lambda_block = zip_map([lambda_block, grad_block], lambda l, g: cp.clip(l - step_size * g, a_min=0, a_max=None))
+    del big_c_block
+    del grad_block
+    y_block = zip_map([c_block, n, lambda_block], lambda c, _n, l: c + _n.T @ l)
+    return lambda_block, y_block
+
+
+def do_multi_gpu_pgd_with_backtracking(lambda_block: PartitionedGPUArray, x_block_0: PartitionedGPUArray, 
+                                       nnt: ScatteredGPUArray, n: ScatteredGPUArray, c_block: PartitionedGPUArray, 
+                                       beta: float, max_back: int, n_iter: int) -> Tuple[PartitionedGPUArray, PartitionedGPUArray]:
+    step_size = 1
+    big_c_block = zip_map([x_block_0, n, c_block], lambda x0, _n, c: x0 + _n @ c)
     for _ in range(n_iter):
         grad_block = zip_map([nnt, lambda_block, big_c_block], lambda nn, l, c: nn @ l + c)
         lambda_block = zip_map([lambda_block, grad_block], lambda l, g: cp.clip(l - step_size * g, a_min=0, a_max=None))

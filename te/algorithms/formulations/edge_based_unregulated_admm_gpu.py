@@ -12,7 +12,7 @@ from gurobipy import GRB, GurobiError
 from te.algorithms.base import TrafficEngineeringLP, GurobiSolverParams, SolverParams
 from te.algorithms.solution import GurobiEdgeBasedMinimizeMaximumUtilitySolution
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
-from te.algorithms.sub_algorithms.pgd import do_gpu_plain_pgd_with_step_reduction
+from te.algorithms.sub_algorithms.pgd import do_gpu_plain_pgd_with_step_reduction, do_gpu_pgd_with_exact_line_search
 from te.algorithms.sub_algorithms.feasible_assignment import get_feasible_flow_assignment
 from topologies.utils import (get_edge_indexing, get_graph_M_matrix, 
                               get_adjacency_null_space)
@@ -106,6 +106,7 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
         self._target_u: Optional[float] = None
 
         self._capacities: Optional[CPUArray] = None
+        self._c_norm: Optional[float] = None
         self._Xo_e_start: Optional[CPUArray] = None
         self._Xo_e: Optional[gurobipy.tupledict] = None
         self._Zo_e: Optional[CPUArray] = None
@@ -256,6 +257,7 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
         K = len(self._commodity_list)
         NUM_EDGES = self._NUM_EDGES
         self._capacities = as_cpu_array([item[-1] for item in self._graph.edges(data='capacity')])
+        self._c_norm = np.linalg.norm(self._capacities)
         self._r_e = cpu_zeros(shape=(NUM_EDGES,))
         self._u_t = gpu_zeros(shape=(T,))
         self._Zo_e = as_cpu_array(self._Xo_e_start)
@@ -347,7 +349,7 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
         """
 
         OBJECTIVE_CONTROLLER = gurobipy.QuadExpr()
-        OBJECTIVE_CONTROLLER.addTerms(1, UTILITY)
+        OBJECTIVE_CONTROLLER.addTerms(self._c_norm * np.sqrt(NUM_EDGES), UTILITY)
         for e in range(NUM_EDGES):
             OBJECTIVE_CONTROLLER += (RHO/2) * (XO_E[e] - ZO_E[e] + R_E[e]) ** 2
         
@@ -381,9 +383,11 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
         X_EK_START = self._X_ek_start
         
         t_start = time.time()
-        lambda_block, y_block = do_gpu_plain_pgd_with_step_reduction(
-            LAMBDA_EK, X_EK_START, NNT_M, NULL_M, C_TK, GAMMA, 
-            PGD_ITERS, KAPPA, epoch)
+        # lambda_block, y_block = do_gpu_plain_pgd_with_step_reduction(
+        #     LAMBDA_EK, X_EK_START, NNT_M, NULL_M, C_TK, GAMMA, 
+        #     PGD_ITERS, KAPPA, epoch)
+        lambda_block, y_block = do_gpu_pgd_with_exact_line_search(
+            LAMBDA_EK, X_EK_START, NNT_M, NULL_M, C_TK, PGD_ITERS)
         
         self._lambda_ek = lambda_block
         self._Y_tk = y_block
