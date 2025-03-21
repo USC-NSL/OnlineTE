@@ -12,7 +12,7 @@ from gurobipy import GRB, GurobiError
 from te.algorithms.base import TrafficEngineeringLP, GurobiSolverParams, SolverParams
 from te.algorithms.solution import GurobiEdgeBasedMinimizeMaximumUtilitySolution
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
-from te.algorithms.sub_algorithms.pgd import do_gpu_plain_pgd_with_step_reduction, do_gpu_pgd_with_exact_line_search
+from te.algorithms.sub_algorithms.pgd import do_plain_pgd_with_step_reduction, do_gpu_pgd_with_exact_line_search
 from te.algorithms.sub_algorithms.feasible_assignment import get_feasible_flow_assignment
 from topologies.utils import (get_edge_indexing, get_graph_M_matrix, 
                               get_adjacency_null_space)
@@ -383,11 +383,11 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
         X_EK_START = self._X_ek_start
         
         t_start = time.time()
-        # lambda_block, y_block = do_gpu_plain_pgd_with_step_reduction(
-        #     LAMBDA_EK, X_EK_START, NNT_M, NULL_M, C_TK, GAMMA, 
-        #     PGD_ITERS, KAPPA, epoch)
-        lambda_block, y_block = do_gpu_pgd_with_exact_line_search(
-            LAMBDA_EK, X_EK_START, NNT_M, NULL_M, C_TK, PGD_ITERS)
+        lambda_block, y_block = do_plain_pgd_with_step_reduction(
+            LAMBDA_EK, X_EK_START, NNT_M, NULL_M, C_TK, GAMMA, 
+            PGD_ITERS, KAPPA, epoch)
+        # lambda_block, y_block = do_gpu_pgd_with_exact_line_search(
+        #     LAMBDA_EK, X_EK_START, NNT_M, NULL_M, C_TK, PGD_ITERS)
         
         self._lambda_ek = lambda_block
         self._Y_tk = y_block

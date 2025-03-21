@@ -61,6 +61,8 @@ class SolverParams(ABC):
             return str(value)
         elif isinstance(value, str):
             return value
+        elif value is None:
+            return "None"
         raise ValueError(f'Unexpected instance: {type(value)}')
 
     def __str__(self) -> str:
