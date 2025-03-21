@@ -16,6 +16,8 @@ CPUArray = np.ndarray
 """Alias for `numpy.ndarray`, an array that lives on the RAM. Plenty of space usually."""
 GPUArray = NewType('GPUArray', cp.ndarray)
 """Alias for `cupy.ndarray`, an array that lives on the GPU memory. Usually quite limited."""
+WholeArray = Union[CPUArray, GPUArray]
+"""Simple and honest array, either on the GPU or CPU"""
 ScatteredGPUArray = NewType('ScatteredGPUArray', Tuple[GPUArray])
 """Designates arrays that are shared among all devices as-is"""
 PartitionedGPUArray = NewType('PartitionedGPUArray', List[GPUArray])

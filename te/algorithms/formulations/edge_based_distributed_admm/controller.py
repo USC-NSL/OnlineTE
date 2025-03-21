@@ -290,12 +290,9 @@ class ControllerNode(TrafficEngineeringLP):
             u_t = array_to_serialized_message(self._u_t)
         )
         wait([
-            self._broadcast_thread_pool.submit(
-                lambda: stub.UpdateWorkerNode(message)
-            )
-            for stub in self._worker_stubs
+            self._broadcast_thread_pool.submit(stub.UpdateWorkerNode, message)
+                for stub in self._worker_stubs
         ])
-        print(self._P_bar_t)
 
     def _update_Zo_e(self):
         assert self._model_controller is not None
@@ -329,7 +326,7 @@ class ControllerNode(TrafficEngineeringLP):
 
     def close(self):
         wait([
-            self._broadcast_thread_pool.submit(lambda: self._close_node(i))
+            self._broadcast_thread_pool.submit(lambda worker_id: self._close_node(worker_id), i)
                 for i in range(len(self._worker_stubs))
         ], timeout=5)
         if self._model_controller:

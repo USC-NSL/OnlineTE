@@ -32,7 +32,7 @@ def distributed_admm_test(topology: str, seed: int, scale_factor: float = 10.0, 
     print(f"Network link capacity is: {str(round(c, 2))}")
 
     solver_params = DistributedADMMSolverParams(
-        NumberOfEpochs=2,
+        NumberOfEpochs=150,
         NumberOfNetworkUpdates=2,
         PGDIterations=2,
         Gamma=1,
@@ -48,34 +48,38 @@ def distributed_admm_test(topology: str, seed: int, scale_factor: float = 10.0, 
     print(as_info("="*60))
 
     worker_addrs = tuple([(HOST, BASE_PORT + worker_id) for worker_id in range(solver_params.NumWorkers)])
-    # with concurrent.futures.ProcessPoolExecutor(max_workers=solver_params.NumWorkers) as network_pool:
-    #     for worker_id, worker_addr in enumerate(worker_addrs):
-    #         network_pool.submit(NetworkWorkerNode.spawn_and_wait, 
-    #                             worker_id, solver_params, DistributedADMMWorkerRPCParams(ip=worker_addr[0], port=worker_addr[1]))
+    with concurrent.futures.ProcessPoolExecutor(max_workers=solver_params.NumWorkers) as network_pool:
+        for worker_id, worker_addr in enumerate(worker_addrs):
+            network_pool.submit(NetworkWorkerNode.spawn_and_wait, 
+                                worker_id, solver_params, DistributedADMMWorkerRPCParams(ip=worker_addr[0], port=worker_addr[1]))
         
-    with contextlib.closing(ControllerNode(graph, tm, solver_params, 
-                                        DistributedADMMControllerRPCParams(tuple(worker_addrs)))) as lp:
-        print(as_info(f"Solving With: {lp.alg_name}"))
-        print(as_info(f"Solving With Parameters:\n{solver_params}"))
-        # print(as_info("Waiting For Network Nodes ..."))
-        # while True:
-        #     time.sleep(1)
-        #     if lp.are_network_nodes_ready():
-        #         break
-        # print(as_info("All Network Nodes Ready"))
+        with contextlib.closing(ControllerNode(graph, tm, solver_params, 
+                                            DistributedADMMControllerRPCParams(
+                                                tuple(worker_addrs),
+                                                num_threads=min(solver_params.NumWorkers, 8)
+                                            ))) as lp:
+            print(as_info(f"Solving With: {lp.alg_name}"))
+            print(as_info(f"Solving With Parameters:\n{solver_params}"))
+            print(as_info("Waiting For Network Nodes ..."))
+            while True:
+                time.sleep(1)
+                if lp.are_network_nodes_ready():
+                    break
+            print(as_info("All Network Nodes Ready"))
 
-        lp.make_lp()
-        t = lp.solve()
-        if t > 0:
-            lp.check(feasibility_tol=FEASIBILITY_TOL, feasibility_ratio=FEASIBILITY_RATIO)
-            get_solution_confusion_matrix(lp, feasibility_tol=FEASIBILITY_TOL, feasibility_ratio=FEASIBILITY_RATIO, **kwargs)
-            print(as_info(f"Solved in {str_round(t, 2)} seconds"))
-            print(as_info(f"Final objective value: {str_round(lp.objective_value, 4)}"))
-            print(as_info(f"Actual utilization: {str_round(get_solution_maximum_utilization(lp.assignments, lp.graph), 4)}"))
-        stats = stringify_collected_stats()
-        if stats is not None:
-            print(as_info(stats))
+            lp.make_lp()
+            t = lp.solve()
+            if t > 0:
+                lp.check(feasibility_tol=FEASIBILITY_TOL, feasibility_ratio=FEASIBILITY_RATIO)
+                get_solution_confusion_matrix(lp, feasibility_tol=FEASIBILITY_TOL, feasibility_ratio=FEASIBILITY_RATIO, **kwargs)
+                print(as_info(f"Solved in {str_round(t, 2)} seconds"))
+                print(as_info(f"Final objective value: {str_round(lp.objective_value, 4)}"))
+                print(as_info(f"Actual utilization: {str_round(get_solution_maximum_utilization(lp.assignments, lp.graph), 4)}"))
+            stats = stringify_collected_stats()
+            if stats is not None:
+                print(as_info(stats))
 
 
 if __name__ == '__main__':
-    distributed_admm_test(SMALL_TOPOLOGY, RNG_SEED)
+    # distributed_admm_test(SMALL_TOPOLOGY, RNG_SEED)
+    distributed_admm_test(SMALL_MEDIUM_TOPOLOGY, RNG_SEED)
