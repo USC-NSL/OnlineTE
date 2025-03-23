@@ -3,11 +3,12 @@ import grpc
 import signal
 import contextlib
 import numpy as np
-from typing import Optional
+from typing import Optional, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from te.algorithms.formulations.edge_based_distributed_admm import DistributedADMMSolverParams, DistributedADMMWorkerRPCParams
 from te.algorithms.sub_algorithms.pgd import do_plain_pgd_with_step_reduction
 from te.algorithms.formulations.edge_based_distributed_admm.utils import (serialized_message_to_array, array_to_serialized_message,
+                                                                          rebuild_chunked_array, chunk_big_array,
                                                                           get_optional_field)
 import protos.distributed_lp.distributed_lp_pb2 as distributed_lp_messages
 from protos.distributed_lp.distributed_lp_pb2_grpc import DistributedADMMSolverServicer, add_DistributedADMMSolverServicer_to_server
@@ -84,22 +85,23 @@ class NetworkWorkerNode:
         except:
             pass
     
-    def initialize(self, N: np.ndarray, X: np.ndarray, P_bar_t: Optional[np.ndarray] = None, 
+    def set_initial_feasible_solution(self, X: np.ndarray):
+        self._X_ek_start_chunk = X
+        self._NUM_EDGES, self._CHUNK_LEN = self._X_ek_start_chunk.shape
+    
+    def initialize(self, N: np.ndarray, P_bar_t: Optional[np.ndarray] = None, 
                    Y_bar_t: Optional[np.ndarray] = None, u_t: Optional[np.ndarray] = None):
+        assert self._X_ek_start_chunk is not None
+        CHUNK_LEN = self._CHUNK_LEN
         self._NULL_M = N
         self._NNT_M = N @ N.T
-        NUM_EDGES, T = self._NULL_M.shape
+        T = self._NULL_M.shape[1]
         self._T = T
-        self._NUM_EDGES = NUM_EDGES
-        self._X_ek_start_chunk: np.ndarray = X
-        CHUNK_LEN = self._X_ek_start_chunk.shape[1]
-        self._CHUNK_LEN = CHUNK_LEN
         self._Y_tk_chunk = np.zeros((T, CHUNK_LEN))
         self._lambda_ek_chunk = np.zeros_like(self._X_ek_start_chunk)
         self._Y_bar_t: Optional[np.ndarray] = Y_bar_t if Y_bar_t is not None else np.zeros((T,))
         self._P_bar_t_cached: Optional[np.ndarray] = P_bar_t if P_bar_t is not None else np.zeros((T,))
         self._u_t_cached: Optional[np.ndarray] = u_t if u_t is not None else np.zeros((T,))
-        # print(f"[NODE {self.worker_id}] Fully initialized")
 
     def _get_current_C(self) -> np.ndarray:
         Y_TK = self._Y_tk_chunk
@@ -146,10 +148,15 @@ class NetworkWorkerNodeListener(DistributedADMMSolverServicer):
         self._worker_node = node
         self._id = node.worker_id
     
+    def SetInitialFeasibleSolution(self, request_iterator: Iterator[distributed_lp_messages.Chunk], context):
+        self._worker_node.set_initial_feasible_solution(
+            X=rebuild_chunked_array(request_iterator)
+        )
+        return Empty()
+    
     def InitializeWorkerNode(self, request: distributed_lp_messages.InitMessage, context):
         self._worker_node.initialize(
             N=serialized_message_to_array(request.NULL_M),
-            X=serialized_message_to_array(request.X_EK_START),
             P_bar_t=serialized_message_to_array(get_optional_field(request, 'P_bar_t')),
             u_t=serialized_message_to_array(get_optional_field(request, 'u_t')),
             Y_bar_t=serialized_message_to_array(get_optional_field(request, 'Y_bar_t'))
@@ -167,7 +174,7 @@ class NetworkWorkerNodeListener(DistributedADMMSolverServicer):
         return Empty()
     
     def RequestChunk(self, request, context):
-        return array_to_serialized_message(self._worker_node.report_chunk())
+        return chunk_big_array(self._worker_node.report_chunk(), 2**20)
     
     def RequestAggregate(self, request, context):
         return array_to_serialized_message(self._worker_node.report_aggregate())

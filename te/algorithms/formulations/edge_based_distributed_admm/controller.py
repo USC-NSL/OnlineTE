@@ -12,11 +12,12 @@ from concurrent.futures import ThreadPoolExecutor, wait
 from te.algorithms.base import TrafficEngineeringLP, SolverParams
 from te.algorithms.solution import GurobiEdgeBasedMinimizeMaximumUtilitySolution
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
-from topologies.utils import (get_edge_indexing, get_graph_M_matrix, 
-                              get_adjacency_null_space, get_feasible_flow_assignment)
+from topologies.utils import get_edge_indexing, get_graph_M_matrix, get_adjacency_null_space
 from te.algorithms.utils import check_capacity_constraint, optimize_or_scream, make_model, as_fail
+from te.algorithms.sub_algorithms.feasible_assignment import get_feasible_flow_assignment
 from te.algorithms.formulations.edge_based_distributed_admm import DistributedADMMSolverParams, DistributedADMMControllerRPCParams
-from te.algorithms.formulations.edge_based_distributed_admm.utils import serialized_message_to_array, array_to_serialized_message
+from te.algorithms.formulations.edge_based_distributed_admm.utils import (serialized_message_to_array, array_to_serialized_message,
+                                                                          chunk_big_array, rebuild_chunked_array)
 import protos.distributed_lp.distributed_lp_pb2 as distributed_lp_messages
 from protos.distributed_lp.distributed_lp_pb2_grpc import DistributedADMMSolverStub
 from google.protobuf.empty_pb2 import Empty
@@ -161,11 +162,18 @@ class ControllerNode(TrafficEngineeringLP):
         NULL_M = self._NULL_M
         X_EK_START_CHUNKS = np.array_split(self._X_ek_start, NUM_WORKERS, axis=1)
         WORKERS = self._worker_stubs
+
+        # First, send the initial solution
+        wait([
+            self._broadcast_thread_pool.submit(stub.SetInitialFeasibleSolution, chunk_big_array(X_EK_START_CHUNKS[i], 2**20))
+                for i, stub in enumerate(WORKERS)
+        ])
+          
+        # Now, the rest ...
         wait([
             self._broadcast_thread_pool.submit(stub.InitializeWorkerNode, 
                                                distributed_lp_messages.InitMessage(
-                                                   NULL_M=array_to_serialized_message(NULL_M),
-                                                   X_EK_START=array_to_serialized_message(X_EK_START_CHUNKS[i])
+                                                   NULL_M=array_to_serialized_message(NULL_M)
                                                ))
                 for i, stub in enumerate(WORKERS)
         ])
@@ -215,12 +223,10 @@ class ControllerNode(TrafficEngineeringLP):
         return self._Zo_e + self._r_e - self._Xo_e_start
     
     def _set_X_ek(self):
-        serialized_chunks = self._broadcast_thread_pool.map(
-            lambda stub: stub.RequestChunk(Empty()), self._worker_stubs
+        chunks = self._broadcast_thread_pool.map(
+            lambda stub: rebuild_chunked_array(stub.RequestChunk(Empty())), self._worker_stubs
         )
-        self._X_ek = self._X_ek_start + self._NULL_M @ np.hstack([
-            serialized_message_to_array(chunk) for chunk in serialized_chunks
-        ])
+        self._X_ek = self._X_ek_start + self._NULL_M @ np.hstack(list(chunks))
     
     def _add_constraints(self):
         assert self._model_controller is not None

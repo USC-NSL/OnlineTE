@@ -3,15 +3,19 @@ import "google/protobuf/empty.proto";
 
 
 service DistributedADMMSolver {
+    rpc SetInitialFeasibleSolution(stream Chunk) returns (google.protobuf.Empty) {}
     rpc InitializeWorkerNode(InitMessage) returns (google.protobuf.Empty) {}
     rpc DoNetworkUpdate(NetworkUpdateRequest) returns (SerializedNumpyArrayMessage) {}
     rpc UpdateWorkerNode(UpdateMessage) returns (google.protobuf.Empty) {}
-    rpc RequestChunk(google.protobuf.Empty) returns (SerializedNumpyArrayMessage) {}
+    rpc RequestChunk(google.protobuf.Empty) returns (stream Chunk) {}
     rpc RequestAggregate(google.protobuf.Empty) returns (SerializedNumpyArrayMessage) {}
     rpc QueryState(google.protobuf.Empty) returns (State) {}
     rpc Close(google.protobuf.Empty) returns (google.protobuf.Empty) {}
 }
 
+message Chunk {
+    bytes data = 1;
+}
 
 message SerializedNumpyArrayMessage {
     bytes array = 1;
@@ -20,10 +24,9 @@ message SerializedNumpyArrayMessage {
 
 message InitMessage {
     SerializedNumpyArrayMessage NULL_M = 1;
-    SerializedNumpyArrayMessage X_EK_START = 2;
-    optional SerializedNumpyArrayMessage P_bar_t = 3;
-    optional SerializedNumpyArrayMessage u_t = 4;
-    optional SerializedNumpyArrayMessage Y_bar_t = 5;
+    optional SerializedNumpyArrayMessage P_bar_t = 2;
+    optional SerializedNumpyArrayMessage u_t = 3;
+    optional SerializedNumpyArrayMessage Y_bar_t = 4;
 }
 
 message UpdateMessage {

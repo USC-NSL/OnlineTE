@@ -91,6 +91,7 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
 
         # List of edge capacities
         self._capacities: Optional[np.ndarray] = None
+        self._c_norm: Optional[float] = None
         # Both just vectors of length `n`
         self._Xo_e_start: Optional[np.ndarray] = None
         self._Xo_e: Optional[gurobipy.tupledict] = None
@@ -219,6 +220,7 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         K = len(self._commodity_list)
         NUM_EDGES = self._NUM_EDGES
         self._capacities = np.array([item[-1] for item in self._graph.edges(data='capacity')])
+        self._c_norm = np.linalg.norm(self._capacities)
         self._r_e = np.zeros(shape=(NUM_EDGES,))
         self._u_t = np.zeros(shape=(T,))
         self._Zo_e = np.copy(self._Xo_e_start)
@@ -317,7 +319,7 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         """
 
         OBJECTIVE_CONTROLLER = gurobipy.QuadExpr()
-        OBJECTIVE_CONTROLLER.addTerms(1, UTILITY)
+        OBJECTIVE_CONTROLLER.addTerms(self._c_norm * np.sqrt(NUM_EDGES), UTILITY)
         for e in range(NUM_EDGES):
             OBJECTIVE_CONTROLLER += (RHO/2) * (XO_E[e] - ZO_E[e] + R_E[e]) ** 2
         

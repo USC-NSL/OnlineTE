@@ -74,8 +74,10 @@ def unregulated_admm_test(topology: str, seed: int, scale_factor: float = 10.0, 
         Gamma=None,
         # Eta=1e-4,
         # Rho=1e-5,
-        Eta=10/n**2,
-        Rho=1.125/n**2,
+        # Eta=10/n**2,
+        # Rho=1.125/n**2,
+        Eta=8,
+        Rho=1,
         PGDConvTol=1e-4,
         NumWorkers=8,
         UseVariableRho=True,
@@ -150,8 +152,8 @@ if __name__ == '__main__':
     # regularized_admm_test(SMALL_TOPOLOGY, RNG_SEED)
     # unregulated_admm_test(SMALL_TOPOLOGY, RNG_SEED, trace_out_path=None)
     # unregulated_admm_test(SMALL_MEDIUM_TOPOLOGY, RNG_SEED, trace_out_path=None)
-    # unregulated_admm_test(MEDIUM_TOPOLOGY, RNG_SEED)
-    gpu_unregulated_admm_test(SMALL_TOPOLOGY, RNG_SEED)
+    unregulated_admm_test(MEDIUM_TOPOLOGY, RNG_SEED)
+    # gpu_unregulated_admm_test(SMALL_TOPOLOGY, RNG_SEED)
     # gpu_unregulated_admm_test(SMALL_MEDIUM_TOPOLOGY, RNG_SEED)
     # gpu_unregulated_admm_test(MEDIUM_TOPOLOGY, RNG_SEED)
     # gpu_unregulated_admm_test(HUGE_TOPOLOGY, RNG_SEED, report_unsat=False)

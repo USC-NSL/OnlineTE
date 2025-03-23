@@ -32,15 +32,15 @@ def distributed_admm_test(topology: str, seed: int, scale_factor: float = 10.0, 
     print(f"Network link capacity is: {str(round(c, 2))}")
 
     solver_params = DistributedADMMSolverParams(
-        NumberOfEpochs=150,
+        NumberOfEpochs=50,
         NumberOfNetworkUpdates=2,
         PGDIterations=2,
-        Gamma=1,
+        Gamma=0.9,
         Eta=8,
         Rho=1,
         Kappa=0.1,
         Seed=RNG_SEED,
-        NumWorkers=1
+        NumWorkers=2
     )
 
     print(as_info("="*60))
@@ -82,4 +82,5 @@ def distributed_admm_test(topology: str, seed: int, scale_factor: float = 10.0, 
 
 if __name__ == '__main__':
     # distributed_admm_test(SMALL_TOPOLOGY, RNG_SEED)
-    distributed_admm_test(SMALL_MEDIUM_TOPOLOGY, RNG_SEED)
+    # distributed_admm_test(SMALL_MEDIUM_TOPOLOGY, RNG_SEED)
+    distributed_admm_test(MEDIUM_TOPOLOGY, RNG_SEED)
