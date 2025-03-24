@@ -8,15 +8,16 @@ from multiprocessing import get_context
 from typing import List, Tuple, Optional
 from dataclasses import dataclass
 from gurobipy import GRB, GurobiError
+from utils.logging import as_fail
 from te.algorithms.base import TrafficEngineeringLP, GurobiSolverParams, SolverParams
-from te.algorithms.solution import GurobiEdgeBasedMinimizeMaximumUtilitySolution, tuple_dict_to_np_array
+from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution, tuple_dict_to_np_array
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
 from te.algorithms.sub_algorithms.pgd import (do_iterative_plain_pgd, do_iterative_pgd_with_exact_line_search,
                                               do_block_plain_pgd, do_block_pgd_with_exact_line_search)
 from topologies.utils import (get_edge_indexing, get_graph_M_matrix, 
                               get_adjacency_null_space, get_feasible_flow_assignment)
 from te.algorithms.utils import (check_capacity_constraint, optimize_or_scream, make_model, 
-                                 get_solution_maximum_utilization, as_fail,
+                                 get_solution_maximum_utilization,
                                  careful_norm, careful_norm_squared)
 
 
@@ -758,15 +759,15 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
     #         self._lambda_ek[:, k] = lambda_k
     #         obj += (0.5 * careful_norm_squared(NULL_M.T @ lambda_k) + np.dot(lambda_k, X_EK_START[:, k] + NULL_M @ Y_TK[:, k]))
     
-    def initialize_to(self, solution: GurobiEdgeBasedMinimizeMaximumUtilitySolution):
+    def initialize_to(self, solution: EdgeBasedMinimizeMaximumUtilitySolution):
         T = self._T
         NULL_M = self._NULL_M
         RHO = self._solver_params.Rho * self._rho_coeff
         ETA = self._solver_params.Eta * self._eta_coeff
-        utility = solution.get_gurobi_solution_element_by_name('utility')
-        assignments = solution.get_gurobi_solution_element_by_name('assignments')
-        capacity_constraints = solution.get_gurobi_solution_element_by_name('capacity_constraints')
-        non_negativity_constraints = solution.get_gurobi_solution_element_by_name('non_negativity_constraints')
+        utility = solution.get_solution_element_by_name('utility')
+        assignments = solution.get_solution_element_by_name('assignments')
+        capacity_constraints = solution.get_solution_element_by_name('capacity_constraints')
+        non_negativity_constraints = solution.get_solution_element_by_name('non_negativity_constraints')
         print(f"Target Utilization: {utility.value}")
         # Both just vectors of length `n`
         assert self._Xo_e is not None
@@ -805,8 +806,8 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         self._objective_gap_trace = []
         raise ValueError
     
-    def set_target(self, solution: GurobiEdgeBasedMinimizeMaximumUtilitySolution):
-        u = solution.get_gurobi_solution_element_by_name('utility').value
+    def set_target(self, solution: EdgeBasedMinimizeMaximumUtilitySolution):
+        u = solution.get_solution_element_by_name('utility').value
         self._target_u = u
     
     def add_solution_elements(self, solution):

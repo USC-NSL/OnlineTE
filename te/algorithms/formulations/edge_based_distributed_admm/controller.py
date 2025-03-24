@@ -10,10 +10,11 @@ from typing import List, Tuple, Optional
 from gurobipy import GRB, GurobiError
 from concurrent.futures import ThreadPoolExecutor, wait
 from te.algorithms.base import TrafficEngineeringLP, SolverParams
-from te.algorithms.solution import GurobiEdgeBasedMinimizeMaximumUtilitySolution
+from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
 from topologies.utils import get_edge_indexing, get_graph_M_matrix, get_adjacency_null_space
-from te.algorithms.utils import check_capacity_constraint, optimize_or_scream, make_model, as_fail
+from utils.logging import as_fail
+from te.algorithms.utils import check_capacity_constraint, check_centralized_flow_conservation, optimize_or_scream, make_model
 from te.algorithms.sub_algorithms.feasible_assignment import get_feasible_flow_assignment
 from te.algorithms.formulations.edge_based_distributed_admm import DistributedADMMSolverParams, DistributedADMMControllerRPCParams
 from te.algorithms.formulations.edge_based_distributed_admm.utils import (serialized_message_to_array, array_to_serialized_message,
@@ -419,7 +420,7 @@ class ControllerNode(TrafficEngineeringLP):
         
         # Now, check flow conservation ...
         X_EK = self._X_ek
-        # check_centralized_flow_conservation(X_EK, self._graph, self._commodity_list, PARAMS.FeasibilityTol)
+        check_centralized_flow_conservation(X_EK, self._graph, self._commodity_list, feasibility_tol, feasibility_ratio)
         check_capacity_constraint(
             X_EK, self._graph, self._commodity_list, 
             feasibility_tol=feasibility_tol, feasibility_ratio=feasibility_ratio
@@ -456,11 +457,12 @@ class ControllerNode(TrafficEngineeringLP):
     def update_traffic_matrix(self, tm):
         raise NotImplementedError
     
-    def initialize_to(self, solution: GurobiEdgeBasedMinimizeMaximumUtilitySolution):
+    def initialize_to(self, solution: EdgeBasedMinimizeMaximumUtilitySolution):
         raise NotImplementedError
     
-    def set_target(self, solution: GurobiEdgeBasedMinimizeMaximumUtilitySolution):
+    def set_target(self, solution: EdgeBasedMinimizeMaximumUtilitySolution):
         raise NotImplementedError
     
-    def add_solution_elements(self, solution):
-        raise NotImplementedError
+    def add_solution_elements(self, solution: EdgeBasedMinimizeMaximumUtilitySolution):
+        solution.add_solution_element(self._utility, name='utility')
+        solution.add_solution_element(self._X_ek, name='assignments')

@@ -10,15 +10,16 @@ from typing import List, Tuple, Optional, Literal
 from dataclasses import dataclass
 from gurobipy import GRB, GurobiError
 from te.algorithms.base import TrafficEngineeringLP, GurobiSolverParams, SolverParams
-from te.algorithms.solution import GurobiEdgeBasedMinimizeMaximumUtilitySolution
+from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
 from te.algorithms.sub_algorithms.pgd import do_tensor_plain_pgd_with_step_reduction
 from te.algorithms.sub_algorithms.feasible_assignment import get_feasible_flow_assignment
 from topologies.utils import (get_edge_indexing, get_graph_M_matrix, 
                               get_adjacency_null_space)
+from utils.logging import as_fail, as_warning
 from te.algorithms.utils import (check_capacity_constraint, optimize_or_scream, make_model, 
                                  get_solution_maximum_utilization, check_centralized_flow_conservation,
-                                 careful_norm, careful_norm_squared, as_fail, as_warning)
+                                 careful_norm, careful_norm_squared)
 from te.algorithms.statistics.helpers import (record_cpu_runtime, record_gpu_runtime, record_reserved_gpu_memory, 
                                               record_used_gpu_memory)
 from te.algorithms.tensor_utils import *
@@ -714,10 +715,10 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
     def update_traffic_matrix(self, tm):
         raise NotImplementedError
     
-    def initialize_to(self, solution: GurobiEdgeBasedMinimizeMaximumUtilitySolution):
+    def initialize_to(self, solution: EdgeBasedMinimizeMaximumUtilitySolution):
         raise NotImplementedError
     
-    def set_target(self, solution: GurobiEdgeBasedMinimizeMaximumUtilitySolution):
+    def set_target(self, solution: EdgeBasedMinimizeMaximumUtilitySolution):
         raise NotImplementedError
     
     def add_solution_elements(self, solution):

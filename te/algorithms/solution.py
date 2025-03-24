@@ -6,15 +6,15 @@ import gurobipy as gp
 import networkx as nx
 from functools import singledispatch
 from dataclasses import dataclass
-from typing import Any, Tuple, Optional, List, Dict, Type, Union
+from typing import Tuple, Optional, List, Dict, Type, Union
 from te.algorithms import SOLUTION_DIR
 from topologies.utils import load_zoo_topology, set_edge_capacity_to
-from te.algorithms.utils import as_warning, as_info
+from utils.logging import as_warning, as_info
 from te.traffic_models import get_traffic_model, get_traffic_model_params, get_traffic_converter, get_traffic_converter_params
-from te.traffic_models.base import TrafficMatrixBase, TrafficMatrixConverterBase
+from te.traffic_models.base import TrafficMatrixBase, TrafficMatrixConverterBase, TrafficMatrixParamsBase
 from te.algorithms.base import (
     as_te_solution_name, as_json_solution_name, as_solution_elements_name, as_simplex_basis_name, 
-    TrafficEngineeringLPSolution, GurobiSolutionElementBase)
+    TrafficEngineeringLPSolution, SolutionElementBase)
 
 
 END_TOKEN = '----'
@@ -39,14 +39,14 @@ def line_to_key_value(line: str) -> Tuple[Tuple, float]:
 
 
 """To quickly get solution elements based on the type name"""
-_ELEMS: Dict[str, GurobiSolutionElementBase] = dict()
+_ELEMS: Dict[str, SolutionElementBase] = dict()
 
 
-def solution_element(cls: Type[GurobiSolutionElementBase]) -> GurobiSolutionElementBase:
+def solution_element(cls: Type[SolutionElementBase]) -> SolutionElementBase:
     """Decorator that registers a solution element"""
     global _ELEMS
 
-    assert issubclass(cls, GurobiSolutionElementBase)
+    assert issubclass(cls, SolutionElementBase)
     # Turn the class into a frozen dataclass
     frozen_cls = dataclass(cls, frozen=True)
     tpe = cls.type()
@@ -57,7 +57,54 @@ def solution_element(cls: Type[GurobiSolutionElementBase]) -> GurobiSolutionElem
 
 
 @solution_element
-class GurobiVarSolutionElement(GurobiSolutionElementBase):
+class FloatVarSolutionElement(SolutionElementBase):
+    value: float
+
+    @classmethod
+    def type(self):
+        return 'FloatVar'
+    
+    @property
+    def str_value(self) -> str:
+        return str(self.value)
+    
+    @classmethod
+    def parse(cls, string: str):
+        name, type, value = get_name_type_value(string)
+        assert type == cls.type()
+        return cls(name, float(value))
+
+
+@solution_element
+class ArrayVarSolutionElement(SolutionElementBase):
+    value: np.ndarray
+
+    @classmethod
+    def type(self):
+        return 'ArrayVar'
+    
+    @property
+    def str_value(self) -> str:
+        return '\n'.join(
+            [f'[{",".join([str(item) for item in self.value.shape])}]'] +
+            [f'[{",".join([str(item) for item in index])}]={v}' for index, v in np.ndenumerate(self.value)]
+        )
+
+    @classmethod
+    def parse(cls, string: str):
+        name, type, value = get_name_type_value(string)
+        assert type == cls.type()
+        line_iter = iter(value.split('\n'))
+        shape = str_to_tuple_of_ints(next(line_iter).strip())
+        array = np.zeros(shape)
+        for line in line_iter:
+            index, value = line_to_key_value(line)
+            array[index] = value
+        return cls(name, array)
+
+
+@solution_element
+class GurobiVarSolutionElement(SolutionElementBase):
     value: float
 
     @classmethod
@@ -76,7 +123,7 @@ class GurobiVarSolutionElement(GurobiSolutionElementBase):
 
 
 @solution_element
-class GurobiTupleDictSolutionElement(GurobiSolutionElementBase):
+class GurobiTupleDictSolutionElement(SolutionElementBase):
     value: Dict[Tuple, float]
     
     @classmethod
@@ -95,7 +142,7 @@ class GurobiTupleDictSolutionElement(GurobiSolutionElementBase):
 
 
 @solution_element
-class GurobiDualVariableSolutionElement(GurobiSolutionElementBase):
+class GurobiDualVariableSolutionElement(SolutionElementBase):
     value: float
     
     @classmethod
@@ -114,7 +161,7 @@ class GurobiDualVariableSolutionElement(GurobiSolutionElementBase):
 
 
 @solution_element
-class GurobiDualVariableListSolutionElement(GurobiSolutionElementBase):
+class GurobiDualVariableListSolutionElement(SolutionElementBase):
     value: List[float]
     
     @classmethod
@@ -133,7 +180,7 @@ class GurobiDualVariableListSolutionElement(GurobiSolutionElementBase):
 
 
 @solution_element
-class GurobiDualVariableTupleDictSolutionElement(GurobiSolutionElementBase):
+class GurobiDualVariableTupleDictSolutionElement(SolutionElementBase):
     value: Dict[Tuple, float]
     
     @classmethod
@@ -152,13 +199,23 @@ class GurobiDualVariableTupleDictSolutionElement(GurobiSolutionElementBase):
 
 
 @singledispatch
-def from_sol(sol, _: str) -> GurobiSolutionElementBase:
+def from_sol(sol, _: str) -> SolutionElementBase:
     raise ValueError(f'Unkown solution type: {type(sol)}')
 
 
 @from_sol.register
 def _(sol: gp.Var, name: str) -> GurobiVarSolutionElement:
     return GurobiVarSolutionElement(name, sol.X)
+
+
+@from_sol.register
+def _(sol: float, name: str) -> FloatVarSolutionElement:
+    return FloatVarSolutionElement(name, sol)
+
+
+@from_sol.register
+def _(sol: np.ndarray, name: str) -> ArrayVarSolutionElement:
+    return ArrayVarSolutionElement(name, sol)
 
 
 @from_sol.register
@@ -181,13 +238,24 @@ def _(sol: Dict[Tuple, gp.Constr], name: str) -> GurobiDualVariableTupleDictSolu
     return GurobiDualVariableTupleDictSolutionElement(name, {k: v.Pi for k, v in sol.items()})
 
 
-class GurobiEdgeBasedMinimizeMaximumUtilitySolution(TrafficEngineeringLPSolution):
+@dataclass
+class EdgeBasedMinimizeMaximumUtilitySolutionParams:
+    seed: int
+    topology_name: str
+    capacity: float
+    tm_model_name: str
+    tm_model_params: TrafficMatrixParamsBase
+    path: Optional[str] = None
+    sol_name: Optional[str] = None
+    runtime: Optional[float] = None
+
+
+class EdgeBasedMinimizeMaximumUtilitySolution(TrafficEngineeringLPSolution):
     """
-    This class handles solution outputs from Gurobi.
-    We assume the problem at hand is an LP, and the main purpose here is to
-    provide enough information for a warm start.
-    As such, we assume one of the Simplex methods (in particular, Dual Simplex) is
-    used and the model is prepared to accept initial solutions.
+    This class handles solution outputs, with some special functions catering especially
+    to outputs for Gurobi so that it can be warm started efficiently (to this end, 
+    we mainly assume one of the Simplex methods, in particular Dual Simplex, was
+    used to generate the solution).
 
     We try to be very generous to Gurobi, and as such, we output basis files (.bas)
     so that Gurobi can very quickly initialize itself.
@@ -197,50 +265,52 @@ class GurobiEdgeBasedMinimizeMaximumUtilitySolution(TrafficEngineeringLPSolution
     NOTE: There is benefit in making the output human-readable here. As such, this
           class dumps/loads solutions as JSON instead of pickle.
           The Gurobi `.bas` and JSON files are already human-readable.
+    
+    Solution from non-Gurobi sources (like our algorithm) are instead formatted as a
+    `.elems` file, where each line holds information about a designated solution value.
     """
-    def __init__(self, seed: int, topology_name: str, capacity: float, tm_model_name: str, tm_model_params: Any, 
-                 gurobi_sol_path: Optional[str] = None, gurobi_sol_name: Optional[str] = None, runtime: Optional[float] = None):
-        assert dataclasses.is_dataclass(tm_model_params)
-        if gurobi_sol_path is None:
-            assert gurobi_sol_name is not None
+    def __init__(self, params: EdgeBasedMinimizeMaximumUtilitySolutionParams):
+        assert dataclasses.is_dataclass(params.tm_model_params)
+        if params.path is None:
+            assert params.sol_name is not None
 
-        self.seed = seed
-        self.topology_name = topology_name
-        self.capacity = float(capacity)
-        self.tm_model_name = tm_model_name
-        self.tm_model_params = tm_model_params
-        self.gurobi_sol_path = gurobi_sol_path \
-            if gurobi_sol_path is not None \
-            else f'$$SOLDIR/{gurobi_sol_name}'
-        self.runtime = runtime
-        self.solution_elements: List[GurobiSolutionElementBase] = []
+        self.seed = params.seed
+        self.topology_name = params.topology_name
+        self.capacity = float(params.capacity)
+        self.tm_model_name = params.tm_model_name
+        self.tm_model_params = params.tm_model_params
+        self.path = params.path \
+            if params.path is not None \
+            else f'$$SOLDIR/{params.sol_name}'
+        self.runtime = params.runtime
+        self.solution_elements: List[SolutionElementBase] = []
     
     def add_solution_element(self, element, name: str):
         self.solution_elements.append(from_sol(element, name))
     
     @property
     def bas_path(self):
-        if self.gurobi_sol_path.startswith('$$SOLDIR/'):
-            rest = self.gurobi_sol_path.replace('$$SOLDIR/', '')
-            name = os.path.join(SOLUTION_DIR, f'{rest}.gurobi.bas')
+        if self.path.startswith('$$SOLDIR/'):
+            rest = self.path.replace('$$SOLDIR/', '')
+            name = os.path.join(SOLUTION_DIR, rest)
         else:
-            name = self.gurobi_sol_path
+            name = self.path
         return as_simplex_basis_name(name)
     @property
     def sol_path(self):
-        if self.gurobi_sol_path.startswith('$$SOLDIR/'):
-            rest = self.gurobi_sol_path.replace('$$SOLDIR/', '')
-            name = os.path.join(SOLUTION_DIR, f'{rest}.gurobi.json')
+        if self.path.startswith('$$SOLDIR/'):
+            rest = self.path.replace('$$SOLDIR/', '')
+            name = os.path.join(SOLUTION_DIR, rest)
         else:
-            name = self.gurobi_sol_path
+            name = self.path
         return as_json_solution_name(name)
     @property
     def elem_path(self):
-        if self.gurobi_sol_path.startswith('$$SOLDIR/'):
-            rest = self.gurobi_sol_path.replace('$$SOLDIR/', '')
-            name = os.path.join(SOLUTION_DIR, as_solution_elements_name(rest))
+        if self.path.startswith('$$SOLDIR/'):
+            rest = self.path.replace('$$SOLDIR/', '')
+            name = os.path.join(SOLUTION_DIR, rest)
         else:
-            name = self.gurobi_sol_path
+            name = self.path
         return as_solution_elements_name(name)
 
     def dump(self, name: str, path: str = None):
@@ -281,7 +351,7 @@ class GurobiEdgeBasedMinimizeMaximumUtilitySolution(TrafficEngineeringLPSolution
             d.update({
                 'tm_model_params': get_traffic_model_params(d['tm_model_name'])(**d['tm_model_params'])
             })
-            return cls(**d)
+            return cls(EdgeBasedMinimizeMaximumUtilitySolutionParams(**d))
 
     def initiate_model_from_basis(self, model: gp.Model):
         model.reset()
@@ -320,7 +390,7 @@ class GurobiEdgeBasedMinimizeMaximumUtilitySolution(TrafficEngineeringLPSolution
         return element_strings
     
     @staticmethod
-    def _parse_element_strings(element_strings: List[str]) -> List[GurobiSolutionElementBase]:
+    def _parse_element_strings(element_strings: List[str]) -> List[SolutionElementBase]:
         out = []
         for elem_string in element_strings:
             _, type, _ = get_name_type_value(elem_string)
@@ -337,7 +407,7 @@ class GurobiEdgeBasedMinimizeMaximumUtilitySolution(TrafficEngineeringLPSolution
         tm = get_traffic_model(self.tm_model_name)(seed=self.seed, params=self.tm_model_params)
         return (graph, tm)
 
-    def get_gurobi_solution_element_by_name(self, name: str) -> GurobiSolutionElementBase:
+    def get_solution_element_by_name(self, name: str) -> SolutionElementBase:
         if len(self.solution_elements) == 0:
             self.load_solution_elements()
         for elem in self.solution_elements:
@@ -346,16 +416,32 @@ class GurobiEdgeBasedMinimizeMaximumUtilitySolution(TrafficEngineeringLPSolution
         raise ValueError
 
 
-class GurobiEdgeBasedMinimizeMaximumUtilityShiftedSolution(GurobiEdgeBasedMinimizeMaximumUtilitySolution):
-    def __init__(self, seed, topology_name, capacity, tm_model_name, tm_model_params, 
-                 tm_converter_name: str, tm_converter_params: TrafficMatrixConverterBase, 
-                 converter_seed: int, iteration: int,
-                 gurobi_sol_path = None, gurobi_sol_name = None, runtime = None):
-        super().__init__(seed, topology_name, capacity, tm_model_name, tm_model_params, gurobi_sol_path, gurobi_sol_name, runtime)
-        self.tm_converter_name = tm_converter_name
-        self.tm_converter_params = tm_converter_params
-        self.converter_seed = converter_seed
-        self.iteration = iteration
+@dataclass
+class EdgeBasedMinimizeMaximumUtilityShiftedSolutionParams:
+    seed: int
+    topology_name: str
+    capacity: float
+    tm_model_name: str
+    tm_model_params: TrafficMatrixParamsBase
+    tm_converter_name: str
+    tm_converter_params: TrafficMatrixConverterBase
+    converter_seed: int
+    iteration: int
+    path: Optional[str] = None
+    sol_name: Optional[str] = None
+    runtime: Optional[float] = None
+
+
+class EdgeBasedMinimizeMaximumUtilityShiftedSolution(EdgeBasedMinimizeMaximumUtilitySolution):
+    def __init__(self, params: EdgeBasedMinimizeMaximumUtilityShiftedSolutionParams):
+        super().__init__(EdgeBasedMinimizeMaximumUtilitySolutionParams(
+            params.seed, params.topology_name, params.capacity, params.tm_model_name,
+            params.tm_model_params, params.path, params.sol_name, params.runtime
+        ))
+        self.tm_converter_name = params.tm_converter_name
+        self.tm_converter_params = params.tm_converter_params
+        self.converter_seed = params.converter_seed
+        self.iteration = params.iteration
     
     def dump(self, model: gp.Model, name: str, path: str = None):
         path = path if path is not None else os.path.join(SOLUTION_DIR, name)
@@ -389,37 +475,9 @@ class GurobiEdgeBasedMinimizeMaximumUtilityShiftedSolution(GurobiEdgeBasedMinimi
             tm = converter.convert(tm)
         return (graph, tm)
     
-    def get_gurobi_solution_element_by_name(self, name):
+    def get_solution_element_by_name(self, name):
         if len(self.solution_elements) == 0:
             self.load_solution_elements()
-        for elem in self.solution_elements:
-            if elem.name == name:
-                return elem
-        raise ValueError
-
-
-class EdgeBasedMinimizeMaximumUtilitySolution(TrafficEngineeringLPSolution):
-    def __init__(self, seed: int, topology_name: str, capacity: float, tm_model_name: str, tm_model_params: Any, 
-                 assignments: np.ndarray, runtime: Optional[float]):
-        self.seed = seed
-        self.topology_name = topology_name
-        self.capacity = capacity
-        self.tm_model_name = tm_model_name
-        self.tm_model_params = tm_model_params
-        self.assignments = assignments
-        self.runtime = runtime
-        self.solution_elements: List[GurobiSolutionElementBase] = []
-    
-    def regenerate(self) -> Tuple[nx.DiGraph, TrafficMatrixBase]:
-        graph = load_zoo_topology(name=self.topology_name)
-        set_edge_capacity_to(graph=graph, capacity=self.capacity)
-        tm = get_traffic_model(self.tm_model_name)(seed=self.seed, params=self.tm_model_params)
-        return (graph, tm)
-    
-    def add_solution_element(self, element, name: str):
-        self.solution_elements.append(from_sol(element, name))
-
-    def get_gurobi_solution_element_by_name(self, name: str) -> GurobiSolutionElementBase:
         for elem in self.solution_elements:
             if elem.name == name:
                 return elem
@@ -443,12 +501,43 @@ def tuple_dict_to_np_array(element: Union[GurobiTupleDictSolutionElement, Gurobi
     return out
 
 
+def default_solution_name(topology_name: str, rng_seed: int, tm_type: str, postfix: Optional[str] = None, **gurobi_kwargs) -> str:
+    items = [topology_name, str(rng_seed), tm_type]
+    method = gurobi_kwargs.get('method')
+    if method is not None:
+        if isinstance(method, int):
+            if method == gp.GRB.METHOD_PRIMAL or method == gp.GRB.METHOD_DUAL:
+                items.append('Simplex')
+            elif method == gp.GRB.METHOD_BARRIER:
+                items.append('Barrier')
+            else:
+                raise ValueError(f'Unexpected method: {method}')
+        elif isinstance(method, str):
+            method = method.lower()
+            if method == 'primal' or method == 'dual' or method == 'simplex':
+                items.append('Simplex')
+            elif method == 'barrier':
+                items.append('Barrier')
+            else:
+                raise ValueError(f'Unexpected method: {method}')
+        else:
+            raise ValueError(f'Unexpected method: {method}')
+    crossover = gurobi_kwargs.get('crossover')
+    if crossover is not None:
+        if crossover is True and method == gp.GRB.METHOD_BARRIER:
+            items.append('Crossover')
+    if postfix is not None:
+        items.append(postfix)
+    return '_'.join(items)
+
+
+
 if __name__ == '__main__':
     SEED = 12345
     TOPOLOGY_NAME = 'Claranet'
     TM_MODEL = 'Uniform'
     SOLUTION_NAME = f'{TOPOLOGY_NAME}_{SEED}_{TM_MODEL}.tesol'
-    solution = GurobiEdgeBasedMinimizeMaximumUtilitySolution.load(name=SOLUTION_NAME)
+    solution = EdgeBasedMinimizeMaximumUtilitySolution.load(name=SOLUTION_NAME)
     assignments, u = solution.get_vars_from_json()
     solution.load_solution_elements()
     print(solution.solution_elements)

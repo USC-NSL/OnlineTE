@@ -6,9 +6,9 @@
 # UPDATE-UPDATE: It is too big!
 # *.sol
 *.tesol
-*.gurobi.json
-*.gurobi.bas
-*.gurobi.elems
+*.json
+*.bas
+*.elems
 *.nsys-rep
 *.txt
 

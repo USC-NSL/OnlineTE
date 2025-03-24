@@ -1,12 +1,17 @@
 import time
 import contextlib
 import concurrent.futures
+from typing import Optional
 from te.algorithms.formulations.edge_based_distributed_admm.worker import NetworkWorkerNode
 from te.algorithms.formulations.edge_based_distributed_admm.controller import ControllerNode
 from te.algorithms.formulations.edge_based_distributed_admm import (DistributedADMMSolverParams,
                                                                     DistributedADMMWorkerRPCParams,
                                                                     DistributedADMMControllerRPCParams)
-from te.algorithms.utils import (as_info, list_round, get_solution_confusion_matrix, stringify_collected_stats, 
+from te.algorithms.solution import (EdgeBasedMinimizeMaximumUtilitySolution, 
+                                    EdgeBasedMinimizeMaximumUtilitySolutionParams, 
+                                    default_solution_name)
+from utils.logging import as_info
+from te.algorithms.utils import (get_solution_confusion_matrix, stringify_collected_stats, 
                                  str_round, get_solution_maximum_utilization)
 from topologies.utils import get_uniform_tm_problem_with_capacity_heuristic
 
@@ -28,7 +33,8 @@ HOST = "localhost"
 BASE_PORT = 13000
 
 
-def distributed_admm_test(topology: str, seed: int, scale_factor: float = 10.0, **kwargs):
+def distributed_admm_test(topology: str, seed: int, scale_factor: float = 10.0,
+                          save_solution: bool = False, **kwargs):
     c, graph, tm = get_uniform_tm_problem_with_capacity_heuristic(topology, seed, scale_factor=scale_factor)
     print(f"Network link capacity is: {str(round(c, 2))}")
 
@@ -36,13 +42,24 @@ def distributed_admm_test(topology: str, seed: int, scale_factor: float = 10.0, 
         NumberOfEpochs=150,
         NumberOfNetworkUpdates=2,
         PGDIterations=2,
-        Gamma=1,
+        Gamma=0.9,
         Eta=8,
         Rho=1,
         Kappa=0.1,
         Seed=RNG_SEED,
         NumWorkers=2
     )
+
+    solution_params = None
+    if save_solution:
+        solution_params = EdgeBasedMinimizeMaximumUtilitySolutionParams(
+            seed=seed, topology_name=topology, capacity=c,
+            tm_model_name=tm.type(), tm_model_params=tm.params,
+            path=None, sol_name=default_solution_name(
+                topology_name=topology, rng_seed=seed, tm_type=tm.type(),
+                postfix='ours'
+            )
+        )
 
     print(as_info("="*60))
     print(as_info("="*23 + " MLU PROBLEM " + "="*24))
@@ -76,12 +93,17 @@ def distributed_admm_test(topology: str, seed: int, scale_factor: float = 10.0, 
                 print(as_info(f"Solved in {str_round(t, 2)} seconds"))
                 print(as_info(f"Final objective value: {str_round(lp.objective_value, 4)}"))
                 print(as_info(f"Actual utilization: {str_round(get_solution_maximum_utilization(lp.assignments, lp.graph), 4)}"))
+            if solution_params:
+                solution = EdgeBasedMinimizeMaximumUtilitySolution(params=solution_params)
+                lp.add_solution_elements(solution)
+                solution.dump_elements()
+                solution.dump(name=solution_params.sol_name)
             stats = stringify_collected_stats()
             if stats is not None:
                 print(as_info(stats))
 
 
 if __name__ == '__main__':
-    distributed_admm_test(SMALL_TOPOLOGY, RNG_SEED)
+    distributed_admm_test(SMALL_TOPOLOGY, RNG_SEED, save_solution=True)
     # distributed_admm_test(SMALL_MEDIUM_TOPOLOGY, RNG_SEED)
     # distributed_admm_test(MEDIUM_TOPOLOGY, RNG_SEED)

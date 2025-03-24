@@ -8,16 +8,17 @@ from multiprocessing import Pool
 from typing import List, Tuple, Optional
 from dataclasses import dataclass
 from gurobipy import GRB, GurobiError
+from utils.logging import as_fail
 from te.algorithms.base import TrafficEngineeringLP, GurobiSolverParams, SolverParams
-from te.algorithms.solution import GurobiEdgeBasedMinimizeMaximumUtilitySolution
+from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
 from te.algorithms.sub_algorithms.pgd import (do_iterative_plain_pgd, do_iterative_pgd_with_exact_line_search,
                                               do_block_plain_pgd, do_block_pgd_with_exact_line_search)
 from topologies.utils import (get_edge_indexing, get_graph_M_matrix, 
                               get_adjacency_null_space, get_feasible_flow_assignment)
 from te.algorithms.utils import (check_capacity_constraint, optimize_or_scream, make_model, 
-                                 get_solution_maximum_utilization, as_fail,
-                                 careful_norm, careful_norm_squared)
+                                 get_solution_maximum_utilization, careful_norm, 
+                                 careful_norm_squared)
 
 
 @dataclass
@@ -774,7 +775,7 @@ class RegularizedADMMLP(TrafficEngineeringLP):
         for k, lambda_k in enumerate(self.proc_pool.starmap(self.do_pgd_with_exact_line_search_for_optimal_lambda, pgd_iterator())):
             self._lambda_ek[:, k] = lambda_k
     
-    def initialize_to(self, solution: GurobiEdgeBasedMinimizeMaximumUtilitySolution):
+    def initialize_to(self, solution: EdgeBasedMinimizeMaximumUtilitySolution):
         T = self._T
         NULL_M = self._NULL_M
         ETA = self.current_eta
@@ -813,7 +814,7 @@ class RegularizedADMMLP(TrafficEngineeringLP):
         self._objective_trace = []
         self._objective_gap_trace = []
     
-    def set_target(self, solution: GurobiEdgeBasedMinimizeMaximumUtilitySolution):
+    def set_target(self, solution: EdgeBasedMinimizeMaximumUtilitySolution):
         _, u = solution.get_vars()
         self._target_u = u
 

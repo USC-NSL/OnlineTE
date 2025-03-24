@@ -1,3 +1,4 @@
+import math
 import gurobipy
 import contextlib
 import cupy as cp
@@ -9,45 +10,11 @@ import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 from typing import List, Tuple, Dict, Union, Optional, Type
 from collections import defaultdict
+from utils.logging import as_bold, as_fail, as_info, as_success, as_warning, method_to_str, str_round
 from te.traffic_models.base import Commodity, TrafficMatrixBase
 from te.algorithms.base import TrafficEngineeringLP, SolverParams, GurobiSolverParams
+from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution, EdgeBasedMinimizeMaximumUtilitySolutionParams
 from te.algorithms.statistics.base import stringify_collected_stats
-
-
-class ANSIColors:
-    HEADER = '\033[95m'
-    OKBLUE = '\033[94m'
-    OKCYAN = '\033[96m'
-    OKGREEN = '\033[92m'
-    WARNING = '\033[93m'
-    FAIL = '\033[91m'
-    ENDC = '\033[0m'
-    BOLD = '\033[1m'
-    UNDERLINE = '\033[4m'
-
-
-as_bold = lambda msg: f"{ANSIColors.BOLD}{msg}{ANSIColors.ENDC}"
-as_warning = lambda msg: f"{ANSIColors.BOLD}{ANSIColors.WARNING}{msg}{ANSIColors.ENDC}"
-as_info = lambda msg: f"{ANSIColors.BOLD}{ANSIColors.OKBLUE}{msg}{ANSIColors.ENDC}"
-as_success = lambda msg: f"{ANSIColors.BOLD}{ANSIColors.OKGREEN}{msg}{ANSIColors.ENDC}"
-as_fail = lambda msg: f"{ANSIColors.BOLD}{ANSIColors.FAIL}{msg}{ANSIColors.ENDC}"
-
-
-def str_round(value, digits: int) -> str:
-    """For float16, `np.round` / `round` can easily return `inf`. So we cast to `float32` always"""
-    val32 = np.float32(value)
-    return str(round(val32, digits))
-
-
-def list_round(values: List, digits: int) -> List[str]:
-    return [str_round(value, digits) for value in values]
-
-
-method_to_str = {
-    gurobipy.GRB.METHOD_BARRIER: "BARRIER",
-    gurobipy.GRB.METHOD_PRIMAL: "PRIMAL-SIMPLEX",
-    gurobipy.GRB.METHOD_DUAL: "DUAL-SIMPLEX"
-}
 
 
 def make_model(name: str, params: SolverParams, env: Optional[gurobipy.Env], verbose: bool = True, **kwargs):
@@ -90,6 +57,42 @@ def optimize_or_scream(model: gurobipy.Model):
         raise RuntimeError(as_fail(f"Optimizing model {model.ModelName} returned non-optimal status: {model.Status}"))
 
 
+def is_satisfied(optim, actual, feasibility_tol: Optional[float], feasibility_ratio: Optional[float]):
+    """
+    Check if `actual` is close to `optim` assignment.
+    The test can either absolute or relative tolerance (if both are present, only
+    absolute tolerance is considered).
+    """
+    if feasibility_tol is not None:
+        return math.isclose(optim, actual, abs_tol=feasibility_tol)
+    if abs(optim) < te.constants.FLOAT_RES:
+        return math.isclose(actual, 0, abs_tol=te.constants.FLOAT_RES)
+    return math.isclose(optim, actual, rel_tol=feasibility_ratio)
+
+
+def get_unsatisfied_demands(commodities: List[Commodity], solution: List[Tuple[Commodity, Commodity]],
+                            feasibility_tol: Optional[float], feasibility_ratio: Optional[float]) -> \
+                                List[Tuple[Commodity, Tuple[Commodity, Commodity]]]:
+    """
+    Check for demands that are not satisfied.
+    To do this, it accepts a list of commodities as target (i.e. triple of `(src, dst, demand)`), and
+    list of pairs of triplets (i.e. `(src, dst, demand-out)` and `(src, dst, demand-in)`).
+    Of these triples, `src` and `dst` MUST always agree with the target, but demands may be different.
+    
+    Demands are checked to be within absolute/relative tolerance as given in arguments. Demands which
+    were not satisfied are returned.
+    """
+    unsats: List[Tuple[Commodity, Tuple[Commodity, Commodity]]] = []
+    for actual, ideal in zip(solution, commodities):
+        assert actual[0].source == ideal.source
+        assert actual[0].destination == ideal.destination
+        assert actual[1].source == ideal.source
+        assert actual[1].destination == ideal.destination
+        if not is_satisfied(ideal.demand, actual[0].demand, feasibility_tol, feasibility_ratio):
+            unsats.append((ideal, actual))
+    return unsats
+
+
 def get_solution_confusion_matrix(lp: TrafficEngineeringLP, feasibility_tol: Optional[float] = None, feasibility_ratio: Optional[float] = None, 
                                   report: bool = False, report_unsat: bool = True, show: bool = True, save_fig: bool = True,
                                   trace_out_path: Optional[str] = 'res.txt') -> Tuple[float, np.ndarray]:
@@ -100,13 +103,6 @@ def get_solution_confusion_matrix(lp: TrafficEngineeringLP, feasibility_tol: Opt
         - Or we can check if it has lower than a particular _error ratio_
     """
     assert (feasibility_ratio is None) ^ (feasibility_tol is None), "Exactly one of `feasibility_tol` or `feasibility_ratio` must be given"
-
-    def is_satisfied(optim, actual):
-        if feasibility_tol is not None:
-            return abs(optim - actual) < feasibility_tol
-        if optim < te.constants.FLOAT_RES:
-            return abs(actual) < te.constants.FLOAT_RES
-        return abs((optim - actual) / optim) < feasibility_ratio
 
     def write_traces(_lp: TrafficEngineeringLP):
         _solver_params = _lp.params
@@ -218,24 +214,23 @@ def get_solution_confusion_matrix(lp: TrafficEngineeringLP, feasibility_tol: Opt
     commodities = lp.commodity_list
     topology_size = len(lp.graph.nodes)
     solution = lp.get_solution_commodity_list()
+    unsatisfied_demands = get_unsatisfied_demands(commodities, solution, feasibility_tol, feasibility_ratio)
 
     K = len(commodities)
-    unsats = 0
+    unsats = len(unsatisfied_demands)
     cm = np.zeros(shape=(topology_size, topology_size))
 
-    if report or report_unsat:
-        print(" "*12 + "{:^10}    {:^20}".format("DESIRED", "ALLOCATED"))
-        print("-"*46)
+    if report:
+        print(as_fail(" "*12 + "{:^10}    {:^20}".format("DESIRED", "ALLOCATED")))
+        print(as_fail("-"*46))
 
-    for actual, ideal in zip(solution, commodities):
+    for ideal, actual in unsatisfied_demands:
         assert actual[0].source == ideal.source
         assert actual[0].destination == ideal.destination
         assert actual[1].source == ideal.source
         assert actual[1].destination == ideal.destination
-        is_not_satisfied = not is_satisfied(ideal.demand, actual[0].demand)
-        if is_not_satisfied:
-            cm[ideal.source, ideal.destination] = 1
-            unsats += 1        
+
+        cm[ideal.source, ideal.destination] = 1
         
         if report:
             report_str = "{:<4} -> {:<4}".format(ideal.source, ideal.destination) + \
@@ -244,19 +239,7 @@ def get_solution_confusion_matrix(lp: TrafficEngineeringLP, feasibility_tol: Opt
                     str_round(actual[0].demand, 2),
                     str_round(actual[1].demand, 2)
                 )
-            if is_not_satisfied:
-                print(as_fail(report_str))
-            else:
-                print(report_str)
-        else:
-            if report_unsat and is_not_satisfied:
-                report_str = "{:<4} -> {:<4}".format(ideal.source, ideal.destination) + \
-                    "{:^10}    {:^7} <--> {:^7}".format(
-                        str_round(ideal.demand, 2),
-                        str_round(actual[0].demand, 2),
-                        str_round(actual[1].demand, 2)
-                    )
-                print(as_fail(report_str))
+            print(as_fail(report_str))
     
     unsatisfied = unsats / K
 
@@ -294,15 +277,14 @@ def get_solution_maximum_utilization(assignments: np.ndarray, graph: nx.DiGraph)
 
 def check_centralized_flow_conservation(
         flows: Union[gurobipy.tupledict, np.ndarray], graph: nx.DiGraph, 
-        commodities: List[Commodity], feasibility_tol: float
+        commodities: List[Commodity], feasibility_tol: Optional[float],
+        feasibility_ratio: Optional[float] = None
     ):
     """
     Check if solution satisfies all of the following constraints:
         - Transit nodes conserve flows                                    ( flow conservation )
         - A demand destined to a node, never flows out from that node     (  no demand leaks  )
         - A demand sourced from a node, never flows back into that node   (      no loops     )
-    This constraint is enforced pretty rigidly, we don't check for 
-    relative error, we just check the distance.
     """
 
     IS_GUROBI_VAR = isinstance(flows, gurobipy.tupledict)
@@ -327,18 +309,18 @@ def check_centralized_flow_conservation(
             fin_str = str_round(fin, 4)
 
             if v == SOURCE:
-                assert abs(fout - DEMAND) < feasibility_tol , \
-                    f"Commodity {k}: Node {v} --> Demand outflow does not hold at source: {fout_str} vs {demand_str}"
-                assert abs(fin) < feasibility_tol , \
-                    f"Commodity {k}: Node {v} --> Source receives its own demand! {fin_str}"
+                if not is_satisfied(fout, DEMAND, feasibility_tol, feasibility_ratio):
+                    print(as_fail(f"Commodity {k}: Node {v} --> Demand outflow does not hold at source: {fout_str} vs {demand_str}"))
+                if not is_satisfied(fin, 0, feasibility_tol, feasibility_ratio):
+                    print(as_fail(f"Commodity {k}: Node {v} --> Source receives its own demand! {fin_str}"))
             elif v == DESTINATION:
-                assert abs(fout) < feasibility_tol , \
-                    f"Commodity {k}: Node {v} --> Destination is leaking demand! {fout_str}"
-                assert abs(fin - DEMAND) < feasibility_tol , \
-                    f"Commodity {k}: Node {v} --> Demand inflow does not hold at destination: {fin_str} vs {demand_str}"
+                if not is_satisfied(fout, 0, feasibility_tol, feasibility_ratio):
+                    print(as_fail(f"Commodity {k}: Node {v} --> Destination is leaking demand! {fout_str}"))
+                if not is_satisfied(fin, DEMAND, feasibility_tol, feasibility_ratio):
+                    print(as_fail(f"Commodity {k}: Node {v} --> Demand inflow does not hold at destination: {fin_str} vs {demand_str}"))
             else:
-                assert abs(fout - fin) < feasibility_tol , \
-                    f"Commodity {k}: Node {v} --> Transit demand conservation does not hold: {fin_str} --> {fout_str}"
+                if not is_satisfied(fout, fin, feasibility_tol, feasibility_ratio):
+                    print(as_fail(f"Commodity {k}: Node {v} --> Transit demand conservation does not hold: {fin_str} --> {fout_str}"))
 
 
 def check_capacity_constraint(
@@ -448,7 +430,9 @@ def careful_norm_squared(x: np.ndarray, axis: Optional[int] = None) -> float:
 
 
 def test_mlu(lp_cls: Type[TrafficEngineeringLP], graph: nx.DiGraph, tm: TrafficMatrixBase, solver_params: SolverParams,
-             feasibility_tol: float = None, feasibility_ratio: float = None, **kwargs):
+             feasibility_tol: float = None, feasibility_ratio: float = None,
+             solution_params: Optional[EdgeBasedMinimizeMaximumUtilitySolutionParams] = None, 
+             **kwargs):
     print(as_info("="*60))
     print(as_info("="*23 + " MLU PROBLEM " + "="*24))
     print(as_info("="*60))
@@ -466,3 +450,8 @@ def test_mlu(lp_cls: Type[TrafficEngineeringLP], graph: nx.DiGraph, tm: TrafficM
         stats = stringify_collected_stats()
         if stats is not None:
             print(as_info(stats))
+        if solution_params:
+            solution = EdgeBasedMinimizeMaximumUtilitySolution(params=solution_params)
+            lp.add_solution_elements(solution)
+            solution.dump_elements()
+            solution.dump(name=solution_params.sol_name)

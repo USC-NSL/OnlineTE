@@ -3,19 +3,29 @@ import networkx as nx
 import matplotlib.pyplot as plt
 from typing import Tuple, Dict
 from te.traffic_models.base import traffic_to_commodity
-from te.algorithms.solution import GurobiEdgeBasedMinimizeMaximumUtilitySolution
+from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution, default_solution_name, as_te_solution_name
 
 
 CommodityDict = Dict[Tuple[int, int], Tuple[int, float]]
 
 
-within_tolerance = lambda x: 0 if abs(x) < 1e-1 else x
+within_tolerance = lambda x: 0 if abs(x) < 1e-2 else x
 
 
 def load_solution_info(solution_name: str, initiate_weights: bool = True) -> Tuple[nx.DiGraph, np.ndarray, float, CommodityDict]:
-    base_solution: GurobiEdgeBasedMinimizeMaximumUtilitySolution = GurobiEdgeBasedMinimizeMaximumUtilitySolution.load(name=solution_name)
+    base_solution: EdgeBasedMinimizeMaximumUtilitySolution = \
+        EdgeBasedMinimizeMaximumUtilitySolution.load(name=as_te_solution_name(solution_name))
     graph, tm = base_solution.regenerate()
-    assignments, u = base_solution.get_vars()
+    assignments_element = base_solution.get_solution_element_by_name('assignments').value
+    if isinstance(assignments_element, dict):
+        assignments = np.zeros(shape=(graph.number_of_edges(), graph.number_of_nodes() * (graph.number_of_nodes() - 1)))
+        for index, value in assignments_element.items():
+            assignments[index] = value
+    elif isinstance(assignments_element, np.ndarray):
+        assignments = assignments_element
+    else:
+        raise ValueError(f'Unexpected solution element value type: {type(assignments_element)}')
+    u = base_solution.get_solution_element_by_name('utility').value
     capacity = base_solution.capacity * u
     commodity_list = traffic_to_commodity(tm)
     if initiate_weights:
@@ -100,15 +110,23 @@ if __name__ == '__main__':
     tm_model = 'Uniform'
 
     plt.figure(figsize=(15, 5), dpi=100)
-    plt.subplot(1, 3, 1)
-    load_and_draw_assignment_for_source_and_destination(f'{topology_name}_{base_seed}_{tm_model}.tesol', 1, 8)
+    plt.subplot(2, 2, 1)
+    load_and_draw_assignment_for_source_and_destination(
+        default_solution_name(topology_name, base_seed, tm_model, method='simplex'), 1, 8)
     plt.title('Simplex')
-    plt.subplot(1, 3, 2)
-    load_and_draw_assignment_for_source_and_destination(f'{topology_name}_{base_seed}_{tm_model}_barrier.tesol', 1, 8)
+    plt.subplot(2, 2, 2)
+    load_and_draw_assignment_for_source_and_destination(
+        default_solution_name(topology_name, base_seed, tm_model, method='barrier'), 1, 8)
     plt.title('Barrier')
-    plt.subplot(1, 3, 3)
-    load_and_draw_assignment_for_source_and_destination(f'{topology_name}_{base_seed}_{tm_model}_barrier_crossed.tesol', 1, 8)
+    plt.subplot(2, 2, 3)
+    load_and_draw_assignment_for_source_and_destination(
+        default_solution_name(topology_name, base_seed, tm_model, method='simplex'), 1, 8)
+        # default_solution_name(topology_name, base_seed, tm_model, method='barrier', crossover=True), 1, 8)
     plt.title('Barrier + Crossover')
+    plt.subplot(2, 2, 4)
+    load_and_draw_assignment_for_source_and_destination(
+        default_solution_name(topology_name, base_seed, tm_model, postfix='ours'), 1, 8)
+    plt.title('Ours')
     plt.show()
 
     # solution_name = f'{topology_name}_{base_seed}_{tm_model}.tesol'

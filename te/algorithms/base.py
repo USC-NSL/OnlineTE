@@ -13,9 +13,9 @@ from te.traffic_models.base import TrafficMatrixBase, Commodity
 
 
 TE_SOLUTION_POSTFIX = '.tesol'
-SOLUTION_ELEMENTS_POSTFIX = '.gurobi.elems'
-JSON_SOLUTION_POSTFIX = '.gurobi.json'
-SIMPLEX_BASIS_POSTFIX = '.gurobi.bas'
+SOLUTION_ELEMENTS_POSTFIX = '.elems'
+JSON_SOLUTION_POSTFIX = '.json'
+SIMPLEX_BASIS_POSTFIX = '.bas'
 
 
 def with_postfix(name: str, postfix: str) -> str:
@@ -73,8 +73,8 @@ class SolverParams(ABC):
 
 
 @dataclass(frozen=True)
-class GurobiSolutionElementBase(ABC):
-    """Generic contrainer for Gurobi solution elements"""
+class SolutionElementBase(ABC):
+    """Generic contrainer for solution elements"""
     name: str      # Variable(s) name
     value: Any     # Variable(s) value
 
@@ -132,8 +132,8 @@ class TrafficEngineeringLPSolution(ABC):
         """Add a solution element to this TE solution instance"""
     
     @abstractmethod
-    def get_gurobi_solution_element_by_name(self, name: str) -> GurobiSolutionElementBase:
-        """Get a Gurobi solution element by name"""
+    def get_solution_element_by_name(self, name: str) -> SolutionElementBase:
+        """Get a solution element by name"""
 
 
 class TrafficEngineeringLP(ABC):

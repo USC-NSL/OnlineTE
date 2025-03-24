@@ -1,12 +1,12 @@
-import math
-from te.algorithms.base import GurobiSolverParams
+from gurobipy import GRB
+from te.algorithms.base import GurobiSolverParams, TrafficMatrixBase
 from te.algorithms.formulations.edge_based_centralized import CentralizedEdgeBasedLP
 from te.algorithms.formulations.edge_based_regularized_admm import RegularizedADMMLP, RegularizedADMMSolverParams
 from te.algorithms.formulations.edge_based_unregulated_admm import UnregulatedADMMLP, UnregulatedADMMSolverParams
 from te.algorithms.formulations.edge_based_unregulated_admm_gpu import GPUUnregulatedADMMLP, GPUUnregulatedADMMSolverParams
-# from te.algorithms.formulations.edge_based_gpu_debug import GPUUnregulatedADMMLP, GPUUnregulatedADMMSolverParams
 from te.algorithms.formulations.edge_based_multi_gpu import MultiGPUUnregulatedADMMLP, MultiGPUUnregulatedADMMSolverParams
 from te.algorithms.utils import test_mlu
+from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolutionParams, default_solution_name
 from topologies.utils import get_uniform_tm_problem_with_capacity_heuristic
 
 import warnings
@@ -27,13 +27,24 @@ ARTIFICIAL_MEDIUM_TOPOLOGY_2 = 'Artificial-300'
 ARTIFICIAL_MEDIUM_TOPOLOGY_4 = 'Artificial-400'
 
 
-def centralized_test(topology: str, seed: int, scale_factor: float = 10.0, **kwargs):
+def centralized_test(topology: str, seed: int, scale_factor: float = 10.0, save_solution: bool = False, 
+                     method: int = GRB.METHOD_BARRIER, crossover: bool = False, **kwargs):
     c, graph, tm = get_uniform_tm_problem_with_capacity_heuristic(topology, seed, scale_factor=scale_factor)
     print(f"Network link capacity is: {str(round(c, 2))}")
 
-    solver_params = GurobiSolverParams(ConvTol=1e-6, FeasibilityTol=1e-8, Threads=8)
+    solver_params = GurobiSolverParams(ConvTol=1e-6, FeasibilityTol=1e-8, Threads=8, Method=method, Crossover=crossover)
+    solution_params = None
+    if save_solution:
+        solution_params = EdgeBasedMinimizeMaximumUtilitySolutionParams(
+            seed=seed, topology_name=topology, capacity=c,
+            tm_model_name=tm.type(), tm_model_params=tm.params,
+            path=None, sol_name=default_solution_name(
+                topology_name=topology, rng_seed=seed, tm_type=tm.type(),
+                method=method, crossover=crossover
+            )
+        )
     test_mlu(CentralizedEdgeBasedLP, graph, tm, solver_params, feasibility_tol=FEASIBILITY_TOL, 
-             feasibility_ratio=FEASIBILITY_RATIO, **kwargs)
+             feasibility_ratio=FEASIBILITY_RATIO, solution_params=solution_params, **kwargs)
 
 
 def regularized_admm_test(topology: str, seed: int, scale_factor: float = 10.0, **kwargs):
@@ -145,6 +156,9 @@ def multi_gpu_unregulated_admm_test(topology: str, seed: int, scale_factor: floa
 
 
 if __name__ == '__main__':
+    centralized_test(SMALL_TOPOLOGY, RNG_SEED, method=GRB.METHOD_DUAL, save_solution=True)
+    centralized_test(SMALL_TOPOLOGY, RNG_SEED, method=GRB.METHOD_BARRIER, crossover=False, save_solution=True)
+    centralized_test(SMALL_TOPOLOGY, RNG_SEED, method=GRB.METHOD_BARRIER, crossover=True, save_solution=True)
     # centralized_test(SMALL_MEDIUM_TOPOLOGY, RNG_SEED)
     # centralized_test(MEDIUM_TOPOLOGY, RNG_SEED)
     # centralized_test(HUGE_TOPOLOGY, RNG_SEED, scale_factor=200)
@@ -152,7 +166,7 @@ if __name__ == '__main__':
     # regularized_admm_test(SMALL_TOPOLOGY, RNG_SEED)
     # unregulated_admm_test(SMALL_TOPOLOGY, RNG_SEED, trace_out_path=None)
     # unregulated_admm_test(SMALL_MEDIUM_TOPOLOGY, RNG_SEED, trace_out_path=None)
-    unregulated_admm_test(MEDIUM_TOPOLOGY, RNG_SEED)
+    # unregulated_admm_test(MEDIUM_TOPOLOGY, RNG_SEED)
     # gpu_unregulated_admm_test(SMALL_TOPOLOGY, RNG_SEED)
     # gpu_unregulated_admm_test(SMALL_MEDIUM_TOPOLOGY, RNG_SEED)
     # gpu_unregulated_admm_test(MEDIUM_TOPOLOGY, RNG_SEED)
