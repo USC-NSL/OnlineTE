@@ -32,6 +32,7 @@ message InitMessage {
 message UpdateMessage {
     SerializedNumpyArrayMessage P_bar_t = 1;
     SerializedNumpyArrayMessage u_t = 2;
+    SerializedNumpyArrayMessage Y_bar_t = 3;
 }
 
 message NetworkUpdateRequest {

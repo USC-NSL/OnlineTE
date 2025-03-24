@@ -39,6 +39,10 @@ def str_round(value, digits: int) -> str:
     return str(round(val32, digits))
 
 
+def list_round(values: List, digits: int) -> List[str]:
+    return [str_round(value, digits) for value in values]
+
+
 method_to_str = {
     gurobipy.GRB.METHOD_BARRIER: "BARRIER",
     gurobipy.GRB.METHOD_PRIMAL: "PRIMAL-SIMPLEX",

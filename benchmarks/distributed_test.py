@@ -6,7 +6,8 @@ from te.algorithms.formulations.edge_based_distributed_admm.controller import Co
 from te.algorithms.formulations.edge_based_distributed_admm import (DistributedADMMSolverParams,
                                                                     DistributedADMMWorkerRPCParams,
                                                                     DistributedADMMControllerRPCParams)
-from te.algorithms.utils import as_info, get_solution_confusion_matrix, stringify_collected_stats, str_round, get_solution_maximum_utilization
+from te.algorithms.utils import (as_info, list_round, get_solution_confusion_matrix, stringify_collected_stats, 
+                                 str_round, get_solution_maximum_utilization)
 from topologies.utils import get_uniform_tm_problem_with_capacity_heuristic
 
 import warnings
@@ -32,10 +33,10 @@ def distributed_admm_test(topology: str, seed: int, scale_factor: float = 10.0, 
     print(f"Network link capacity is: {str(round(c, 2))}")
 
     solver_params = DistributedADMMSolverParams(
-        NumberOfEpochs=50,
+        NumberOfEpochs=150,
         NumberOfNetworkUpdates=2,
         PGDIterations=2,
-        Gamma=0.9,
+        Gamma=1,
         Eta=8,
         Rho=1,
         Kappa=0.1,
@@ -81,6 +82,6 @@ def distributed_admm_test(topology: str, seed: int, scale_factor: float = 10.0, 
 
 
 if __name__ == '__main__':
-    # distributed_admm_test(SMALL_TOPOLOGY, RNG_SEED)
+    distributed_admm_test(SMALL_TOPOLOGY, RNG_SEED)
     # distributed_admm_test(SMALL_MEDIUM_TOPOLOGY, RNG_SEED)
-    distributed_admm_test(MEDIUM_TOPOLOGY, RNG_SEED)
+    # distributed_admm_test(MEDIUM_TOPOLOGY, RNG_SEED)

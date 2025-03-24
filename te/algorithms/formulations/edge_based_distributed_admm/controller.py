@@ -82,7 +82,7 @@ class ControllerNode(TrafficEngineeringLP):
 
     @property
     def alg_name(self) -> str:
-        return 'Multi-Proces Unregulated ADMM'
+        return 'Distributed Unregulated ADMM (gRPC)'
 
     @property
     def graph(self) -> nx.DiGraph:
@@ -292,8 +292,9 @@ class ControllerNode(TrafficEngineeringLP):
         self._update_P_bar()
         self._update_u_t()
         message = distributed_lp_messages.UpdateMessage(
-            P_bar_t=array_to_serialized_message(self._P_bar_t),
-            u_t = array_to_serialized_message(self._u_t)
+            P_bar_t = array_to_serialized_message(self._P_bar_t),
+            u_t = array_to_serialized_message(self._u_t),
+            Y_bar_t = array_to_serialized_message(self._Y_bar_t)
         )
         wait([
             self._broadcast_thread_pool.submit(stub.UpdateWorkerNode, message)
@@ -322,7 +323,7 @@ class ControllerNode(TrafficEngineeringLP):
         serialized_chunks = self._broadcast_thread_pool.map(
             lambda stub: stub.RequestAggregate(Empty()), self._worker_stubs)
         X_KE_SUM_E = np.sum([serialized_message_to_array(chunk) for chunk in serialized_chunks], axis=0)
-        self._r_e = R_E + (XO_E_ - X_KE_SUM_E) /2
+        self._r_e = R_E + (XO_E_ - X_KE_SUM_E) / 2
     
     def _close_node(self, worker_id: int):
         try:

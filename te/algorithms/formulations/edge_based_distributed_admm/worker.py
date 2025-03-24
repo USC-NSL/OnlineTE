@@ -31,7 +31,7 @@ class NetworkWorkerNode:
         self._X_ek_start_chunk: Optional[np.ndarray] = None
         self._Y_tk_chunk: Optional[np.ndarray] = None
         self._lambda_ek_chunk: Optional[np.ndarray] = None
-        self._Y_bar_t: Optional[np.ndarray] = None
+        self._Y_bar_t_cached: Optional[np.ndarray] = None
         self._P_bar_t_cached: Optional[np.ndarray] = None
         self._u_t_cached: Optional[np.ndarray] = None
 
@@ -99,13 +99,13 @@ class NetworkWorkerNode:
         self._T = T
         self._Y_tk_chunk = np.zeros((T, CHUNK_LEN))
         self._lambda_ek_chunk = np.zeros_like(self._X_ek_start_chunk)
-        self._Y_bar_t: Optional[np.ndarray] = Y_bar_t if Y_bar_t is not None else np.zeros((T,))
+        self._Y_bar_t_cached: Optional[np.ndarray] = Y_bar_t if Y_bar_t is not None else np.zeros((T,))
         self._P_bar_t_cached: Optional[np.ndarray] = P_bar_t if P_bar_t is not None else np.zeros((T,))
         self._u_t_cached: Optional[np.ndarray] = u_t if u_t is not None else np.zeros((T,))
 
     def _get_current_C(self) -> np.ndarray:
         Y_TK = self._Y_tk_chunk
-        Y_BAR = self._Y_bar_t
+        Y_BAR = self._Y_bar_t_cached
         P_BAR = self._P_bar_t_cached
         U_T = self._u_t_cached
         return Y_TK - np.expand_dims(Y_BAR - P_BAR + U_T, axis=1)
@@ -122,12 +122,12 @@ class NetworkWorkerNode:
         self._lambda_ek_chunk, self._Y_tk_chunk = \
             do_plain_pgd_with_step_reduction(LAMBDA_EK_CHUNK, X_EK_START_CHUNK, NNT_M, NULL_M, C_TK_CHUNK, GAMMA, 
                                              PGD_ITERS, KAPPA, epoch)
-        self._Y_bar_t = np.mean(self._Y_tk_chunk, axis=1)
-        return np.array(self._Y_bar_t)
+        return np.mean(self._Y_tk_chunk, axis=1)
 
-    def update_cached_values(self, u_t: np.ndarray, P_bar_t: np.ndarray):
-        self._u_t_cached = np.array(u_t)
-        self._P_bar_t_cached = np.array(P_bar_t)
+    def update_cached_values(self, u_t: np.ndarray, P_bar_t: np.ndarray, Y_bar_t: np.ndarray):
+        self._u_t_cached = u_t
+        self._P_bar_t_cached = P_bar_t
+        self._Y_bar_t_cached = Y_bar_t
     
     def report_chunk(self) -> np.ndarray:
         return np.array(self._Y_tk_chunk)
@@ -169,7 +169,8 @@ class NetworkWorkerNodeListener(DistributedADMMSolverServicer):
     def UpdateWorkerNode(self, request: distributed_lp_messages.UpdateMessage, context):
         self._worker_node.update_cached_values(
             u_t=serialized_message_to_array(request.u_t),
-            P_bar_t=serialized_message_to_array(request.P_bar_t)
+            P_bar_t=serialized_message_to_array(request.P_bar_t),
+            Y_bar_t=serialized_message_to_array(request.Y_bar_t)
         )
         return Empty()
     
