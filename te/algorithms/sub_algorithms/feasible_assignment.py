@@ -8,7 +8,6 @@ from joblib import Parallel, delayed
 from typing import List, Dict, Tuple
 from topologies.utils import get_edge_indexing, Commodity
 from te.algorithms.utils import as_info
-from te.algorithms.gpu_utils import cpu_memmap, cpu_zeros
 
 
 MAX_NUMBER_OF_COMMODITIES_PER_CORE = 5000
@@ -78,14 +77,14 @@ def get_feasible_flow_assignment(graph: nx.DiGraph, commodities: List[Commodity]
     slices = get_slice_starts_and_exclusive_ends(K)
 
     if K <= MAX_NUMBER_OF_COMMODITIES_PER_CORE:
-        X_KE = cpu_zeros((N, K))
+        X_KE = np.zeros((N, K))
         _get_feasible_flow_assignment(EDGE_INDEXING, graph, commodities, X_KE)
         return X_KE
     else:
         with contextlib.closing(TempHelper(TEMP_FOLDER_NAME)) as tp:
             # MEMMAP the array to allow for concurrent writing
             output_path = tp.get_file_path(MEMMAP_FILE_NAME)
-            X_KE = cpu_memmap(output_path, (N, K), 'w+')
+            X_KE = np.memmap(filename=output_path, shape=(N, K), mode='w+')
             nprocs = get_number_of_required_workers(K)
             print(as_info(f'Spawning {nprocs} workers to create initial feasible assignment'))
             Parallel(n_jobs=nprocs)\

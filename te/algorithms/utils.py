@@ -1,8 +1,12 @@
 import math
 import gurobipy
 import contextlib
-import cupy as cp
 import numpy as np
+try:
+    import cupy as cp
+except ModuleNotFoundError:
+    import numpy as cp
+    cp.get_array_module = lambda x: np
 import seaborn as sns
 import networkx as nx
 import te.constants

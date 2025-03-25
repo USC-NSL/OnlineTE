@@ -1,14 +1,7 @@
 *.pyc
 *.log
 
-# TODO: Should we upload presolves?
-# UPDATE: Yes we should!
-# UPDATE-UPDATE: It is too big!
-# *.sol
-*.tesol
-*.json
-*.bas
-*.elems
+# Debug outputs
 *.nsys-rep
 *.txt
 

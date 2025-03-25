@@ -1,7 +1,11 @@
 import os
 import json
-import cupy as cp
 import numpy as np
+try:
+    import cupy as cp
+except ModuleNotFoundError:
+    import numpy as cp
+    cp.get_array_module = lambda x: np
 import networkx as nx
 from scipy.linalg import null_space
 from typing import Dict, Tuple, Union, List, Optional

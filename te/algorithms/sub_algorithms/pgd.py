@@ -1,64 +1,30 @@
-import cupy as cp
 import numpy as np
+
+try:
+    """
+    This module might be imported on systems that just do not have a GPU (
+    let alone one from Nvidia that can use CUDA).
+    Thus, we try to import this but fall-back on plain Numpy if it fails.
+    The main thing that we need to monkey-patch is `get_array_module` since
+    we use it to write code that works on both CPU and GPU. We handle this by
+    just hard-coding it to return Numpy whenever called.
+    """
+    import cupy as cp
+    from te.algorithms.gpu_utils import zip_map
+except ModuleNotFoundError:
+    import numpy as cp
+    def zip_map(*args, **kwargs):
+        raise ValueError('CUDA/CuPY is not available. You should never reach here!')
+
 import te.constants
-from typing import Optional, Tuple
+from typing import Optional
 from te.algorithms.utils import careful_norm, careful_norm_squared, all_elements_within_threshold
-from te.algorithms.gpu_utils import WholeArray, GPUArray, PartitionedGPUArray, ScatteredGPUArray, zip_map
 
 
 """Different Projected Gradient Descent (PGD) algorithms for non-negative constraints"""
 
 
-# def do_plain_pgd(lambda_k: np.ndarray, x_k_0: np.ndarray, nnt: np.ndarray, n: np.ndarray, c: np.ndarray, 
-#                  gamma: float, thresh: float, n_iter: int) -> Tuple[np.ndarray, np.ndarray]:
-#     _c = x_k_0 + n @ c
-#     for i in range(n_iter):
-#         lambda_k_old = lambda_k
-#         lambda_k = np.clip(lambda_k - gamma * (nnt @ lambda_k + _c), a_min=0, a_max=None)
-#         if careful_norm(lambda_k - lambda_k_old) < thresh:
-#             break
-#     y_k = c + n.T @ lambda_k
-#     return lambda_k, y_k
-
-
-# def do_pgd_with_exact_line_search(lambda_k: np.ndarray, x_k_0: np.ndarray, nnt: np.ndarray, n: np.ndarray, c: np.ndarray, 
-#                                   thresh: float, n_iter: int) -> Tuple[np.ndarray, np.ndarray]:
-#     # def get_alpha(current_lambda) -> float:
-#     #     t1 = careful_norm_squared(n.T @ x_k_0 + c)
-#     #     t2 = careful_norm_squared(n.T @ (current_lambda + x_k_0) + c)
-#     #     return np.clip(1 - t1 / t2, a_min=0, a_max=None)
-
-#     big_c = x_k_0 + n @ c
-#     big_lambda = nnt @ big_c
-#     norm_1 = 0.5 * careful_norm_squared(big_c)
-#     norm_2 = careful_norm_squared(n.T @ big_c)
-
-#     def get_alpha(current_lambda) -> Optional[float]:
-#         norm = careful_norm_squared(n.T @ current_lambda)
-#         dot = np.dot(current_lambda, big_lambda)
-#         t1 = norm + 1.5 * dot + norm_1
-#         t2 = norm + norm_2 + 2 * dot
-#         if t1 < te.constants.MINIMUM_NORM or t2 < te.constants.MINIMUM_NORM:
-#             return None
-#         return t1 / t2
-    
-#     i = 0
-#     while i < n_iter:
-#         lambda_k_old = lambda_k
-#         grad = nnt @ lambda_k + big_c
-#         alpha = get_alpha(lambda_k_old)
-#         if alpha is None:
-#             break
-#         lambda_k = np.clip(lambda_k_old - alpha * grad, a_min=0, a_max=None)
-#         if careful_norm(lambda_k - lambda_k_old) < thresh:
-#             break
-#         i += 1
-#     y_k = c + n.T @ lambda_k
-#     return lambda_k, y_k
-
-
-def do_plain_pgd(lambda_k: WholeArray, x_k_0: WholeArray, nnt: WholeArray, n: WholeArray, c: WholeArray, 
-                 gamma: float, thresh: Optional[float], n_iter: int) -> Tuple[WholeArray, WholeArray, int]:
+def do_plain_pgd(lambda_k, x_k_0, nnt, n, c, gamma: float, thresh: Optional[float], n_iter: int):
     """
     The simplest type of PGD.
     Takes a constant step size, takes a Gradient Descent (GD) step and
@@ -81,8 +47,7 @@ def do_plain_pgd(lambda_k: WholeArray, x_k_0: WholeArray, nnt: WholeArray, n: Wh
     return lambda_k, y_k, total_iterations
 
 
-def do_iterative_plain_pgd(lambda_block: WholeArray, x_block_0: WholeArray, nnt: WholeArray, n: WholeArray, c_block: WholeArray, 
-                           gamma: float, thresh: Optional[float], n_iter: int) -> Tuple[WholeArray, WholeArray, int]:
+def do_iterative_plain_pgd(lambda_block, x_block_0, nnt, n, c_block, gamma: float, thresh: Optional[float], n_iter: int):
     """
     Plain PGD, but receives the input in block (i.e. multiple columns per input).
     Drastically cuts down on the time spend communicating between the node and
@@ -105,8 +70,7 @@ def do_iterative_plain_pgd(lambda_block: WholeArray, x_block_0: WholeArray, nnt:
     return lambda_block, y_block, total_iterations
 
 
-def do_iterative_pgd_with_exact_line_search(lambda_block: WholeArray, x_block_0: WholeArray, nnt: WholeArray, n: WholeArray, 
-                                            c_block: WholeArray, thresh: Optional[float], n_iter: int) -> Tuple[WholeArray, WholeArray, int]:
+def do_iterative_pgd_with_exact_line_search(lambda_block, x_block_0, nnt, n, c_block, thresh: Optional[float], n_iter: int):
     """
     PGD with exact line search over block input.
     The line search here is done on the unconstrained problem. Can be
@@ -147,8 +111,8 @@ def do_iterative_pgd_with_exact_line_search(lambda_block: WholeArray, x_block_0:
     return lambda_block, y_block, total_iterations
 
 
-def do_block_plain_pgd(lambda_block: WholeArray, x_block_0: WholeArray, nnt: WholeArray, n: WholeArray, c_block: WholeArray, 
-                       gamma: float, thresh: Optional[float], n_iter: int, check_conv: bool) -> Tuple[WholeArray, WholeArray, int]:
+def do_block_plain_pgd(lambda_block, x_block_0, nnt, n, c_block, gamma: float, thresh: Optional[float], 
+                       n_iter: int, check_conv: bool):
     """
     Plain PGD with block operations, meaning that each step is done across the entire
     input matrix. Assuming that the matrix is not too massive, this performs much
@@ -197,8 +161,8 @@ def do_block_plain_pgd(lambda_block: WholeArray, x_block_0: WholeArray, nnt: Who
     return converged_lambda_block, y_block, total_iterations
 
 
-def do_block_pgd_with_exact_line_search(lambda_block: WholeArray, x_block_0: WholeArray, nnt: WholeArray, n: WholeArray, 
-                                        c_block: WholeArray, thresh: float, n_iter: int, check_conv: bool) -> Tuple[WholeArray, WholeArray, int]:
+def do_block_pgd_with_exact_line_search(lambda_block, x_block_0, nnt, n, c_block, thresh: float, 
+                                        n_iter: int, check_conv: bool):
     """
     Same as `do_block_plain_pgd`, but with exact line search.
     """
@@ -262,9 +226,8 @@ def do_block_pgd_with_exact_line_search(lambda_block: WholeArray, x_block_0: Who
     return converged_lambda_block, y_block, total_iterations
 
 
-def do_plain_pgd_with_step_reduction(lambda_block: WholeArray, x_block_0: WholeArray, nnt: WholeArray, 
-                                     n: WholeArray, c_block: WholeArray, gamma: float, n_iter: int, 
-                                     kappa: float, epoch: int) -> Tuple[WholeArray, WholeArray]:
+def do_plain_pgd_with_step_reduction(lambda_block, x_block_0, nnt, n, c_block, gamma: float, n_iter: int, 
+                                     kappa: float, epoch: int):
     """
     A plain block oriented PGD operation, with step size heuristic.
     This will run a GPU, as such, norm-2 and selective operations (like
@@ -290,9 +253,8 @@ def do_plain_pgd_with_step_reduction(lambda_block: WholeArray, x_block_0: WholeA
     return lambda_block, y_block
 
 
-def do_gpu_pgd_with_exact_line_search(lambda_block: GPUArray, x_block_0: GPUArray, nnt: GPUArray, 
-                                      n: GPUArray, c_block: GPUArray, n_iter: int) -> Tuple[GPUArray, GPUArray]:
-    def get_step(d: GPUArray, grad_block: GPUArray) -> GPUArray:
+def do_gpu_pgd_with_exact_line_search(lambda_block, x_block_0, nnt, n, c_block, n_iter: int):
+    def get_step(d, grad_block):
         term1 = cp.sum(cp.multiply(d, grad_block), axis=0)
         term2 = cp.einsum('...i,...i->...', cp.dot(d.T, nnt), d.T) + cp.ones_like(term1) * cp.float16(1e-3)
         return term1 / term2
@@ -308,41 +270,8 @@ def do_gpu_pgd_with_exact_line_search(lambda_block: GPUArray, x_block_0: GPUArra
     return lambda_block, y_block
 
 
-import torch
-from te.algorithms.tensor_utils import Tensor
-
-def do_tensor_plain_pgd_with_step_reduction(lambda_block: Tensor, x_block_0: Tensor, nnt: Tensor, 
-                                            n: Tensor, c_block: Tensor, gamma: float, n_iter: int, 
-                                            kappa: float, epoch: int) -> Tuple[Tensor, Tensor]:
-    """
-    A plain block oriented PGD operation, with step size heuristic.
-    This will run a GPU, as such, norm-2 and selective operations (like
-    checking for converged columns) become extremely slow.
-    Matrix operations on the other hand benefit greatly.
-    As such, this implementation is meant to be very small fast.
-
-    The step size heuristic is:
-
-        step_size <- (gamma / epoch**kappa)
-    
-    For 0 <= `kappa` <= 1.
-    """
-    big_c_block = x_block_0 + n @ c_block
-    step_size = gamma / (epoch+1) ** kappa
-    for _ in range(n_iter):
-        grad_block = nnt @ lambda_block + big_c_block
-        lambda_block = lambda_block - step_size * grad_block
-        lambda_block = torch.clamp(lambda_block, min=0)
-    del big_c_block
-    del grad_block
-    y_block = c_block + n.T @ lambda_block
-    return lambda_block, y_block
-
-
-def do_multi_gpu_plain_pgd_with_step_reduction(lambda_block: PartitionedGPUArray, x_block_0: PartitionedGPUArray, 
-                                               nnt: ScatteredGPUArray, n: ScatteredGPUArray, 
-                                               c_block: PartitionedGPUArray, gamma: float, n_iter: int, 
-                                               kappa: float, epoch: int) -> Tuple[PartitionedGPUArray, PartitionedGPUArray]:
+def do_multi_gpu_plain_pgd_with_step_reduction(lambda_block, x_block_0, nnt, n, c_block, gamma: float, 
+                                               n_iter: int, kappa: float, epoch: int):
     """
     A plain block oriented PGD operation, with step size heuristic.
     This will run a GPU, as such, norm-2 and selective operations (like
@@ -365,17 +294,3 @@ def do_multi_gpu_plain_pgd_with_step_reduction(lambda_block: PartitionedGPUArray
     del grad_block
     y_block = zip_map([c_block, n, lambda_block], lambda c, _n, l: c + _n.T @ l)
     return lambda_block, y_block
-
-
-# def do_multi_gpu_pgd_with_backtracking(lambda_block: PartitionedGPUArray, x_block_0: PartitionedGPUArray, 
-#                                        nnt: ScatteredGPUArray, n: ScatteredGPUArray, c_block: PartitionedGPUArray, 
-#                                        beta: float, max_back: int, n_iter: int) -> Tuple[PartitionedGPUArray, PartitionedGPUArray]:
-#     step_size = 1
-#     big_c_block = zip_map([x_block_0, n, c_block], lambda x0, _n, c: x0 + _n @ c)
-#     for _ in range(n_iter):
-#         grad_block = zip_map([nnt, lambda_block, big_c_block], lambda nn, l, c: nn @ l + c)
-#         lambda_block = zip_map([lambda_block, grad_block], lambda l, g: cp.clip(l - step_size * g, a_min=0, a_max=None))
-#     del big_c_block
-#     del grad_block
-#     y_block = zip_map([c_block, n, lambda_block], lambda c, _n, l: c + _n.T @ l)
-#     return lambda_block, y_block
