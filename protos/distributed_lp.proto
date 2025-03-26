@@ -10,6 +10,7 @@ service DistributedADMMSolver {
     rpc RequestChunk(google.protobuf.Empty) returns (stream Chunk) {}
     rpc RequestAggregate(google.protobuf.Empty) returns (SerializedNumpyArrayMessage) {}
     rpc QueryState(google.protobuf.Empty) returns (State) {}
+    rpc SetSolverParameters(SolverParameters) returns (google.protobuf.Empty) {}
     rpc Close(google.protobuf.Empty) returns (google.protobuf.Empty) {}
 }
 
@@ -41,4 +42,16 @@ message NetworkUpdateRequest {
 
 message State {
     bool ready = 1;
+}
+
+message SolverParameters {
+    int32 NumberOfEpochs = 1;
+    int32 NumberOfNetworkUpdates = 2;
+    float Rho = 3;
+    float Eta = 4;
+    float Gamma = 5;
+    float Kappa = 6;
+    int32 PGDIterations = 7;
+    int32 NumWorkers = 8;
+    int32 Seed = 9;
 }

@@ -3,6 +3,7 @@ import time
 import grpc._channel
 import tqdm
 import gurobipy
+import dataclasses
 import numpy as np
 import networkx as nx
 import te.constants
@@ -164,19 +165,26 @@ class ControllerNode(TrafficEngineeringLP):
         X_EK_START_CHUNKS = np.array_split(self._X_ek_start, NUM_WORKERS, axis=1)
         WORKERS = self._worker_stubs
 
-        # First, send the initial solution
+        # Update solver parameters
+        wait([
+            self._broadcast_thread_pool.submit(stub.SetSolverParameters, 
+                distributed_lp_messages.SolverParameters(**self._solver_params.child_fields))
+                for stub in WORKERS
+        ])
+
+        # Now, send the initial solution
         wait([
             self._broadcast_thread_pool.submit(stub.SetInitialFeasibleSolution, chunk_big_array(X_EK_START_CHUNKS[i], 2**20))
                 for i, stub in enumerate(WORKERS)
         ])
           
-        # Now, the rest ...
+        # Finally, the rest of the things to know ...
         wait([
             self._broadcast_thread_pool.submit(stub.InitializeWorkerNode, 
                                                distributed_lp_messages.InitMessage(
                                                    NULL_M=array_to_serialized_message(NULL_M)
                                                ))
-                for i, stub in enumerate(WORKERS)
+                for stub in WORKERS
         ])
     
     def _report_problem_size(self):

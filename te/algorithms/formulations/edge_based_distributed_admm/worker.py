@@ -16,8 +16,8 @@ from google.protobuf.empty_pb2 import Empty
 
 
 class NetworkWorkerNode:
-    def __init__(self, worker_id: int, solver_params: DistributedADMMSolverParams,
-                 rpc_params: DistributedADMMWorkerRPCParams):
+    def __init__(self, worker_id: int, rpc_params: DistributedADMMWorkerRPCParams, 
+                 solver_params: Optional[DistributedADMMSolverParams] = None):
         self.worker_id = worker_id
         self._rpc_params = rpc_params
         self._solver_params = solver_params
@@ -136,8 +136,9 @@ class NetworkWorkerNode:
         return np.sum(self._X_ek_start_chunk + self._NULL_M @ self._Y_tk_chunk, axis=1)
 
     @staticmethod
-    def spawn_and_wait(worker_id: int, solver_params: DistributedADMMSolverParams, rpc_params: DistributedADMMWorkerRPCParams):
-        with contextlib.closing(NetworkWorkerNode(worker_id, solver_params, rpc_params)) as worker:
+    def spawn_and_wait(worker_id: int, rpc_params: DistributedADMMWorkerRPCParams, 
+                       solver_params: Optional[DistributedADMMSolverParams] = None):
+        with contextlib.closing(NetworkWorkerNode(worker_id, rpc_params, solver_params)) as worker:
             worker._ready = True
             worker.wait()
 
@@ -183,6 +184,13 @@ class NetworkWorkerNodeListener(DistributedADMMSolverServicer):
     def QueryState(self, request, context):
         return distributed_lp_messages.State(ready=self._worker_node._ready)
     
+    def SetSolverParameters(self, request: distributed_lp_messages.SolverParameters, context):
+        new_params = DistributedADMMSolverParams()
+        for field in new_params.child_fields.keys():
+            setattr(new_params, field, getattr(request, field))
+        self._worker_node._solver_params = new_params
+        return Empty()
+    
     def Close(self, request, context):
         self._worker_node.close()
         return Empty()
@@ -191,17 +199,6 @@ class NetworkWorkerNodeListener(DistributedADMMSolverServicer):
 if __name__ == '__main__':
     worker_id = int(sys.argv[1])
     num_workers = int(sys.argv[2])
-    solver_params = DistributedADMMSolverParams(
-        NumberOfEpochs=150,
-        NumberOfNetworkUpdates=2,
-        PGDIterations=2,
-        Gamma=1,
-        Eta=8,
-        Rho=1,
-        Kappa=0.1,
-        Seed=12345,
-        NumWorkers=num_workers
-    )
     rpc_params = DistributedADMMWorkerRPCParams(port=13000 + worker_id)
     
-    NetworkWorkerNode.spawn_and_wait(worker_id, solver_params, rpc_params)
+    NetworkWorkerNode.spawn_and_wait(worker_id, rpc_params)

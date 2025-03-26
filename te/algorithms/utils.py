@@ -74,6 +74,20 @@ def is_satisfied(optim, actual, feasibility_tol: Optional[float], feasibility_ra
     return math.isclose(optim, actual, rel_tol=feasibility_ratio)
 
 
+def is_negligible(actual, baseline, feasibility_tol: Optional[float], feasibility_ratio: Optional[float]):
+    """
+    If `feasibility_tol` is given, the it checks if absolute value of `actual` is
+    within `min(feasibility_tol, baseline)`.
+    If `feasibility_ratio` is present, it checks if the absolute value is within
+    `baseline * feasibility_ratio` tolerance.
+    """
+    if abs(actual) < te.constants.FLOAT_RES:
+        return True
+    if feasibility_tol is not None:
+        return abs(actual) < min(baseline, feasibility_tol)
+    return abs(actual) < abs(baseline * feasibility_ratio)
+
+
 def get_unsatisfied_demands(commodities: List[Commodity], solution: List[Tuple[Commodity, Commodity]],
                             feasibility_tol: Optional[float], feasibility_ratio: Optional[float]) -> \
                                 List[Tuple[Commodity, Tuple[Commodity, Commodity]]]:
@@ -315,10 +329,10 @@ def check_centralized_flow_conservation(
             if v == SOURCE:
                 if not is_satisfied(fout, DEMAND, feasibility_tol, feasibility_ratio):
                     print(as_fail(f"Commodity {k}: Node {v} --> Demand outflow does not hold at source: {fout_str} vs {demand_str}"))
-                if not is_satisfied(fin, 0, feasibility_tol, feasibility_ratio):
+                if not is_negligible(fin, DEMAND, feasibility_tol, feasibility_ratio):
                     print(as_fail(f"Commodity {k}: Node {v} --> Source receives its own demand! {fin_str}"))
             elif v == DESTINATION:
-                if not is_satisfied(fout, 0, feasibility_tol, feasibility_ratio):
+                if not is_negligible(fout, DEMAND, feasibility_tol, feasibility_ratio):
                     print(as_fail(f"Commodity {k}: Node {v} --> Destination is leaking demand! {fout_str}"))
                 if not is_satisfied(fin, DEMAND, feasibility_tol, feasibility_ratio):
                     print(as_fail(f"Commodity {k}: Node {v} --> Demand inflow does not hold at destination: {fin_str} vs {demand_str}"))

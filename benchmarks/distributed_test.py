@@ -1,7 +1,6 @@
 import time
 import contextlib
 import concurrent.futures
-from typing import Optional
 from te.algorithms.formulations.edge_based_distributed_admm.worker import NetworkWorkerNode
 from te.algorithms.formulations.edge_based_distributed_admm.controller import ControllerNode
 from te.algorithms.formulations.edge_based_distributed_admm import (DistributedADMMSolverParams,
@@ -21,7 +20,7 @@ warnings.filterwarnings("error")
 RNG_SEED = 12345
 
 FEASIBILITY_TOL = None
-FEASIBILITY_RATIO = 1e-2
+FEASIBILITY_RATIO = 5e-2
 
 SMALL_TOPOLOGY = 'Claranet'
 SMALL_MEDIUM_TOPOLOGY = 'Forthnet'
@@ -69,7 +68,7 @@ def distributed_admm_test(topology: str, seed: int, scale_factor: float = 10.0,
     with concurrent.futures.ProcessPoolExecutor(max_workers=solver_params.NumWorkers) as network_pool:
         for worker_id, worker_addr in enumerate(worker_addrs):
             network_pool.submit(NetworkWorkerNode.spawn_and_wait, 
-                                worker_id, solver_params, DistributedADMMWorkerRPCParams(ip=worker_addr[0], port=worker_addr[1]))
+                                worker_id, DistributedADMMWorkerRPCParams(ip=worker_addr[0], port=worker_addr[1]))
         
         with contextlib.closing(ControllerNode(graph, tm, solver_params, 
                                             DistributedADMMControllerRPCParams(

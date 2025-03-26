@@ -1,0 +1,48 @@
+---
+# Prepare controller/worker nodes from scratch.
+- name: Configure APT dependencies
+  hosts: all
+  become: true
+  tasks:
+
+  - name: Gather Package Facts
+    package_facts:
+      manager: apt
+
+  - name: Ensure git
+    ansible.builtin.apt:
+      update_cache: true
+      name: git
+    when: '"git" not in ansible_facts.packages'
+
+- name: Clone repo and configure PIP
+  hosts: all
+  remote_user: aghavidel
+  tasks:
+
+  - name: Clone repo with force
+    ansible.builtin.git:
+      repo: https://{{access_token}}@github.com/USC-NSL/DistributedTE.git
+      clone: true
+      force: true
+      dest: /home/aghavidel/DistributedTE
+
+  - name: PIP install requirements
+    ansible.builtin.pip:
+      requirements: /home/aghavidel/DistributedTE/requirements.txt
+
+- name: Get the zoo
+  hosts: controller
+  remote_user: aghavidel
+  tasks:
+
+  - name: Download and unzip the Topology Zoo dataset
+    command: chdir=/home/aghavidel/DistributedTE python3 -m topologies.get_topology_zoo
+
+- name: Prepare gRPC
+  hosts: all
+  remote_user: aghavidel
+  tasks:
+
+  - name: Compile protobuffs
+    command: chdir=/home/aghavidel/DistributedTE python3 protos/__init__.py
