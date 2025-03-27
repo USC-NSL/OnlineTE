@@ -1,8 +1,7 @@
 import time
-import socket
 import contextlib
 import concurrent.futures
-from typing import List
+from typing import List, Tuple
 from te.algorithms.formulations.edge_based_distributed_admm.worker import NetworkWorkerNode
 from te.algorithms.formulations.edge_based_distributed_admm.controller import ControllerNode
 from te.algorithms.formulations.edge_based_distributed_admm import (DistributedADMMSolverParams,
@@ -46,6 +45,12 @@ SOLVER_PARAMS = DistributedADMMSolverParams(
 )
 
 
+def show_addrs(addrs: List[Tuple[str, int]]):
+    print(as_info("Worker Nodes:"))
+    for host, port in addrs:
+        print(as_info("\t{:^32} : {:^10}".format(host, str(port))))
+
+
 def local_distributed_admm_test(topology: str, seed: int, scale_factor: float = 10.0,
                                 save_solution: bool = False, **kwargs):
     c, graph, tm = get_uniform_tm_problem_with_capacity_heuristic(topology, seed, scale_factor=scale_factor)
@@ -67,6 +72,7 @@ def local_distributed_admm_test(topology: str, seed: int, scale_factor: float = 
     print(as_info("="*60))
 
     worker_addrs = tuple([(LOCAL_HOST, BASE_PORT + worker_id) for worker_id in range(SOLVER_PARAMS.NumWorkers)])
+    show_addrs(worker_addrs)
     with concurrent.futures.ProcessPoolExecutor(max_workers=SOLVER_PARAMS.NumWorkers) as network_pool:
         for worker_id, worker_addr in enumerate(worker_addrs):
             network_pool.submit(NetworkWorkerNode.spawn_and_wait, 
@@ -126,7 +132,7 @@ def remote_distributed_admm_test(hosts: List[str], topology: str, seed: int, sca
 
     worker_addrs = tuple([(hosts[worker_id], BASE_PORT + worker_id) 
                           for worker_id in range(min(SOLVER_PARAMS.NumWorkers, len(hosts)))])
-    
+    show_addrs(worker_addrs)
     with contextlib.closing(ControllerNode(graph, tm, SOLVER_PARAMS, 
                                         DistributedADMMControllerRPCParams(
                                             tuple(worker_addrs),

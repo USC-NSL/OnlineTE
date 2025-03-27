@@ -14,7 +14,7 @@ from te.algorithms.base import TrafficEngineeringLP, SolverParams
 from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
 from topologies.utils import get_edge_indexing, get_graph_M_matrix, get_adjacency_null_space
-from utils.logging import as_fail
+from utils.logging import as_fail, as_info
 from te.algorithms.utils import check_capacity_constraint, check_centralized_flow_conservation, optimize_or_scream, make_model
 from te.algorithms.sub_algorithms.feasible_assignment import get_feasible_flow_assignment
 from te.algorithms.formulations.edge_based_distributed_admm import DistributedADMMSolverParams, DistributedADMMControllerRPCParams
@@ -193,18 +193,20 @@ class ControllerNode(TrafficEngineeringLP):
         T = self._T
         K = len(self._commodity_list)
 
-        print(f"Graph Size: {M} nodes | {N} edges")
-        print(f"Number of commodities: {K}")
-        print(f"Nullity of commodity assignment matrix: {T}")
-        print("-"*60)
-        print("CONTROLLER PROBLEM:\n" +
+        print(as_info("-"*60))
+        print(as_info(f"Graph Size: {M} nodes | {N} edges"))
+        print(as_info(f"Number of commodities: {K}"))
+        print(as_info(f"Nullity of commodity assignment matrix: {T}"))
+        print(as_info("-"*60))
+        print(as_info("CONTROLLER PROBLEM:\n" +
               f"\t TOTAL NUMBER OF VARIABLES: {N + 1}\n"
-              f"\t TOTAL NUMBER OF CONSTRAINTS: {N + 1}\n")
-        print("-"*60)
-        print("NODE PROBLEM:\n" +
+              f"\t TOTAL NUMBER OF CONSTRAINTS: {N + 1}"))
+        print(as_info("-"*60))
+        print(as_info("NODE PROBLEM:\n" +
               f"\t NUMBER OF INDEPENDENT QPs PER NODE: {M - 1}\n"
               f"\t NUMBER OF VARIABLES PER QP PER NODE: {T}\n"
-              f"\t NUMBER CONSTRAINTS PER QP PER NODE: {T}\n")
+              f"\t NUMBER CONSTRAINTS PER QP PER NODE: {T}"))
+        print(as_info("-"*60))
 
     def initialize_to(self, assignment: np.ndarray):
         raise NotImplementedError
