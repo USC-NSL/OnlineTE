@@ -163,5 +163,5 @@ if __name__ == '__main__':
     # local_distributed_admm_test(SMALL_TOPOLOGY, RNG_SEED, save_solution=True)
     # local_distributed_admm_test(SMALL_MEDIUM_TOPOLOGY, RNG_SEED)
     # local_distributed_admm_test(MEDIUM_TOPOLOGY, RNG_SEED)
-    remote_distributed_admm_test([f'n{i}' for i in range(SOLVER_PARAMS.NumWorkers)], 
+    remote_distributed_admm_test([f'n{i}.infra.v0.unregulatedadmm.distte' for i in range(SOLVER_PARAMS.NumWorkers)], 
                                   SMALL_TOPOLOGY, RNG_SEED, save_solution=True)
