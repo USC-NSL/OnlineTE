@@ -197,8 +197,8 @@ class NetworkWorkerNodeListener(DistributedADMMSolverServicer):
 
 
 if __name__ == '__main__':
+    import socket
     worker_id = int(sys.argv[1])
-    num_workers = int(sys.argv[2])
-    rpc_params = DistributedADMMWorkerRPCParams(port=13000 + worker_id)
+    rpc_params = DistributedADMMWorkerRPCParams(ip=socket.gethostbyname(socket.gethostname()), port=13000 + worker_id)
     
     NetworkWorkerNode.spawn_and_wait(worker_id, rpc_params)

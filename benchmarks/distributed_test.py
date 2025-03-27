@@ -1,6 +1,8 @@
 import time
+import socket
 import contextlib
 import concurrent.futures
+from typing import List
 from te.algorithms.formulations.edge_based_distributed_admm.worker import NetworkWorkerNode
 from te.algorithms.formulations.edge_based_distributed_admm.controller import ControllerNode
 from te.algorithms.formulations.edge_based_distributed_admm import (DistributedADMMSolverParams,
@@ -28,26 +30,26 @@ MEDIUM_TOPOLOGY = 'Interoute'
 HUGE_TOPOLOGY = 'Kdl'
 
 
-HOST = "localhost"
+LOCAL_HOST = "localhost"
 BASE_PORT = 13000
 
+SOLVER_PARAMS = DistributedADMMSolverParams(
+    NumberOfEpochs=150,
+    NumberOfNetworkUpdates=2,
+    PGDIterations=2,
+    Gamma=0.9,
+    Eta=8,
+    Rho=1,
+    Kappa=0.1,
+    Seed=RNG_SEED,
+    NumWorkers=2
+)
 
-def distributed_admm_test(topology: str, seed: int, scale_factor: float = 10.0,
-                          save_solution: bool = False, **kwargs):
+
+def local_distributed_admm_test(topology: str, seed: int, scale_factor: float = 10.0,
+                                save_solution: bool = False, **kwargs):
     c, graph, tm = get_uniform_tm_problem_with_capacity_heuristic(topology, seed, scale_factor=scale_factor)
     print(f"Network link capacity is: {str(round(c, 2))}")
-
-    solver_params = DistributedADMMSolverParams(
-        NumberOfEpochs=150,
-        NumberOfNetworkUpdates=2,
-        PGDIterations=2,
-        Gamma=0.9,
-        Eta=8,
-        Rho=1,
-        Kappa=0.1,
-        Seed=RNG_SEED,
-        NumWorkers=2
-    )
 
     solution_params = None
     if save_solution:
@@ -64,19 +66,19 @@ def distributed_admm_test(topology: str, seed: int, scale_factor: float = 10.0,
     print(as_info("="*23 + " MLU PROBLEM " + "="*24))
     print(as_info("="*60))
 
-    worker_addrs = tuple([(HOST, BASE_PORT + worker_id) for worker_id in range(solver_params.NumWorkers)])
-    with concurrent.futures.ProcessPoolExecutor(max_workers=solver_params.NumWorkers) as network_pool:
+    worker_addrs = tuple([(LOCAL_HOST, BASE_PORT + worker_id) for worker_id in range(SOLVER_PARAMS.NumWorkers)])
+    with concurrent.futures.ProcessPoolExecutor(max_workers=SOLVER_PARAMS.NumWorkers) as network_pool:
         for worker_id, worker_addr in enumerate(worker_addrs):
             network_pool.submit(NetworkWorkerNode.spawn_and_wait, 
                                 worker_id, DistributedADMMWorkerRPCParams(ip=worker_addr[0], port=worker_addr[1]))
         
-        with contextlib.closing(ControllerNode(graph, tm, solver_params, 
+        with contextlib.closing(ControllerNode(graph, tm, SOLVER_PARAMS, 
                                             DistributedADMMControllerRPCParams(
                                                 tuple(worker_addrs),
-                                                num_threads=min(solver_params.NumWorkers, 8)
+                                                num_threads=min(SOLVER_PARAMS.NumWorkers, 8)
                                             ))) as lp:
             print(as_info(f"Solving With: {lp.alg_name}"))
-            print(as_info(f"Solving With Parameters:\n{solver_params}"))
+            print(as_info(f"Solving With Parameters:\n{SOLVER_PARAMS}"))
             print(as_info("Waiting For Network Nodes ..."))
             while True:
                 time.sleep(1)
@@ -102,7 +104,64 @@ def distributed_admm_test(topology: str, seed: int, scale_factor: float = 10.0,
                 print(as_info(stats))
 
 
+def remote_distributed_admm_test(hosts: List[str], topology: str, seed: int, scale_factor: float = 10.0,
+                                 save_solution: bool = False, **kwargs):
+    c, graph, tm = get_uniform_tm_problem_with_capacity_heuristic(topology, seed, scale_factor=scale_factor)
+    print(f"Network link capacity is: {str(round(c, 2))}")
+
+    solution_params = None
+    if save_solution:
+        solution_params = EdgeBasedMinimizeMaximumUtilitySolutionParams(
+            seed=seed, topology_name=topology, capacity=c,
+            tm_model_name=tm.type(), tm_model_params=tm.params,
+            path=None, sol_name=default_solution_name(
+                topology_name=topology, rng_seed=seed, tm_type=tm.type(),
+                postfix='ours'
+            )
+        )
+
+    print(as_info("="*60))
+    print(as_info("="*23 + " MLU PROBLEM " + "="*24))
+    print(as_info("="*60))
+
+    worker_addrs = tuple([(hosts[worker_id], BASE_PORT + worker_id) 
+                          for worker_id in range(min(SOLVER_PARAMS.NumWorkers, len(hosts)))])
+    
+    with contextlib.closing(ControllerNode(graph, tm, SOLVER_PARAMS, 
+                                        DistributedADMMControllerRPCParams(
+                                            tuple(worker_addrs),
+                                            num_threads=min(SOLVER_PARAMS.NumWorkers, 8)
+                                        ))) as lp:
+        print(as_info(f"Solving With: {lp.alg_name}"))
+        print(as_info(f"Solving With Parameters:\n{SOLVER_PARAMS}"))
+        print(as_info("Waiting For Network Nodes ..."))
+        while True:
+            time.sleep(1)
+            if lp.are_network_nodes_ready():
+                break
+        print(as_info("All Network Nodes Ready"))
+
+        lp.make_lp()
+        t = lp.solve()
+        if t > 0:
+            lp.check(feasibility_tol=FEASIBILITY_TOL, feasibility_ratio=FEASIBILITY_RATIO)
+            get_solution_confusion_matrix(lp, feasibility_tol=FEASIBILITY_TOL, feasibility_ratio=FEASIBILITY_RATIO, **kwargs)
+            print(as_info(f"Solved in {str_round(t, 2)} seconds"))
+            print(as_info(f"Final objective value: {str_round(lp.objective_value, 4)}"))
+            print(as_info(f"Actual utilization: {str_round(get_solution_maximum_utilization(lp.assignments, lp.graph), 4)}"))
+        if solution_params:
+            solution = EdgeBasedMinimizeMaximumUtilitySolution(params=solution_params)
+            lp.add_solution_elements(solution)
+            solution.dump_elements()
+            solution.dump(name=solution_params.sol_name)
+        stats = stringify_collected_stats()
+        if stats is not None:
+            print(as_info(stats))
+
+
 if __name__ == '__main__':
-    distributed_admm_test(SMALL_TOPOLOGY, RNG_SEED, save_solution=True)
-    # distributed_admm_test(SMALL_MEDIUM_TOPOLOGY, RNG_SEED)
-    # distributed_admm_test(MEDIUM_TOPOLOGY, RNG_SEED)
+    # local_distributed_admm_test(SMALL_TOPOLOGY, RNG_SEED, save_solution=True)
+    # local_distributed_admm_test(SMALL_MEDIUM_TOPOLOGY, RNG_SEED)
+    # local_distributed_admm_test(MEDIUM_TOPOLOGY, RNG_SEED)
+    remote_distributed_admm_test([f'n{i}' for i in range(SOLVER_PARAMS.NumWorkers)], 
+                                  SMALL_TOPOLOGY, RNG_SEED, save_solution=True)
