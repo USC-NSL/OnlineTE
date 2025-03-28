@@ -1,4 +1,5 @@
 import time
+import argparse
 import contextlib
 import concurrent.futures
 from typing import List, Tuple
@@ -15,8 +16,6 @@ from te.algorithms.utils import (get_solution_confusion_matrix, stringify_collec
                                  str_round, get_solution_maximum_utilization)
 from topologies.utils import get_uniform_tm_problem_with_capacity_heuristic
 
-import warnings
-warnings.filterwarnings("error")
 
 RNG_SEED = 12345
 
@@ -41,6 +40,7 @@ SOLVER_PARAMS = DistributedADMMSolverParams(
     Rho=1,
     Kappa=0.1,
     Seed=RNG_SEED,
+    Precision='double',
     NumWorkers=2
 )
 
@@ -166,8 +166,52 @@ def remote_distributed_admm_test(hosts: List[str], topology: str, seed: int, sca
 
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser('Simple distributed test')
+    
+    parser.add_argument('topo', help='Topology name')
+    parser.add_argument('seed', type=int, help='RNG seed')
+    parser.add_argument('num_workers', type=int, help='Number of workers to invoke')
+    parser.add_argument('--local', action='store_true', help='Perform the test on local network')
+    
+    solver_params_group = parser.add_argument_group('Solver Parameters', description='ADMM solver parameters')
+    solver_params_group.add_argument('--epochs', type=int, default=150, help='Number of epochs')
+    solver_params_group.add_argument('--updates', type=int, default=2, help='Number of consecutive network updates')
+    solver_params_group.add_argument('--pgd-iters', type=int, default=2, help='Number of PGD iterations at each step')
+    solver_params_group.add_argument('--pgd-step', type=float, default=0.9, help='PGD step size')
+    solver_params_group.add_argument('--pgd-reduction', type=float, default=0.1, help='PGD step size reduction factor')
+    solver_params_group.add_argument('--admm-outer', type=float, default=1.0, help='Outer ADMM step size')
+    solver_params_group.add_argument('--admm-inner', type=float, default=8.0, help='Inner ADMM step size')
+
+    runtime_params_group = parser.add_argument_group('Runtime Parameters')
+    runtime_params_group.add_argument('--save-sol', action='store_true', help='Save the final solution')
+    runtime_params_group.add_argument('--scale-factor', type=float, default=10.0, 
+                                      help='Link capacity scaling factor.')
+    runtime_params_group.add_argument('--report-unsat', action='store_true', 
+                                      help='Report unsatisfied commodity assignments.')
+    
+    args = parser.parse_args()
+
+    SOLVER_PARAMS = DistributedADMMSolverParams(
+        NumberOfEpochs=args.epochs,
+        NumberOfNetworkUpdates=args.updates,
+        PGDIterations=args.pgd_iters,
+        Gamma=args.pgd_step,
+        Eta=args.admm_inner,
+        Rho=args.admm_outer,
+        Kappa=args.pgd_reduction,
+        Seed=args.seed,
+        NumWorkers=args.num_workers
+    )
+
+    if args.local:
+        local_distributed_admm_test(args.topo, args.seed, args.scale_factor, 
+                                    save_solution=args.save_sol, report=args.report_unsat)
+    else:
+        remote_distributed_admm_test([f'n{i}.infra.v0.unregulatedadmm.distte' for i in range(SOLVER_PARAMS.NumWorkers)], 
+                                     args.topo, args.seed, args.scale_factor, 
+                                     save_solution=args.save_sol, report=args.report_unsat)
     # local_distributed_admm_test(SMALL_TOPOLOGY, RNG_SEED, save_solution=True)
     # local_distributed_admm_test(SMALL_MEDIUM_TOPOLOGY, RNG_SEED)
     # local_distributed_admm_test(MEDIUM_TOPOLOGY, RNG_SEED)
-    remote_distributed_admm_test([f'n{i}.infra.v0.unregulatedadmm.distte' for i in range(SOLVER_PARAMS.NumWorkers)], 
-                                  SMALL_TOPOLOGY, RNG_SEED, save_solution=True)
+    # remote_distributed_admm_test([f'n{i}.infra.v0.unregulatedadmm.distte' for i in range(SOLVER_PARAMS.NumWorkers)], 
+    #                               SMALL_TOPOLOGY, RNG_SEED, save_solution=True)

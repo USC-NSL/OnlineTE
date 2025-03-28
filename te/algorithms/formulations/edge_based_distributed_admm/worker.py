@@ -5,11 +5,13 @@ import contextlib
 import numpy as np
 from typing import Optional, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from te.algorithms.array_utils import set_global_precision
+from te.algorithms.array_utils.cpu_utils import cpu_zeros, cpu_array, set_precision
 from te.algorithms.formulations.edge_based_distributed_admm import DistributedADMMSolverParams, DistributedADMMWorkerRPCParams
 from te.algorithms.sub_algorithms.pgd import do_plain_pgd_with_step_reduction
 from te.algorithms.formulations.edge_based_distributed_admm.utils import (serialized_message_to_array, array_to_serialized_message,
                                                                           rebuild_chunked_array, chunk_big_array,
-                                                                          get_optional_field)
+                                                                          get_optional_field, GRPC_ARRAY_STREAM_MAX_LEN)
 import protos.distributed_lp.distributed_lp_pb2 as distributed_lp_messages
 from protos.distributed_lp.distributed_lp_pb2_grpc import DistributedADMMSolverServicer, add_DistributedADMMSolverServicer_to_server
 from google.protobuf.empty_pb2 import Empty
@@ -97,11 +99,11 @@ class NetworkWorkerNode:
         self._NNT_M = N @ N.T
         T = self._NULL_M.shape[1]
         self._T = T
-        self._Y_tk_chunk = np.zeros((T, CHUNK_LEN))
-        self._lambda_ek_chunk = np.zeros_like(self._X_ek_start_chunk)
-        self._Y_bar_t_cached: Optional[np.ndarray] = Y_bar_t if Y_bar_t is not None else np.zeros((T,))
-        self._P_bar_t_cached: Optional[np.ndarray] = P_bar_t if P_bar_t is not None else np.zeros((T,))
-        self._u_t_cached: Optional[np.ndarray] = u_t if u_t is not None else np.zeros((T,))
+        self._Y_tk_chunk = cpu_zeros((T, CHUNK_LEN))
+        self._lambda_ek_chunk = cpu_zeros(self._X_ek_start_chunk.shape)
+        self._Y_bar_t_cached: Optional[np.ndarray] = Y_bar_t if Y_bar_t is not None else cpu_zeros((T,))
+        self._P_bar_t_cached: Optional[np.ndarray] = P_bar_t if P_bar_t is not None else cpu_zeros((T,))
+        self._u_t_cached: Optional[np.ndarray] = u_t if u_t is not None else cpu_zeros((T,))
 
     def _get_current_C(self) -> np.ndarray:
         Y_TK = self._Y_tk_chunk
@@ -130,7 +132,7 @@ class NetworkWorkerNode:
         self._Y_bar_t_cached = Y_bar_t
     
     def report_chunk(self) -> np.ndarray:
-        return np.array(self._Y_tk_chunk)
+        return cpu_array(self._Y_tk_chunk)
     
     def report_aggregate(self) -> np.ndarray:
         return np.sum(self._X_ek_start_chunk + self._NULL_M @ self._Y_tk_chunk, axis=1)
@@ -176,7 +178,7 @@ class NetworkWorkerNodeListener(DistributedADMMSolverServicer):
         return Empty()
     
     def RequestChunk(self, request, context):
-        return chunk_big_array(self._worker_node.report_chunk(), 2**20)
+        return chunk_big_array(self._worker_node.report_chunk(), GRPC_ARRAY_STREAM_MAX_LEN)
     
     def RequestAggregate(self, request, context):
         return array_to_serialized_message(self._worker_node.report_aggregate())
@@ -189,6 +191,8 @@ class NetworkWorkerNodeListener(DistributedADMMSolverServicer):
         for field in new_params.child_fields.keys():
             setattr(new_params, field, getattr(request, field))
         self._worker_node._solver_params = new_params
+        set_global_precision(precision=new_params.Precision)
+        set_precision()
         return Empty()
     
     def Close(self, request, context):

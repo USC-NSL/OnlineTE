@@ -3,7 +3,6 @@ import time
 import grpc._channel
 import tqdm
 import gurobipy
-import dataclasses
 import numpy as np
 import networkx as nx
 import te.constants
@@ -15,11 +14,15 @@ from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
 from topologies.utils import get_edge_indexing, get_graph_M_matrix, get_adjacency_null_space
 from utils.logging import as_fail, as_info
-from te.algorithms.utils import check_capacity_constraint, check_centralized_flow_conservation, optimize_or_scream, make_model
+from te.algorithms.array_utils import set_global_precision
+from te.algorithms.array_utils.cpu_utils import cpu_array, cpu_zeros, set_precision
+from te.algorithms.utils import check_capacity_constraint, optimize_or_scream, make_model
 from te.algorithms.sub_algorithms.feasible_assignment import get_feasible_flow_assignment
+from te.algorithms.sub_algorithms.flow_conservation_test import check_flow_conservation
 from te.algorithms.formulations.edge_based_distributed_admm import DistributedADMMSolverParams, DistributedADMMControllerRPCParams
 from te.algorithms.formulations.edge_based_distributed_admm.utils import (serialized_message_to_array, array_to_serialized_message,
-                                                                          chunk_big_array, rebuild_chunked_array)
+                                                                          chunk_big_array, rebuild_chunked_array,
+                                                                          GRPC_ARRAY_STREAM_MAX_LEN)
 import protos.distributed_lp.distributed_lp_pb2 as distributed_lp_messages
 from protos.distributed_lp.distributed_lp_pb2_grpc import DistributedADMMSolverStub
 from google.protobuf.empty_pb2 import Empty
@@ -77,6 +80,9 @@ class ControllerNode(TrafficEngineeringLP):
         self._objective_trace = []
         self._objective_gap_trace = []
 
+        set_global_precision(solver_params.Precision)
+        set_precision()
+
         self._set_initial_feasible_solution()
         self._set_NULL_M()
         self._initialize_variables_and_residuals()
@@ -128,9 +134,8 @@ class ControllerNode(TrafficEngineeringLP):
         assert len(M.shape) == 2
         m, n = M.shape
         assert m < n
-        N = get_adjacency_null_space(M)
+        N = cpu_array(get_adjacency_null_space(M))
         T = N.shape[1]
-        assert np.allclose(np.matmul(N.T, N) - np.eye(T), 0)
         self._NULL_M = N
         self._NNT_M = N @ N.T
         self._T = T
@@ -139,14 +144,14 @@ class ControllerNode(TrafficEngineeringLP):
     def _initialize_variables_and_residuals(self):
         T = self._T
         NUM_EDGES = self._NUM_EDGES
-        self._capacities = np.array([item[-1] for item in self._graph.edges(data='capacity')])
+        self._capacities = cpu_array([item[-1] for item in self._graph.edges(data='capacity')])
         self._c_norm = np.linalg.norm(self._capacities)
-        self._r_e = np.zeros(shape=(NUM_EDGES,))
-        self._u_t = np.zeros(shape=(T,))
-        self._Zo_e = np.copy(self._Xo_e_start)
-        self._P_bar_t = np.zeros((T,))
-        self._Y_bar_t = np.zeros((T,))
-        self._X_ek = np.copy(self._X_ek_start)
+        self._r_e = cpu_zeros(shape=(NUM_EDGES,))
+        self._u_t = cpu_zeros(shape=(T,))
+        self._Zo_e = cpu_array(self._Xo_e_start)
+        self._P_bar_t = cpu_zeros((T,))
+        self._Y_bar_t = cpu_zeros((T,))
+        self._X_ek = cpu_array(self._X_ek_start)
     
     def is_node_ready(self, worker_id: int) -> bool:
         try:
@@ -174,8 +179,9 @@ class ControllerNode(TrafficEngineeringLP):
 
         # Now, send the initial solution
         wait([
-            self._broadcast_thread_pool.submit(stub.SetInitialFeasibleSolution, chunk_big_array(X_EK_START_CHUNKS[i], 2**20))
-                for i, stub in enumerate(WORKERS)
+            self._broadcast_thread_pool.submit(
+                stub.SetInitialFeasibleSolution, chunk_big_array(X_EK_START_CHUNKS[i], GRPC_ARRAY_STREAM_MAX_LEN)
+            ) for i, stub in enumerate(WORKERS)
         ])
           
         # Finally, the rest of the things to know ...
@@ -317,7 +323,7 @@ class ControllerNode(TrafficEngineeringLP):
 
         NUM_EDGES = self._NUM_EDGES
         XO_E = self._Xo_e
-        XO_E_ = np.array([XO_E[e].X for e in range(NUM_EDGES)])
+        XO_E_ = cpu_array([XO_E[e].X for e in range(NUM_EDGES)])
         serialized_chunks = self._broadcast_thread_pool.map(
             lambda stub: stub.RequestAggregate(Empty()), self._worker_stubs)
         X_KE_SUM_E = np.sum([serialized_message_to_array(chunk) for chunk in serialized_chunks], axis=0)
@@ -330,7 +336,7 @@ class ControllerNode(TrafficEngineeringLP):
         R_E = self._r_e
         XO_E = self._Xo_e
         NUM_EDGES = self._NUM_EDGES
-        XO_E_ = np.array([XO_E[e].X for e in range(NUM_EDGES)])
+        XO_E_ = cpu_array([XO_E[e].X for e in range(NUM_EDGES)])
         serialized_chunks = self._broadcast_thread_pool.map(
             lambda stub: stub.RequestAggregate(Empty()), self._worker_stubs)
         X_KE_SUM_E = np.sum([serialized_message_to_array(chunk) for chunk in serialized_chunks], axis=0)
@@ -430,7 +436,7 @@ class ControllerNode(TrafficEngineeringLP):
         
         # Now, check flow conservation ...
         X_EK = self._X_ek
-        check_centralized_flow_conservation(X_EK, self._graph, self._commodity_list, feasibility_tol, feasibility_ratio)
+        check_flow_conservation(X_EK, self._graph, self._commodity_list, feasibility_tol, feasibility_ratio)
         check_capacity_constraint(
             X_EK, self._graph, self._commodity_list, 
             feasibility_tol=feasibility_tol, feasibility_ratio=feasibility_ratio

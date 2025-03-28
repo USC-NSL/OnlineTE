@@ -10,7 +10,7 @@ try:
     just hard-coding it to return Numpy whenever called.
     """
     import cupy as cp
-    from te.algorithms.gpu_utils import zip_map
+    from te.algorithms.array_utils.gpu_utils import zip_map
 except ModuleNotFoundError:
     import numpy as cp
     def zip_map(*args, **kwargs):

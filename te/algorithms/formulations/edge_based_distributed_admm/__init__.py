@@ -1,7 +1,12 @@
 import te.constants
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Literal
 from dataclasses import dataclass
 from te.algorithms.base import GurobiSolverParams
+from te.algorithms.array_utils import SINGLE_PRECISION
+
+import warnings
+warnings.filterwarnings("error")
+"""This is mostly to catch overflow, they can be devistating!"""
 
 
 @dataclass
@@ -14,6 +19,7 @@ class DistributedADMMSolverParams(GurobiSolverParams):
     Kappa: float = 0
     PGDIterations: int = 5
     NumWorkers: int = 1
+    Precision: Literal['double', 'single', 'half'] = SINGLE_PRECISION
     Seed: int = te.constants.DEFAULT_SEED
 
 

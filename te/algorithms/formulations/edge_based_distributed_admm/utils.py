@@ -1,7 +1,12 @@
 import struct
 import numpy as np
 import protos.distributed_lp.distributed_lp_pb2 as distributed_lp_messages
-from typing import Optional, Iterator
+from collections.abc import Iterator as IteratorABC
+from typing import Optional, Iterator, Union, List
+from te.algorithms.array_utils.cpu_utils import cpu_frombuffer, cpu_frombuffer_serial
+
+
+GRPC_ARRAY_STREAM_MAX_LEN = 2**20
 
 
 def array_to_serialized_message(array: Optional[np.ndarray]) -> Optional[distributed_lp_messages.SerializedNumpyArrayMessage]:
@@ -10,7 +15,7 @@ def array_to_serialized_message(array: Optional[np.ndarray]) -> Optional[distrib
 
 def serialized_message_to_array(message: Optional[distributed_lp_messages.SerializedNumpyArrayMessage]) -> Optional[np.ndarray]:
     if message is not None:
-        return np.reshape(np.frombuffer(message.array), tuple(message.dims))
+        return cpu_frombuffer(message.array, tuple(message.dims))
 
 get_optional_field = lambda request, field_name: getattr(request, field_name) if request.HasField(field_name) else None
 
@@ -35,9 +40,16 @@ def chunk_big_array(array: np.ndarray, chunk_size: int):
         total -= chunk_size
 
 
-def rebuild_chunked_array(chunks: Iterator[distributed_lp_messages.Chunk]) -> np.ndarray:
-    shape = struct.unpack(array_2d_dim_struct_format, next(chunks).data)
-    buffer = b''
-    for chunk in chunks:
-        buffer += chunk.data
-    return np.frombuffer(buffer).reshape(shape)
+def rebuild_chunked_array(chunks: Union[Iterator[distributed_lp_messages.Chunk], List[distributed_lp_messages.Chunk]]) -> np.ndarray:
+    arrays = []
+    if isinstance(chunks, list):
+        shape = struct.unpack(array_2d_dim_struct_format, chunks[0].data)
+        for chunk in chunks[1:]:
+            arrays.append(cpu_frombuffer_serial(chunk.data))
+    elif isinstance(chunks, IteratorABC):
+        shape = struct.unpack(array_2d_dim_struct_format, next(chunks).data)
+        for chunk in chunks:
+            arrays.append(cpu_frombuffer_serial(chunk.data))
+    else:
+        raise ValueError(f'Unexpected type: {type(chunks)}')
+    return np.hstack(arrays).reshape(shape)

@@ -53,5 +53,6 @@ message SolverParameters {
     float Kappa = 6;
     int32 PGDIterations = 7;
     int32 NumWorkers = 8;
-    int32 Seed = 9;
+    string Precision = 9;
+    int32 Seed = 10;
 }

@@ -1,6 +1,8 @@
 import numpy as np
 import cupy as cp
-from typing import Optional, Union, Tuple, Callable, NewType, List
+from te.algorithms.array_utils import get_global_precision, DOUBLE_PRECISION, SINGLE_PRECISION, HALF_PRECISION
+from te.algorithms.array_utils.cpu_utils import CPUArray
+from typing import Union, Tuple, Callable, NewType, List
 
 """
 Gurobi cannot utilize a GPU (and it really cannot benefit from it as-is
@@ -12,56 +14,29 @@ memory, since going over the bus to convert them would be huge hit
 in terms of performance.
 """
 
-CPUArray = np.ndarray
-"""Alias for `numpy.ndarray`, an array that lives on the RAM. Plenty of space usually."""
 GPUArray = NewType('GPUArray', cp.ndarray)
 """Alias for `cupy.ndarray`, an array that lives on the GPU memory. Usually quite limited."""
-WholeArray = Union[CPUArray, GPUArray]
-"""Simple and honest array, either on the GPU or CPU"""
 ScatteredGPUArray = NewType('ScatteredGPUArray', Tuple[GPUArray])
 """Designates arrays that are shared among all devices as-is"""
 PartitionedGPUArray = NewType('PartitionedGPUArray', List[GPUArray])
 """A 2D matrix that has been partitioned column-wise over GPU devices"""
 
-"""
-For very large topologies, GPU memory becomes very tight.
-We need to switch to half precision for such cases.
-"""
 
-DOUBLE_PRECISION = 'double'  # float 64
-SINGLE_PRECISION = 'single'  # float 32
-HALF_PRECISION = 'half'      # float 16
-
-NUMBER_OF_GPU_DEVICES: int = cp.cuda.runtime.getDeviceCount()
-GPU_MEM_MANAGER: cp.cuda.MemoryPool = cp.get_default_memory_pool()
-
-
-_GLOBAL_PRECISION: Optional[int] = None
-"""
-Any algorithm that uses GPU features MUST explicitly set this, otherwise it will
-get an error later (which we actually want, since it was probably never intended
-to be this way)
-"""
-
-_CPU_DTYPE = None
 _GPU_DTYPE = None
+"""Every CuPy array that we instantiate must adhere to this data type"""
+NUMBER_OF_GPU_DEVICES: int = cp.cuda.runtime.getDeviceCount()
+"""Number of available GPU devices (assumed to be of the same kind ... for now)"""
+GPU_MEM_MANAGER: cp.cuda.MemoryPool = cp.get_default_memory_pool()
+"""A global GPU memory manager (just to query memory usage, nothing too fancy)"""
 
-
-def set_global_precision(precision: str):
-    global _GLOBAL_PRECISION, _CPU_DTYPE, _GPU_DTYPE
-    assert _GLOBAL_PRECISION is None and _CPU_DTYPE is None and _GPU_DTYPE is None
-    _GLOBAL_PRECISION = precision
-    if precision == DOUBLE_PRECISION:
-        _CPU_DTYPE = np.float64
-        _GPU_DTYPE = cp.float64
-    elif precision == SINGLE_PRECISION:
-        _CPU_DTYPE = np.float32
-        _GPU_DTYPE = cp.float32
-    elif precision == HALF_PRECISION:
-        _CPU_DTYPE = np.float16
-        _GPU_DTYPE = cp.float16
-    else:
-        raise ValueError
+def set_precision():
+    global _CPU_DTYPE
+    assert _CPU_DTYPE is None
+    _CPU_DTYPE = ({
+        DOUBLE_PRECISION: cp.float64,
+        SINGLE_PRECISION: cp.float32,
+        HALF_PRECISION: cp.float16
+    })[get_global_precision()]
 
 
 def get_total_reserved_gpu_memory_usage() -> int:

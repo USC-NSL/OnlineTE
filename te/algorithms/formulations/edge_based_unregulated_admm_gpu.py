@@ -22,7 +22,8 @@ from te.algorithms.utils import (check_capacity_constraint, optimize_or_scream, 
                                  careful_norm, careful_norm_squared)
 from te.algorithms.statistics.helpers import (record_cpu_runtime, record_gpu_runtime, record_reserved_gpu_memory, 
                                               record_used_gpu_memory)
-from te.algorithms.gpu_utils import *
+from te.algorithms.array_utils import set_global_precision
+from te.algorithms.array_utils.gpu_utils import *
 
 
 @dataclass
@@ -72,6 +73,7 @@ class GPUUnregulatedADMMSolverParams(GurobiSolverParams):
         assert self.FloatPrecision in {'half', 'single', 'double'}, \
             as_fail(f"Unknown float precision string specifier {self.FloatPrecision}")
         set_global_precision(self.FloatPrecision)
+        set_precision()
 
 
 class GPUUnregulatedADMMLP(TrafficEngineeringLP):

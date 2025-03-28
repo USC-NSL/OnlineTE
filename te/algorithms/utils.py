@@ -112,7 +112,7 @@ def get_unsatisfied_demands(commodities: List[Commodity], solution: List[Tuple[C
 
 
 def get_solution_confusion_matrix(lp: TrafficEngineeringLP, feasibility_tol: Optional[float] = None, feasibility_ratio: Optional[float] = None, 
-                                  report: bool = False, report_unsat: bool = True, show: bool = True, save_fig: bool = True,
+                                  report: bool = False, show: bool = True, save_fig: bool = True,
                                   trace_out_path: Optional[str] = 'res.txt') -> Tuple[float, np.ndarray]:
     """
     Check how many of the demands are not satisfied and report the solution.
