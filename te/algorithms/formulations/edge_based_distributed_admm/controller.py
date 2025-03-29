@@ -1,11 +1,10 @@
 import grpc
 import time
-import grpc._channel
 import tqdm
 import gurobipy
 import numpy as np
+import grpc._channel
 import networkx as nx
-import te.constants
 from typing import List, Tuple, Optional
 from gurobipy import GRB, GurobiError
 from concurrent.futures import ThreadPoolExecutor, wait
@@ -16,8 +15,9 @@ from topologies.utils import get_edge_indexing, get_graph_M_matrix, get_adjacenc
 from utils.logging import as_fail, as_info
 from te.algorithms.array_utils import set_global_precision
 from te.algorithms.array_utils.cpu_utils import cpu_array, cpu_zeros, set_precision
-from te.algorithms.utils import check_capacity_constraint, optimize_or_scream, make_model
+from te.algorithms.utils import check_capacity_constraint, optimize_or_scream, make_model, is_satisfied
 from te.algorithms.sub_algorithms.feasible_assignment import get_feasible_flow_assignment
+from te.algorithms.sub_algorithms.admm_consensus_test import outer_admm_consensus_test, inner_admm_consensus_test
 from te.algorithms.sub_algorithms.flow_conservation_test import check_flow_conservation
 from te.algorithms.formulations.edge_based_distributed_admm import DistributedADMMSolverParams, DistributedADMMControllerRPCParams
 from te.algorithms.formulations.edge_based_distributed_admm.utils import (serialized_message_to_array, array_to_serialized_message,
@@ -380,7 +380,7 @@ class ControllerNode(TrafficEngineeringLP):
         
         try:
             t = time.time()
-            for epoch in tqdm.tqdm(range(PARAMS.NumberOfEpochs)):
+            for epoch in tqdm.tqdm(range(PARAMS.NumberOfEpochs), bar_format='{l_bar}{bar:36}{r_bar}{bar:-36b}'):
                 optimize_or_scream(MODEL_CONTROLLER)
                 for i in reversed(range(PARAMS.NumberOfNetworkUpdates)):
                     self._do_network_update(epoch)
@@ -399,40 +399,19 @@ class ControllerNode(TrafficEngineeringLP):
             print(f'Error code {e.errno}: {e}')
             return -1
     
-    def check(self, feasibility_tol: Optional[float] = None, feasibility_ratio: Optional[float] = None):
+    def check(self, feasibility_tol: Optional[float] = None, feasibility_ratio: Optional[float] = None, report: bool = False):
         NUM_EDGES = self._NUM_EDGES
         T = self._T
-        PARAMS = self._solver_params
-
-        # TODO: This is not numerically stable ...
-        def in_consensus(primal, pair):
-            if abs(primal - pair) < te.constants.FLOAT_RES:
-                return True
-            if feasibility_tol is not None:
-                return abs(primal - pair) < feasibility_tol
-            return abs((primal - pair) / (primal + te.constants.FLOAT_RES)) < feasibility_ratio
 
         # Are outer ADMM pairs in consensus?
-        XO_E = self._Xo_e
+        XO_E = np.array([self._Xo_e[e].X for e in range(NUM_EDGES)])
         ZO_E = self._Zo_e
-        for e in range(NUM_EDGES):
-            primal = XO_E[e].X
-            pair = ZO_E[e]
-            primal_str = str(np.round(primal, 4))
-            pair_str = str(np.round(pair, 4))
-            if not in_consensus(primal, pair):
-                print(as_fail(f"Edge {e} --> Outer ADMM pairing is not in consensus with primal variable: {primal_str} vs {pair_str}"))
+        outer_admm_consensus_test(XO_E, ZO_E, feasibility_tol, feasibility_ratio, report)
         
         # Are inner ADMM pairs in consensus?
         Y_BAR_T = self._Y_bar_t
         P_BAR_T = self._P_bar_t
-        for t in range(T):
-            primal = Y_BAR_T[t]
-            pair = P_BAR_T[t]
-            primal_str = str(np.round(primal, 4))
-            pair_str = str(np.round(pair, 4))
-            if not in_consensus(primal, pair):
-                print(as_fail(f"Axis {t} --> Inner ADMM pairing is not in consensus with primal variable: {primal_str} vs {pair_str}"))
+        inner_admm_consensus_test(Y_BAR_T, P_BAR_T, feasibility_tol, feasibility_ratio, report)
         
         # Now, check flow conservation ...
         X_EK = self._X_ek

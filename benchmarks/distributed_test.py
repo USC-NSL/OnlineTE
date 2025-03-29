@@ -11,7 +11,7 @@ from te.algorithms.formulations.edge_based_distributed_admm import (DistributedA
 from te.algorithms.solution import (EdgeBasedMinimizeMaximumUtilitySolution, 
                                     EdgeBasedMinimizeMaximumUtilitySolutionParams, 
                                     default_solution_name)
-from utils.logging import as_info
+from utils.logging import as_info, as_success
 from te.algorithms.utils import (get_solution_confusion_matrix, stringify_collected_stats, 
                                  str_round, get_solution_maximum_utilization)
 from topologies.utils import get_uniform_tm_problem_with_capacity_heuristic
@@ -90,7 +90,7 @@ def local_distributed_admm_test(topology: str, seed: int, scale_factor: float = 
                 time.sleep(1)
                 if lp.are_network_nodes_ready():
                     break
-            print(as_info("All Network Nodes Ready"))
+            print(as_success("All Network Nodes Ready"))
 
             lp.make_lp()
             t = lp.solve()
@@ -181,6 +181,8 @@ if __name__ == '__main__':
     solver_params_group.add_argument('--pgd-reduction', type=float, default=0.1, help='PGD step size reduction factor')
     solver_params_group.add_argument('--admm-outer', type=float, default=1.0, help='Outer ADMM step size')
     solver_params_group.add_argument('--admm-inner', type=float, default=8.0, help='Inner ADMM step size')
+    solver_params_group.add_argument('--precision', choices=['half', 'single', 'double'], default='single',
+                                     help='Floating point operation precision')
 
     runtime_params_group = parser.add_argument_group('Runtime Parameters')
     runtime_params_group.add_argument('--save-sol', action='store_true', help='Save the final solution')
@@ -200,6 +202,7 @@ if __name__ == '__main__':
         Rho=args.admm_outer,
         Kappa=args.pgd_reduction,
         Seed=args.seed,
+        Precision=args.precision,
         NumWorkers=args.num_workers
     )
 

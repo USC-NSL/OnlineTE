@@ -1,37 +1,116 @@
 import contextlib
 import numpy as np
 import networkx as nx
-from joblib import Parallel, delayed, dump
-from typing import Optional, List, Tuple
+from collections import Counter
+from joblib import Parallel, delayed
+from typing import Optional, List, Tuple, NewType
 from collections import defaultdict
 from te.traffic_models.base import Commodity
-from te.algorithms.array_utils.cpu_utils import cpu_memmap
-from te.algorithms.utils import str_round, is_satisfied, is_negligible, as_fail, as_info
+from te.algorithms.array_utils.cpu_utils import cpu_mmap, cpu_dump
+from te.algorithms.utils import str_round, is_satisfied, is_negligible, as_fail, as_warning, as_info
 from te.algorithms.sub_algorithms.utils import (get_slice_starts_and_exclusive_ends, get_number_of_required_workers,
                                                 TempHelper, NUM_PROCS)
+
+
+ViolationType = NewType('ViolationType', int)
+Violation = Tuple[ViolationType, int, int, float, float]
+ViolationSeverity = NewType('ViolationSeverity', int)
 
 
 MAX_NUMBER_OF_COMMODITIES_PER_CORE = 5000
 MAX_NUMBER_OF_WORKERS = min(24, NUM_PROCS)
 TEMP_FOLDER_NAME = 'flow_conservation_check'
-MEMMAP_FILE_NAME = 'X_KE'
+MEMMAP_FILE_NAME = 'X_KE.npy'
 
 
-VIOLATION_OUTFLOW = 0
-VIOLATION_LOOP = 1
-VIOLATION_LEAK = 2
-VIOLATION_INFLOW = 3
-VIOLATION_TRANSIT = 4
+NEGLIGIBLE_DEMAND_ABS_TOL = 1e-3
+SEVERE_VIOLATION_REL_TOL = 5e-2
+
+VIOLATION_OUTFLOW = ViolationType(0)
+VIOLATION_LOOP = ViolationType(1)
+VIOLATION_LEAK = ViolationType(2)
+VIOLATION_INFLOW = ViolationType(3)
+VIOLATION_TRANSIT = ViolationType(4)
+
+
+LEVEL_NEGLIGIBLE = ViolationSeverity(0)
+LEVEL_MILD = ViolationSeverity(1)
+LEVEL_SEVERE = ViolationSeverity(2)
+
+
+def get_violation_severity(violation: Violation) -> ViolationSeverity:
+    violation_type, _, _, actual, demand = violation
+    if abs(demand) < NEGLIGIBLE_DEMAND_ABS_TOL:
+        """
+        The commodity has negligible demand by default.
+        Thus, the violation should also be negligible. Anything above that we consider
+        a severe violation (i.e. there is no `mild` case).
+        """
+        if abs(actual) < NEGLIGIBLE_DEMAND_ABS_TOL:
+            return LEVEL_NEGLIGIBLE
+        return LEVEL_SEVERE   
+    
+    if violation_type in {VIOLATION_INFLOW, VIOLATION_OUTFLOW}:
+        """
+        The commodity has non-negligible demand, but inflow/outflow
+        for destination/source are not zero.
+        Relative error will be checked here.
+        """
+        if abs(actual) < abs(demand * SEVERE_VIOLATION_REL_TOL):
+            return LEVEL_MILD
+        return LEVEL_SEVERE
+    elif violation_type == VIOLATION_LEAK:
+        """
+        The commodity has non-negligible demand and destination seems
+        to not consume all of the traffic completely.
+        Relative error will be checked here.
+        """
+        if abs(actual) < abs(demand * SEVERE_VIOLATION_REL_TOL):
+            return LEVEL_MILD
+        return LEVEL_SEVERE
+    elif violation_type == VIOLATION_LOOP:
+        """
+        The commodity has non-negligible demand and source seems
+        to receive some of its own demand.
+        Loops can be devistating, thus this needs to be negligible.
+        """
+        if abs(actual) < NEGLIGIBLE_DEMAND_ABS_TOL:
+            return LEVEL_NEGLIGIBLE
+        return LEVEL_SEVERE  
+    elif violation_type == VIOLATION_TRANSIT:
+        """
+        The commodity has non-negligible demand and we are considering
+        transit node flow conservation.
+        Relative error here is enough. If it starts to build up, then
+        we will catch it when looking at the source/destination nodes.
+        """
+        if is_satisfied(actual, demand, feasibility_ratio=SEVERE_VIOLATION_REL_TOL):
+            return LEVEL_MILD
+        return LEVEL_SEVERE
+    else:
+        raise ValueError(f'Unknown violation type: {violation_type}')
+
+
+def show_violation_severity(violations: List[Violation], total: int):
+    levels = Counter(get_violation_severity(v) for v in violations)
+    neg = levels[LEVEL_NEGLIGIBLE]
+    mid = levels[LEVEL_MILD]
+    sev = levels[LEVEL_SEVERE]
+    if neg > 0:
+        print(as_info(f'Negligible Violations: {neg} ({str(round(neg/total*100, 1))}% of constraints)'))
+    if mid > 0:
+        print(as_warning(f'Mild Violations: {mid} ({str(round(mid/total*100, 1))})% of constraints'))
+    if sev > 0:
+        print(as_fail(f'Severe Violations: {sev} ({str(round(sev/total*100, 1))})% of constraints'))
 
 
 def _check_centralized_flow_conservation(
         shift: int, flows: np.ndarray, graph: nx.DiGraph, 
         commodities: List[Commodity], feasibility_tol: Optional[float],
         feasibility_ratio: Optional[float] = None
-    ) -> List[Tuple[int, int, int, float, float]]:
+    ) -> List[Violation]:
 
     violations = []
-    print(f'MAX = {np.max(flows)}')
     for k, commodity in enumerate(commodities):
         SOURCE = commodity.source
         DESTINATION = commodity.destination
@@ -47,19 +126,14 @@ def _check_centralized_flow_conservation(
             fout = sum(flow_out[v])
             fin  = sum(flow_in[v])
 
-            if (abs(fin) > 1e6):
-                print(f'BIG FIN: {fin}')
-            if (abs(fout) > 1e6):
-                print(f'BIG FOUT: {fout}')
-
             if v == SOURCE:
                 if not is_satisfied(fout, DEMAND, feasibility_tol, feasibility_ratio):
                     violations.append((VIOLATION_OUTFLOW, k+shift, v, fout, DEMAND))
                 if not is_negligible(fin, DEMAND, feasibility_tol, feasibility_ratio):
-                    violations.append((VIOLATION_LOOP, k+shift, v, fin, 0))
+                    violations.append((VIOLATION_LOOP, k+shift, v, fin, DEMAND))
             elif v == DESTINATION:
                 if not is_negligible(fout, DEMAND, feasibility_tol, feasibility_ratio):
-                    violations.append((VIOLATION_LEAK, k+shift, v, fout, 0))
+                    violations.append((VIOLATION_LEAK, k+shift, v, fout, DEMAND))
                 if not is_satisfied(fin, DEMAND, feasibility_tol, feasibility_ratio):
                     violations.append((VIOLATION_INFLOW, k+shift, v, fin, DEMAND))
             else:
@@ -68,7 +142,7 @@ def _check_centralized_flow_conservation(
     return violations
 
 
-def report_violations(violations: List[Tuple[int, int, int, float, float]]):
+def report_violations(violations: List[Violation]):
     for violation_type, k, v, actual, should_be in violations:
         actual_str = str_round(actual, 4)
         should_be_str = str_round(should_be, 4)
@@ -89,7 +163,8 @@ def report_violations(violations: List[Tuple[int, int, int, float, float]]):
 def check_flow_conservation(
         flows: np.ndarray, graph: nx.DiGraph, 
         commodities: List[Commodity], feasibility_tol: Optional[float],
-        feasibility_ratio: Optional[float] = None
+        feasibility_ratio: Optional[float] = None,
+        report: bool = False
     ):
     """
     (PARALLEL VERSION)
@@ -108,8 +183,8 @@ def check_flow_conservation(
         with contextlib.closing(TempHelper(TEMP_FOLDER_NAME)) as tp:
             # MEMMAP the array to allow for concurrent writing
             input_path = tp.get_file_path(MEMMAP_FILE_NAME)
-            dump(flows, input_path)
-            X_KE = cpu_memmap(input_path, (N, K), 'r')
+            cpu_dump(input_path, flows)
+            X_KE = cpu_mmap(input_path, (N, K), 'r')
             nprocs = get_number_of_required_workers(K, MAX_NUMBER_OF_WORKERS, MAX_NUMBER_OF_COMMODITIES_PER_CORE)
             print(as_info(f'Spawning {nprocs} workers to check flow conservation'))
             violations_it = Parallel(n_jobs=nprocs, return_as='generator')\
@@ -119,4 +194,8 @@ def check_flow_conservation(
             violations = []
             for item in violations_it:
                 violations.extend(item)
-    # report_violations(violations)
+            del X_KE
+    if report:
+        report_violations(violations)
+    else:
+        show_violation_severity(violations, K * graph.number_of_nodes())

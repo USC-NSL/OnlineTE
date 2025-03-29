@@ -5,7 +5,7 @@ from joblib import Parallel, delayed
 from typing import List, Dict, Tuple
 from topologies.utils import get_edge_indexing, Commodity
 from te.algorithms.utils import as_info
-from te.algorithms.array_utils.cpu_utils import cpu_memmap, cpu_zeros
+from te.algorithms.array_utils.cpu_utils import cpu_mmap, cpu_zeros
 from te.algorithms.sub_algorithms.utils import (get_slice_starts_and_exclusive_ends, get_number_of_required_workers,
                                                 TempHelper, NUM_PROCS)
 
@@ -13,7 +13,7 @@ from te.algorithms.sub_algorithms.utils import (get_slice_starts_and_exclusive_e
 MAX_NUMBER_OF_COMMODITIES_PER_CORE = 5000
 MAX_NUMBER_OF_WORKERS = min(24, NUM_PROCS)
 TEMP_FOLDER_NAME = 'feasible_assignment'
-MEMMAP_FILE_NAME = 'X_KE'
+MEMMAP_FILE_NAME = 'X_KE.npy'
 
 
 def _get_feasible_flow_assignment(edge_indexing: Dict[Tuple[int, int], int], graph: nx.DiGraph,
@@ -42,11 +42,12 @@ def get_feasible_flow_assignment(graph: nx.DiGraph, commodities: List[Commodity]
         with contextlib.closing(TempHelper(TEMP_FOLDER_NAME)) as tp:
             # MEMMAP the array to allow for concurrent writing
             output_path = tp.get_file_path(MEMMAP_FILE_NAME)
-            X_KE = cpu_memmap(output_path, (N, K), 'w+')
+            X_KE = cpu_mmap(output_path, (N, K), 'w+')
             nprocs = get_number_of_required_workers(K, MAX_NUMBER_OF_WORKERS, MAX_NUMBER_OF_COMMODITIES_PER_CORE)
             print(as_info(f'Spawning {nprocs} workers to create initial feasible assignment'))
             Parallel(n_jobs=nprocs)\
                 (delayed(_get_feasible_flow_assignment)\
                     (EDGE_INDEXING, graph, commodities[begin:end], X_KE[:, begin:end])
                     for begin, end in slices)
-            return X_KE
+            del X_KE
+            return np.load(output_path, allow_pickle=True)

@@ -4,6 +4,7 @@ import math
 import shutil
 import multiprocessing
 from typing import List, Tuple
+from utils.logging import as_warning
 
 
 NUM_PROCS = multiprocessing.cpu_count()
@@ -32,7 +33,8 @@ class TempHelper:
     def close(self):
         try:
             shutil.rmtree(self.temp_path)
-        except: # noqa
+        except Exception as e: # noqa
+            print(as_warning(f'Could not cleanup temp file: {e}'))
             pass
 
 

@@ -21,10 +21,10 @@ def set_precision():
 
 
 cpu_zeros: Callable[[Tuple[int]], CPUArray]  = lambda shape: np.zeros(shape=shape, dtype=_CPU_DTYPE)
-"""Wrapper for `nump.zeros`. Enforces the global data type."""
-cpu_memmap: Callable[[str, Tuple[int], str], CPUArray] = \
-    lambda path, shape, mode: np.memmap(shape=shape, filename=path, mode=mode, dtype=_CPU_DTYPE)
-"""Alias for MEMMAP"""
+"""Wrapper for `nump.zeros`. Enforces the global data type"""
+cpu_mmap: Callable[[str, Tuple[int], str], CPUArray] = \
+    lambda path, shape, mode: np.lib.format.open_memmap(shape=shape, filename=path, mode=mode, dtype=_CPU_DTYPE)
+"""Alias for MMAP"""
 cpu_array: Callable[[Any], CPUArray] = lambda input: np.array(input, dtype=_CPU_DTYPE)
 """Create a copy of an array-like thing"""
 cpu_frombuffer: Callable[[bytes, Tuple[int]], CPUArray] = \
@@ -33,3 +33,5 @@ cpu_frombuffer: Callable[[bytes, Tuple[int]], CPUArray] = \
 cpu_frombuffer_serial: Callable[[bytes], CPUArray] = \
     lambda data: np.frombuffer(data, dtype=_CPU_DTYPE)
 """Alias for `np.frombuffer`. Always returns a 1D array"""
+cpu_dump: Callable[[str, CPUArray], None] = lambda path, data: np.save(path, data, allow_pickle=True)
+"""Replacement for Joblib `dump`, it seems to not do what I expect it to"""
