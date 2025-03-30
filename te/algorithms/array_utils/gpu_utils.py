@@ -29,10 +29,10 @@ NUMBER_OF_GPU_DEVICES: int = cp.cuda.runtime.getDeviceCount()
 GPU_MEM_MANAGER: cp.cuda.MemoryPool = cp.get_default_memory_pool()
 """A global GPU memory manager (just to query memory usage, nothing too fancy)"""
 
-def set_precision():
-    global _CPU_DTYPE
-    assert _CPU_DTYPE is None
-    _CPU_DTYPE = ({
+def set_gpu_float_precision():
+    global _GPU_DTYPE
+    assert _GPU_DTYPE is None
+    _GPU_DTYPE = ({
         DOUBLE_PRECISION: cp.float64,
         SINGLE_PRECISION: cp.float32,
         HALF_PRECISION: cp.float16
@@ -57,16 +57,12 @@ def get_total_used_gpu_memory_usage() -> int:
     return total // NUMBER_OF_GPU_DEVICES
 
 
-cpu_zeros: Callable[[Tuple[int]], CPUArray]  = lambda shape: np.zeros(shape=shape, dtype=_CPU_DTYPE)
-"""Wrapper for `nump.zeros`. Enforces the global data type."""
 gpu_zeros: Callable[[Tuple[int]], GPUArray]  = lambda shape: cp.zeros(shape=shape, dtype=_GPU_DTYPE)
 """Wrapper for `cupy.zeros`. Enforces the global data type."""
 as_gpu_array: Callable[[CPUArray], GPUArray] = lambda array: cp.array(array, dtype=_GPU_DTYPE)
 """Move array into GPU memory."""
 as_cpu_array: Callable[[GPUArray], CPUArray] = lambda array: cp.asnumpy(array)
 """Move array into CPU memory."""
-cpu_memmap: Callable[[str, Tuple[int], str], CPUArray] = \
-    lambda path, shape, mode: np.memmap(shape=shape, filename=path, mode=mode, dtype=_CPU_DTYPE)
 
 
 synchronize_to_device: Callable[[int], None] = lambda dev: cp.cuda.Device(dev).synchronize()

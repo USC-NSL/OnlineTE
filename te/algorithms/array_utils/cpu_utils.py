@@ -10,7 +10,7 @@ _CPU_DTYPE = None
 """Every Numpy array that we instantiate must adhere to this data type"""
 
 
-def set_precision():
+def set_cpu_float_precision():
     global _CPU_DTYPE
     assert _CPU_DTYPE is None
     _CPU_DTYPE = ({

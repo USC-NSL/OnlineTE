@@ -40,6 +40,7 @@ SOLVER_PARAMS = DistributedADMMSolverParams(
     Rho=1,
     Kappa=0.1,
     Seed=RNG_SEED,
+    BigGamma=1e-7,
     Precision='double',
     NumWorkers=2
 )
@@ -145,7 +146,7 @@ def remote_distributed_admm_test(hosts: List[str], topology: str, seed: int, sca
             time.sleep(1)
             if lp.are_network_nodes_ready():
                 break
-        print(as_info("All Network Nodes Ready"))
+        print(as_success("All Network Nodes Ready"))
 
         lp.make_lp()
         t = lp.solve()
@@ -181,6 +182,8 @@ if __name__ == '__main__':
     solver_params_group.add_argument('--pgd-reduction', type=float, default=0.1, help='PGD step size reduction factor')
     solver_params_group.add_argument('--admm-outer', type=float, default=1.0, help='Outer ADMM step size')
     solver_params_group.add_argument('--admm-inner', type=float, default=8.0, help='Inner ADMM step size')
+    solver_params_group.add_argument('--controller-opt-tol', type=float, default=1e-7, 
+                                     help='Barrier method convergence tolerance')
     solver_params_group.add_argument('--precision', choices=['half', 'single', 'double'], default='single',
                                      help='Floating point operation precision')
 
@@ -202,6 +205,7 @@ if __name__ == '__main__':
         Rho=args.admm_outer,
         Kappa=args.pgd_reduction,
         Seed=args.seed,
+        BigGamma=args.controller_opt_tol,
         Precision=args.precision,
         NumWorkers=args.num_workers
     )

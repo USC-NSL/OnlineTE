@@ -19,6 +19,7 @@ class DistributedADMMSolverParams(GurobiSolverParams):
     Kappa: float = 0
     PGDIterations: int = 5
     NumWorkers: int = 1
+    BigGamma: float = te.constants.DEFAULT_BIG_GAMMA
     Precision: Literal['double', 'single', 'half'] = SINGLE_PRECISION
     Seed: int = te.constants.DEFAULT_SEED
 

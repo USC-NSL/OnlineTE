@@ -54,5 +54,6 @@ message SolverParameters {
     int32 PGDIterations = 7;
     int32 NumWorkers = 8;
     string Precision = 9;
-    int32 Seed = 10;
+    float BigGamma = 10;
+    int32 Seed = 11;
 }

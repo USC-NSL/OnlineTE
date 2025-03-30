@@ -230,11 +230,6 @@ def do_plain_pgd_with_step_reduction(lambda_block, x_block_0, nnt, n, c_block, g
                                      kappa: float, epoch: int):
     """
     A plain block oriented PGD operation, with step size heuristic.
-    This will run a GPU, as such, norm-2 and selective operations (like
-    checking for converged columns) become extremely slow.
-    Matrix operations on the other hand benefit greatly.
-    As such, this implementation is meant to be very small fast.
-
     The step size heuristic is:
 
         step_size <- (gamma / epoch**kappa)
@@ -293,4 +288,36 @@ def do_multi_gpu_plain_pgd_with_step_reduction(lambda_block, x_block_0, nnt, n, 
     del big_c_block
     del grad_block
     y_block = zip_map([c_block, n, lambda_block], lambda c, _n, l: c + _n.T @ l)
+    return lambda_block, y_block
+
+
+def do_pgd_with_backtracking(lambda_block, x_block_0, nnt, n, c_block, n_iter: int, beta: float, max_back: int):
+    mod = cp.get_array_module(lambda_block)
+    big_c_block = x_block_0 + n @ c_block
+    num_cols = mod.shape(lambda_block)[1]
+    
+    def get_f(current_lambda):
+        current_lambda_t = current_lambda.T
+        return 0.5 * mod.sum((current_lambda_t @ nnt) * current_lambda_t, axis=1) + \
+            mod.sum(current_lambda * big_c_block, axis=0)
+    
+    def get_generalized_grad(current_lambda, step_sizes, grad_block):
+        return (current_lambda - mod.clip(current_lambda - step_sizes * grad_block, a_min=0, a_max=None)) / step_sizes
+    
+    def get_step_sizes(current_lambda, grad_block):
+        step_sizes = mod.ones(shape=(num_cols,), dtype=current_lambda.dtype)
+        for _ in range(max_back):
+            current_generalized_grad = get_generalized_grad(current_lambda, step_sizes, grad_block)
+            generalized_f = get_f(current_lambda - step_sizes * current_generalized_grad)
+            interpolated_f = get_f(current_lambda) + \
+                             step_sizes * mod.linalg.norm(current_generalized_grad, axis=0)**2 / 2 - \
+                             step_sizes * mod.sum(current_generalized_grad * grad_block, axis=0)
+            step_sizes = step_sizes * (1 - beta * (generalized_f > interpolated_f))
+        return step_sizes
+    
+    for _ in range(n_iter):
+        grad_block = nnt @ lambda_block + big_c_block
+        step_sizes = get_step_sizes(lambda_block, grad_block)
+        mod.clip(lambda_block - step_sizes * grad_block, a_min=0, a_max=None, out=lambda_block)
+    y_block = c_block + n.T @ lambda_block
     return lambda_block, y_block

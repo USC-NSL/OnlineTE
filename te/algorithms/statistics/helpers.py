@@ -2,8 +2,8 @@ import time
 from typing import Dict, Callable, Optional, Any
 from te.algorithms.statistics.base import (StatisticsCollectorBase, get_global_memory_usage_collecotor, 
                                            get_global_execution_time_collector)
-from te.algorithms.gpu_utils import (synchronize_to_all, synchronize_to_device, get_total_reserved_gpu_memory_usage, 
-                                     get_total_used_gpu_memory_usage)
+from te.algorithms.array_utils.gpu_utils import (synchronize_to_all, synchronize_to_device, get_total_reserved_gpu_memory_usage, 
+                                                 get_total_used_gpu_memory_usage)
 
 
 def before_and_after_helper(collector: StatisticsCollectorBase, element_name: str, 

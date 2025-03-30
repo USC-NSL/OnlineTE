@@ -47,9 +47,13 @@ def make_model(name: str, params: SolverParams, env: Optional[gurobipy.Env], ver
         print(as_bold(
             "Created Gurobi Model With:\n"
             f"\tMethod: {method_to_str[params.Method]}\n"
-            f"\tOptimality Tolerance (OptimalityTol/BarConvTol): {params.ConvTol}\n"
-            f"\tCosntraint Feasibility Tolerance (FeasibilityTol): {params.FeasibilityTol}\n"
+            f"\tSimplex Optimality Tolerance (OptimalityTol): {model.Params.OptimalityTol}\n"
+            f"\tBarrier Optimality Tolerance (BarConvTol): {model.Params.BarConvTol}\n"
+            f"\tCosntraint Feasibility Tolerance (FeasibilityTol): {model.Params.FeasibilityTol}\n"
         ))
+    
+    if model.Params.OptimalityTol != model.Params.BarConvTol:
+        print(as_warning(f'Simplex and Barrier have different convergence tolerances. Make sure this is actualy intended to be!!'))
 
     return model
 

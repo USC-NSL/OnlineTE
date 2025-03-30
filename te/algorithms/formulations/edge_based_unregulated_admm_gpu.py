@@ -24,6 +24,7 @@ from te.algorithms.statistics.helpers import (record_cpu_runtime, record_gpu_run
                                               record_used_gpu_memory)
 from te.algorithms.array_utils import set_global_precision
 from te.algorithms.array_utils.gpu_utils import *
+from te.algorithms.array_utils.cpu_utils import *
 
 
 @dataclass
@@ -73,7 +74,8 @@ class GPUUnregulatedADMMSolverParams(GurobiSolverParams):
         assert self.FloatPrecision in {'half', 'single', 'double'}, \
             as_fail(f"Unknown float precision string specifier {self.FloatPrecision}")
         set_global_precision(self.FloatPrecision)
-        set_precision()
+        set_cpu_float_precision()
+        set_gpu_float_precision()
 
 
 class GPUUnregulatedADMMLP(TrafficEngineeringLP):
@@ -312,6 +314,8 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
         self._model_controller = MODEL_CONTROLLER
     
     def _get_F(self) -> GPUArray:
+        # print(f'ZO MEAN (FOR F): {str(round(np.mean(self._Zo_e), 8))}')
+        # print(f'R MEAN (FOR F): {str(round(np.mean(self._r_e), 8))}')
         return as_gpu_array(self._Zo_e + self._r_e - self._Xo_e_start)
     
     def _set_X_ek(self):
@@ -358,6 +362,8 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
         
         MODEL_CONTROLLER.setObjective(OBJECTIVE_CONTROLLER, GRB.MINIMIZE)
         self._objective_controller = OBJECTIVE_CONTROLLER
+        # print(f'(AFTER OBJ UPDATE) ZO MEAN: {str(round(np.mean(ZO_E), 8))}')
+        # print(f'(AFTER OBJ UPDATE) R MEAN: {str(round(np.mean(R_E), 8))}')
     
     def _add_objective(self):
         assert self._model_controller is not None
@@ -370,6 +376,10 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
         Y_BAR = self._Y_bar_t
         P_BAR = self._P_bar_t
         U_T = self._u_t
+        # print(f'Y MEAN (BEFORE): {str(cp.round(cp.mean(Y_TK), 8))}')
+        # print(f'Y BAR MEAN: {str(cp.round(cp.mean(Y_BAR), 8))}')
+        # print(f'P BAR MEAN: {str(cp.round(cp.mean(P_BAR), 8))}')
+        # print(f'U MEAN: {str(cp.round(cp.mean(U_T), 8))}')
         return Y_TK - cp.expand_dims(Y_BAR - P_BAR + U_T, axis=1)
 
     @record_gpu_runtime('NetworkUpdate')
@@ -386,6 +396,9 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
         X_EK_START = self._X_ek_start
         
         t_start = time.time()
+        # print(f'X0 MEAN: {str(cp.round(cp.mean(X_EK_START), 8))}')
+        # print(f'C MEAN: {str(cp.round(cp.mean(C_TK), 8))}')
+        # print(f'LAMBDA MEAN (BEFORE): {str(cp.round(cp.mean(LAMBDA_EK), 8))}')
         lambda_block, y_block = do_plain_pgd_with_step_reduction(
             LAMBDA_EK, X_EK_START, NNT_M, NULL_M, C_TK, GAMMA, 
             PGD_ITERS, KAPPA, epoch)
@@ -394,6 +407,8 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
         
         self._lambda_ek = lambda_block
         self._Y_tk = y_block
+        # print(f'Y MEAN: {str(cp.round(cp.mean(self._Y_tk), 8))}')
+        # print(f'LAMBDA MEAN (AFTER): {str(cp.round(cp.mean(self._lambda_ek), 8))}')
         return time.time() - t_start
     
     @record_gpu_runtime('YBarUpdate')
@@ -421,6 +436,7 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
         U_T = self._u_t
         Y_BAR_T = self._Y_bar_t
         F_E = self._get_F()
+        # print(f'F MEAN: {str(cp.round(cp.mean(F_E), 8))}')
         NULL_M = self._NULL_M
         P_BAR_T = (NULL_M.T @ F_E + (ETA/RHO) * (U_T + Y_BAR_T)) / (K + (ETA/RHO))
         self._P_bar_t = P_BAR_T
@@ -470,13 +486,16 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
         
         NUM_EDGES = self._NUM_EDGES
         XO_E = self._Xo_e
-        XO_E_ = np.array([XO_E[e].X for e in range(NUM_EDGES)], dtype=np.float16)
+        XO_E_ = np.array([XO_E[e].X for e in range(NUM_EDGES)], dtype=np.float64)
         X_KE_SUM_E = self._get_X_k_sum()
         PARAMS = self._solver_params
         Zo_e = (XO_E_ + X_KE_SUM_E) / 2
-        self._Zo_e_old = np.array(self._Zo_e, dtype=np.float16)
+        self._Zo_e_old = np.array(self._Zo_e, dtype=np.float64)
         self._Xo_e_sol = XO_E_
         self._Zo_e = Zo_e
+        # print(f'XO_E_ MEAN: {str(round(np.mean(XO_E_), 8))}')
+        # print(f'X_KE_SUM_E MEAN: {str(round(np.mean(X_KE_SUM_E), 8))}')
+        # print(f'ZO MEAN: {str(round(np.mean(Zo_e), 8))}')
         if PARAMS.UseVariableRho:
             self._outer_primal_residual_norm = careful_norm((Zo_e - XO_E_), scaled=True) + careful_norm((Zo_e - X_KE_SUM_E), scaled=True)
             self._outer_dual_residual_norm = careful_norm((Zo_e - self._Zo_e_old), scaled=True) * self._rho_coeff
@@ -593,7 +612,7 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
         max_iters = PARAMS.NumberOfEpochs
         try:
             for epoch in tqdm.tqdm(range(PARAMS.NumberOfEpochs)):
-            # while True:
+            # for epoch in range(PARAMS.NumberOfEpochs):
                 if ((max_iters is not None) and (epoch == max_iters)):
                     break
                 t_network = 0

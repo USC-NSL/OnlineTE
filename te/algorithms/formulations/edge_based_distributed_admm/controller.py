@@ -12,10 +12,10 @@ from te.algorithms.base import TrafficEngineeringLP, SolverParams
 from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
 from topologies.utils import get_edge_indexing, get_graph_M_matrix, get_adjacency_null_space
-from utils.logging import as_fail, as_info
+from utils.logging import as_info
 from te.algorithms.array_utils import set_global_precision
-from te.algorithms.array_utils.cpu_utils import cpu_array, cpu_zeros, set_precision
-from te.algorithms.utils import check_capacity_constraint, optimize_or_scream, make_model, is_satisfied
+from te.algorithms.array_utils.cpu_utils import cpu_array, cpu_zeros, set_cpu_float_precision
+from te.algorithms.utils import check_capacity_constraint, optimize_or_scream, make_model
 from te.algorithms.sub_algorithms.feasible_assignment import get_feasible_flow_assignment
 from te.algorithms.sub_algorithms.admm_consensus_test import outer_admm_consensus_test, inner_admm_consensus_test
 from te.algorithms.sub_algorithms.flow_conservation_test import check_flow_conservation
@@ -81,7 +81,7 @@ class ControllerNode(TrafficEngineeringLP):
         self._objective_gap_trace = []
 
         set_global_precision(solver_params.Precision)
-        set_precision()
+        set_cpu_float_precision()
 
         self._set_initial_feasible_solution()
         self._set_NULL_M()
@@ -229,7 +229,7 @@ class ControllerNode(TrafficEngineeringLP):
 
         PARAMS = self._solver_params
         MODEL_CONTROLLER: gurobipy.Model = \
-            make_model('EdgeBasedDistributedTE_Controller', params=PARAMS, env=ENV)
+            make_model('EdgeBasedDistributedTE_Controller', params=PARAMS, env=ENV, BarConvTol=PARAMS.BigGamma)
         
         self._Xo_e = MODEL_CONTROLLER.addVars(NUM_EDGES, lb=0.0, vtype=GRB.CONTINUOUS, name='XO_E')
         self._utility = MODEL_CONTROLLER.addVar(lb=0.0, ub=1.0, vtype=GRB.CONTINUOUS, name='U')
@@ -237,6 +237,8 @@ class ControllerNode(TrafficEngineeringLP):
         self._model_controller = MODEL_CONTROLLER
     
     def _get_F(self) -> np.ndarray:
+        # print(f'ZO MEAN (FOR F): {str(round(np.mean(self._Zo_e), 8))}')
+        # print(f'R MEAN (FOR F): {str(round(np.mean(self._r_e), 8))}')
         return self._Zo_e + self._r_e - self._Xo_e_start
     
     def _set_X_ek(self):
@@ -271,6 +273,8 @@ class ControllerNode(TrafficEngineeringLP):
             OBJECTIVE_CONTROLLER += (RHO/2) * (XO_E[e] - ZO_E[e] + R_E[e]) ** 2
         MODEL_CONTROLLER.setObjective(OBJECTIVE_CONTROLLER, GRB.MINIMIZE)
         self._objective_controller = OBJECTIVE_CONTROLLER
+        # print(f'(AFTER OBJ UPDATE) ZO MEAN: {str(round(np.mean(ZO_E), 8))}')
+        # print(f'(AFTER OBJ UPDATE) R MEAN: {str(round(np.mean(R_E), 8))}')
     
     def _add_objective(self):
         assert self._model_controller is not None
@@ -292,6 +296,7 @@ class ControllerNode(TrafficEngineeringLP):
         U_T = self._u_t
         Y_BAR_T = self._Y_bar_t
         F_E = self._get_F()
+        # print(f'F MEAN: {str(round(np.mean(F_E), 8))}')
         NULL_M = self._NULL_M
         P_BAR_T = (NULL_M.T @ F_E + (ETA/RHO) * (U_T + Y_BAR_T)) / (K + (ETA/RHO))
         self._P_bar_t = P_BAR_T
@@ -329,6 +334,9 @@ class ControllerNode(TrafficEngineeringLP):
         X_KE_SUM_E = np.sum([serialized_message_to_array(chunk) for chunk in serialized_chunks], axis=0)
         Zo_e = (XO_E_ + X_KE_SUM_E) / 2
         self._Zo_e = Zo_e
+        # print(f'XO_E_ MEAN: {str(round(np.mean(XO_E_), 8))}')
+        # print(f'X_KE_SUM_E MEAN: {str(round(np.mean(X_KE_SUM_E), 8))}')
+        # print(f'ZO MEAN: {str(round(np.mean(Zo_e), 8))}')
 
     def _update_r_e(self):
         assert self._model_controller is not None
@@ -381,6 +389,7 @@ class ControllerNode(TrafficEngineeringLP):
         try:
             t = time.time()
             for epoch in tqdm.tqdm(range(PARAMS.NumberOfEpochs), bar_format='{l_bar}{bar:36}{r_bar}{bar:-36b}'):
+            # for epoch in range(PARAMS.NumberOfEpochs):
                 optimize_or_scream(MODEL_CONTROLLER)
                 for i in reversed(range(PARAMS.NumberOfNetworkUpdates)):
                     self._do_network_update(epoch)
