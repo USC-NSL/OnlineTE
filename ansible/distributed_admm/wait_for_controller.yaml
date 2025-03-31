@@ -1,0 +1,25 @@
+---
+# Spawn workers and a controller node for a distributed test
+- name: Check Arguments
+  hosts: workers_group
+  remote_user: aghavidel
+  tasks:
+    - name: Start Worker Services
+      command: systemctl --user start te_worker.service
+    - name: Pause for the controller ...
+      ansible.builtin.pause:
+        prompt: "Bring up the controller. Once done, press <ENTER> to cleanup ..."
+        echo: false
+    - name: Stop Worker Services
+      command: systemctl --user stop te_worker.service
+
+- name: Get Controller Plot
+  hosts: controller_group
+  remote_user: aghavidel
+  tasks:
+    - name: Get `res.png`
+      fetch:
+        src: /home/aghavidel/DistributedTE/res.png
+        dest: /project/distte/notebooks/res.png
+        flat: true
+  
