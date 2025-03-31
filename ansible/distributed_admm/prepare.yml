@@ -65,7 +65,7 @@
         line: "{{ item.key }}={{ item.value }}"
       with_items: "{{ worker_env }}"
     - name: Source ENV
-      shell: "source /etc/environment"
+      command: . /etc/environment
 
 - name: Enable TE Worker Service
   hosts: workers_group
