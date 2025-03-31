@@ -1,7 +1,7 @@
 ---
 # Prepare controller/worker nodes from scratch.
 - name: Configure APT dependencies
-  hosts: all
+  hosts: controller_group:workers_group
   become: true
   tasks:
 
@@ -16,7 +16,7 @@
     when: '"git" not in ansible_facts.packages'
 
 - name: Clone repo and configure PIP
-  hosts: all
+  hosts: controller_group:workers_group
   remote_user: aghavidel
   tasks:
 
@@ -32,7 +32,7 @@
       requirements: /home/aghavidel/DistributedTE/requirements.txt
 
 - name: Get the zoo
-  hosts: controller
+  hosts: controller_group
   remote_user: aghavidel
   tasks:
 
@@ -40,9 +40,25 @@
     command: chdir=/home/aghavidel/DistributedTE python3 -m topologies.get_topology_zoo
 
 - name: Prepare gRPC
-  hosts: all
+  hosts: controller_group:workers_group
   remote_user: aghavidel
   tasks:
 
   - name: Compile protobuffs
     command: chdir=/home/aghavidel/DistributedTE python3 protos/__init__.py
+
+- name: Copy TE Worker Service File
+  hosts: workers_group
+  become: true
+  tasks:
+
+    - name: Copy TE Worker Service File To Systemd
+      command: chdir=/home/aghavidel/DistributedTE sudo cp ansible/distributed_admm/te_worker.service /etc/systemd/user
+
+- name: Enable TE Worker Service
+  hosts: workers_group
+  remote_user: aghavidel
+  tasks:
+
+    - name: Restart Systemd (User Level)
+      command: systemctl --user daemon-reload

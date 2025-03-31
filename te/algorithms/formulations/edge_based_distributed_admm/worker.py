@@ -214,7 +214,11 @@ class NetworkWorkerNodeListener(DistributedADMMSolverServicer):
 
 if __name__ == '__main__':
     import socket
+    from utils.logging import as_fail
     worker_id = int(sys.argv[1])
+    if worker_id < 0:
+        print(as_fail('Worker ID was not properly initialized!'))
+        sys.exit(-1)
     rpc_params = DistributedADMMWorkerRPCParams(ip=socket.gethostbyname(socket.gethostname()), port=13000 + worker_id)
     
     NetworkWorkerNode.spawn_and_wait(worker_id, rpc_params)
