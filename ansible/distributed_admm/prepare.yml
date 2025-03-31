@@ -59,6 +59,7 @@
   hosts: workers_group
   remote_user: aghavidel
   tasks:
-
+    - name: Give EXEC Premission To Launcher
+      command: chdir=/home/aghavidel/DistributedTE chmod +x ansible/distributed_admm/launch_worker.sh
     - name: Restart Systemd (User Level)
       command: systemctl --user daemon-reload
