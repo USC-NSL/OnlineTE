@@ -2,6 +2,7 @@
 Description=TE Worker Node Service
 
 [Service]
+Environment="WORKER_ID=-1"
 WorkingDirectory=/home/aghavidel/DistributedTE
 ExecStart=/home/aghavidel/DistributedTE/ansible/distributed_admm/launch_worker.sh
 
