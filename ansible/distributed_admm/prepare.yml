@@ -38,7 +38,7 @@
 
   - name: Stat the Zoo directory
     ansible.builtin.stat:
-      path: "{{ /home/aghavidel/DistributedTE/topologies/zoo }}"
+      path: /home/aghavidel/DistributedTE/topologies/zoo
     register: zoo_dir
   - name: Download and unzip the Topology Zoo dataset
     command: chdir=/home/aghavidel/DistributedTE python3 -m topologies.get_topology_zoo
