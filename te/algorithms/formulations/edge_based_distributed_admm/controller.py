@@ -1,32 +1,25 @@
-import grpc
 import time
 import tqdm
 import gurobipy
 import numpy as np
-import grpc._channel
 import networkx as nx
 from typing import List, Tuple, Optional
 from gurobipy import GRB, GurobiError
-from concurrent.futures import ThreadPoolExecutor, wait
 from te.algorithms.base import TrafficEngineeringLP, SolverParams
 from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
 from topologies.utils import get_edge_indexing, get_graph_M_matrix, get_adjacency_null_space
 from utils.logging import as_info
 from te.algorithms.array_utils import set_global_precision
-from te.algorithms.array_utils.cpu_utils import cpu_array, cpu_zeros, set_cpu_float_precision
+from te.algorithms.array_utils.cpu_utils import (CPUArray, DoublePrecisionCPUArray, 
+                                                 cpu_array, cpu_zeros, cpu_double_array, 
+                                                 set_cpu_float_precision)
 from te.algorithms.utils import check_capacity_constraint, optimize_or_scream, make_model
 from te.algorithms.sub_algorithms.feasible_assignment import get_feasible_flow_assignment
 from te.algorithms.sub_algorithms.admm_consensus_test import outer_admm_consensus_test, inner_admm_consensus_test
 from te.algorithms.sub_algorithms.flow_conservation_test import check_flow_conservation
 from te.algorithms.formulations.edge_based_distributed_admm import DistributedADMMSolverParams, DistributedADMMControllerRPCParams
-from te.algorithms.formulations.edge_based_distributed_admm.utils import (serialized_message_to_array, array_to_serialized_message,
-                                                                          chunk_big_array, rebuild_chunked_array,
-                                                                          GRPC_ARRAY_STREAM_MAX_LEN)
-import protos.distributed_lp.distributed_lp_pb2 as distributed_lp_messages
-from protos.distributed_lp.distributed_lp_pb2_grpc import DistributedADMMSolverStub
-from google.protobuf.empty_pb2 import Empty
-
+from te.algorithms.formulations.edge_based_distributed_admm.controller_backends import get_backend
 
 
 class ControllerNode(TrafficEngineeringLP):
@@ -42,8 +35,8 @@ class ControllerNode(TrafficEngineeringLP):
         self._commodity_list = traffic_to_commodity(self._traffic)
 
         self._edge_indexing = get_edge_indexing(graph)
-        self._NULL_M: np.ndarray = None
-        self._NNT_M: np.ndarray = None
+        self._NULL_M: CPUArray = None
+        self._NNT_M: CPUArray = None
         
         self._T: Optional[int] = None
         self._NUM_EDGES: Optional[int] = None
@@ -53,29 +46,23 @@ class ControllerNode(TrafficEngineeringLP):
         self._model_controller: Optional[gurobipy.Model] = None
         self._objective_controller: Optional[gurobipy.QuadExpr] = None
 
-        self._capacities: Optional[np.ndarray] = None
+        self._capacities: Optional[DoublePrecisionCPUArray] = None
         self._c_norm: Optional[float] = None
 
-        self._X_ek: Optional[np.ndarray] = None
-        self._X_ek_start: Optional[np.ndarray] = None
-        self._Xo_e_start: Optional[np.ndarray] = None
+        self._X_ek: Optional[CPUArray] = None
+        self._X_ek_start: Optional[CPUArray] = None
+        self._Xo_e_start: Optional[CPUArray] = None
         self._Xo_e: Optional[gurobipy.tupledict] = None
-        self._Zo_e: Optional[np.ndarray] = None
+        self._Zo_e: Optional[CPUArray] = None
         self._utility: Optional[gurobipy.Var] = None
-        self._r_e: Optional[np.ndarray] = None
+        self._r_e: Optional[CPUArray] = None
 
-        self._P_bar_t: Optional[np.ndarray] = None
-        self._Y_bar_t: Optional[np.ndarray] = None
-        self._u_t: Optional[np.ndarray] = None
+        self._P_bar_t: Optional[CPUArray] = None
+        self._Y_bar_t: Optional[CPUArray] = None
+        self._u_t: Optional[CPUArray] = None
 
-        self._worker_channels: List[grpc.Channel] = [
-            grpc.insecure_channel(target=":".join([ip, str(port)]))
-                for ip, port in self._rpc_params.addr_list
-        ]
-        self._worker_stubs: List[DistributedADMMSolverStub] = [
-            DistributedADMMSolverStub(ch) for ch in self._worker_channels
-        ]
-        self._broadcast_thread_pool = ThreadPoolExecutor(max_workers=rpc_params.num_threads)
+        self._backend = get_backend('gRPC-synchronous')(rpc_params, solver_params.NumWorkers)
+        # self._backend = get_backend('gRPC-asynchronous')(rpc_params, solver_params.NumWorkers)
 
         self._objective_trace = []
         self._objective_gap_trace = []
@@ -90,7 +77,7 @@ class ControllerNode(TrafficEngineeringLP):
 
     @property
     def alg_name(self) -> str:
-        return 'Distributed Unregulated ADMM (gRPC)'
+        return 'Distributed Unregulated ADMM'
 
     @property
     def graph(self) -> nx.DiGraph:
@@ -144,54 +131,17 @@ class ControllerNode(TrafficEngineeringLP):
     def _initialize_variables_and_residuals(self):
         T = self._T
         NUM_EDGES = self._NUM_EDGES
-        self._capacities = cpu_array([item[-1] for item in self._graph.edges(data='capacity')])
+        self._capacities = cpu_double_array([item[-1] for item in self._graph.edges(data='capacity')])
         self._c_norm = np.linalg.norm(self._capacities)
-        self._r_e = cpu_zeros(shape=(NUM_EDGES,))
-        self._u_t = cpu_zeros(shape=(T,))
+        self._r_e = cpu_zeros((NUM_EDGES,))
+        self._u_t = cpu_zeros((T,))
         self._Zo_e = cpu_array(self._Xo_e_start)
         self._P_bar_t = cpu_zeros((T,))
         self._Y_bar_t = cpu_zeros((T,))
         self._X_ek = cpu_array(self._X_ek_start)
     
-    def is_node_ready(self, worker_id: int) -> bool:
-        try:
-            return self._worker_stubs[worker_id].QueryState(Empty()).ready
-        except grpc._channel._InactiveRpcError:
-            return False
-    
     def are_network_nodes_ready(self) -> bool:
-        return all(self._broadcast_thread_pool.map(
-            self.is_node_ready, range(self._solver_params.NumWorkers)
-        ))
-
-    def _initialize_worker_nodes(self):
-        NUM_WORKERS = self._solver_params.NumWorkers
-        NULL_M = self._NULL_M
-        X_EK_START_CHUNKS = np.array_split(self._X_ek_start, NUM_WORKERS, axis=1)
-        WORKERS = self._worker_stubs
-
-        # Update solver parameters
-        wait([
-            self._broadcast_thread_pool.submit(stub.SetSolverParameters, 
-                distributed_lp_messages.SolverParameters(**self._solver_params.child_fields))
-                for stub in WORKERS
-        ])
-
-        # Now, send the initial solution
-        wait([
-            self._broadcast_thread_pool.submit(
-                stub.SetInitialFeasibleSolution, chunk_big_array(X_EK_START_CHUNKS[i], GRPC_ARRAY_STREAM_MAX_LEN)
-            ) for i, stub in enumerate(WORKERS)
-        ])
-          
-        # Finally, the rest of the things to know ...
-        wait([
-            self._broadcast_thread_pool.submit(stub.InitializeWorkerNode, 
-                                               distributed_lp_messages.InitMessage(
-                                                   NULL_M=array_to_serialized_message(NULL_M)
-                                               ))
-                for stub in WORKERS
-        ])
+        return self._backend.are_network_nodes_ready()
     
     def _report_problem_size(self):
         M = len(self._graph.nodes)
@@ -237,15 +187,10 @@ class ControllerNode(TrafficEngineeringLP):
         self._model_controller = MODEL_CONTROLLER
     
     def _get_F(self) -> np.ndarray:
-        # print(f'ZO MEAN (FOR F): {str(round(np.mean(self._Zo_e), 8))}')
-        # print(f'R MEAN (FOR F): {str(round(np.mean(self._r_e), 8))}')
         return self._Zo_e + self._r_e - self._Xo_e_start
     
     def _set_X_ek(self):
-        chunks = self._broadcast_thread_pool.map(
-            lambda stub: rebuild_chunked_array(stub.RequestChunk(Empty())), self._worker_stubs
-        )
-        self._X_ek = self._X_ek_start + self._NULL_M @ np.hstack(list(chunks))
+        self._X_ek = self._backend.get_X_ek(basis=self._NULL_M, initial_feasible_solution=self._X_ek_start)
     
     def _add_constraints(self):
         assert self._model_controller is not None
@@ -273,8 +218,6 @@ class ControllerNode(TrafficEngineeringLP):
             OBJECTIVE_CONTROLLER += (RHO/2) * (XO_E[e] - ZO_E[e] + R_E[e]) ** 2
         MODEL_CONTROLLER.setObjective(OBJECTIVE_CONTROLLER, GRB.MINIMIZE)
         self._objective_controller = OBJECTIVE_CONTROLLER
-        # print(f'(AFTER OBJ UPDATE) ZO MEAN: {str(round(np.mean(ZO_E), 8))}')
-        # print(f'(AFTER OBJ UPDATE) R MEAN: {str(round(np.mean(R_E), 8))}')
     
     def _add_objective(self):
         assert self._model_controller is not None
@@ -282,10 +225,7 @@ class ControllerNode(TrafficEngineeringLP):
         self._update_controller_objective()
 
     def _do_network_update(self, epoch: int):
-        message = distributed_lp_messages.NetworkUpdateRequest(epoch=epoch)
-        serialized_y_bar_chunks = self._broadcast_thread_pool.map(
-            lambda stub: stub.DoNetworkUpdate(message), self._worker_stubs)
-        self._Y_bar_t = np.mean([serialized_message_to_array(chunk) for chunk in serialized_y_bar_chunks], axis=0)
+        self._Y_bar_t = self._backend.do_network_update(epoch)
     
     def _update_P_bar(self):
         assert self._model_controller is not None
@@ -296,7 +236,6 @@ class ControllerNode(TrafficEngineeringLP):
         U_T = self._u_t
         Y_BAR_T = self._Y_bar_t
         F_E = self._get_F()
-        # print(f'F MEAN: {str(round(np.mean(F_E), 8))}')
         NULL_M = self._NULL_M
         P_BAR_T = (NULL_M.T @ F_E + (ETA/RHO) * (U_T + Y_BAR_T)) / (K + (ETA/RHO))
         self._P_bar_t = P_BAR_T
@@ -313,54 +252,27 @@ class ControllerNode(TrafficEngineeringLP):
     def _reconvene_network_updates(self):
         self._update_P_bar()
         self._update_u_t()
-        message = distributed_lp_messages.UpdateMessage(
-            P_bar_t = array_to_serialized_message(self._P_bar_t),
-            u_t = array_to_serialized_message(self._u_t),
-            Y_bar_t = array_to_serialized_message(self._Y_bar_t)
+        self._backend.reconvene_network_updates(
+            P_bar_t=self._P_bar_t,
+            Y_bar_t=self._Y_bar_t,
+            u_t=self._u_t
         )
-        wait([
-            self._broadcast_thread_pool.submit(stub.UpdateWorkerNode, message)
-                for stub in self._worker_stubs
-        ])
-
-    def _update_Zo_e(self):
+    
+    def _update_Zo_e_and_r_e(self):
         assert self._model_controller is not None
 
         NUM_EDGES = self._NUM_EDGES
-        XO_E = self._Xo_e
-        XO_E_ = cpu_array([XO_E[e].X for e in range(NUM_EDGES)])
-        serialized_chunks = self._broadcast_thread_pool.map(
-            lambda stub: stub.RequestAggregate(Empty()), self._worker_stubs)
-        X_KE_SUM_E = np.sum([serialized_message_to_array(chunk) for chunk in serialized_chunks], axis=0)
-        Zo_e = (XO_E_ + X_KE_SUM_E) / 2
-        self._Zo_e = Zo_e
-        # print(f'XO_E_ MEAN: {str(round(np.mean(XO_E_), 8))}')
-        # print(f'X_KE_SUM_E MEAN: {str(round(np.mean(X_KE_SUM_E), 8))}')
-        # print(f'ZO MEAN: {str(round(np.mean(Zo_e), 8))}')
-
-    def _update_r_e(self):
-        assert self._model_controller is not None
-
         R_E = self._r_e
         XO_E = self._Xo_e
-        NUM_EDGES = self._NUM_EDGES
         XO_E_ = cpu_array([XO_E[e].X for e in range(NUM_EDGES)])
-        serialized_chunks = self._broadcast_thread_pool.map(
-            lambda stub: stub.RequestAggregate(Empty()), self._worker_stubs)
-        X_KE_SUM_E = np.sum([serialized_message_to_array(chunk) for chunk in serialized_chunks], axis=0)
+        X_KE_SUM_E = self._backend.get_X_ek_sum()
+
+        Zo_e = (XO_E_ + X_KE_SUM_E) / 2
+        self._Zo_e = Zo_e
         self._r_e = R_E + (XO_E_ - X_KE_SUM_E) / 2
-    
-    def _close_node(self, worker_id: int):
-        try:
-            self._worker_stubs[worker_id].Close(Empty())
-        except:
-            pass
 
     def close(self):
-        wait([
-            self._broadcast_thread_pool.submit(lambda worker_id: self._close_node(worker_id), i)
-                for i in range(len(self._worker_stubs))
-        ], timeout=5)
+        self._backend.close()
         if self._model_controller:
             self._model_controller.close()
         if self._env:
@@ -373,7 +285,11 @@ class ControllerNode(TrafficEngineeringLP):
         self._add_constraints()
         self._add_objective()
         print(f"Built model in {str(np.round(time.time() - t_start, 2))} seconds.")
-        self._initialize_worker_nodes()
+        self._backend.initialize_worker_nodes(
+            self._solver_params,
+            self._NULL_M, 
+            self._X_ek_start
+        )
     
     def reset(self, with_params: False):
         self._model_controller.reset()
@@ -396,8 +312,7 @@ class ControllerNode(TrafficEngineeringLP):
                     if i > 0:
                         self._reconvene_network_updates()
 
-                self._update_Zo_e()
-                self._update_r_e()
+                self._update_Zo_e_and_r_e()
                 self._reconvene_network_updates()
                 self._update_controller_objective()
 
@@ -459,7 +374,22 @@ class ControllerNode(TrafficEngineeringLP):
         ]
     
     def update_traffic_matrix(self, tm):
-        raise NotImplementedError
+        pass
+        # # First, record the matrix and the new commodities
+        # self._traffic = tm
+        # self._commodity_list = traffic_to_commodity(self._traffic)
+        # # Get a new feasible solution (if the matrix did not change too much),
+        # # then this also will not change too much.
+        # self._set_initial_feasible_solution()
+        # # Send the new solution
+        # NUM_WORKERS = self._solver_params.NumWorkers
+        # X_EK_START_CHUNKS = np.array_split(self._X_ek_start, NUM_WORKERS, axis=1)
+        # WORKERS = self._worker_stubs
+        # wait([
+        #     self._broadcast_thread_pool.submit(
+        #         stub.SetInitialFeasibleSolution, chunk_big_array(X_EK_START_CHUNKS[i], GRPC_ARRAY_STREAM_MAX_LEN)
+        #     ) for i, stub in enumerate(WORKERS)
+        # ])
     
     def initialize_to(self, solution: EdgeBasedMinimizeMaximumUtilitySolution):
         raise NotImplementedError

@@ -30,6 +30,7 @@ class ExponentialTrafficMatrixParams(TrafficMatrixParamsBase):
 
 class CustomTrafficMatrix(TrafficMatrixBase):
     def __init__(self, tm: np.ndarray = None, seed: int = None, params=None):
+        np.fill_diagonal(tm, 0.0)
         self.tm = tm
     
     def _make_tm(self):

@@ -1,6 +1,7 @@
 import contextlib
 import numpy as np
 import networkx as nx
+from itertools import groupby
 from collections import Counter
 from joblib import Parallel, delayed
 from typing import Optional, List, Tuple, NewType
@@ -31,6 +32,7 @@ VIOLATION_LOOP = ViolationType(1)
 VIOLATION_LEAK = ViolationType(2)
 VIOLATION_INFLOW = ViolationType(3)
 VIOLATION_TRANSIT = ViolationType(4)
+LIST_OF_VIOLATION_TYPES = [VIOLATION_OUTFLOW, VIOLATION_LOOP, VIOLATION_LEAK, VIOLATION_INFLOW, VIOLATION_TRANSIT]
 
 
 LEVEL_NEGLIGIBLE = ViolationSeverity(0)
@@ -91,17 +93,56 @@ def get_violation_severity(violation: Violation) -> ViolationSeverity:
         raise ValueError(f'Unknown violation type: {violation_type}')
 
 
-def show_violation_severity(violations: List[Violation], total: int):
-    levels = Counter(get_violation_severity(v) for v in violations)
+def show_violation_severity(violations: List[Violation], number_of_commodities: int, number_of_nodes: int):
+    level_key = lambda v: get_violation_severity(v)
+    type_key = lambda v: v[0]
+
+    levels = {level: [] for level in (LEVEL_NEGLIGIBLE, LEVEL_MILD, LEVEL_SEVERE)}
+    for level, violations in groupby(sorted(violations, key=level_key), key=level_key):
+        levels[level] = list(violations)
     neg = levels[LEVEL_NEGLIGIBLE]
     mid = levels[LEVEL_MILD]
     sev = levels[LEVEL_SEVERE]
-    if neg > 0:
-        print(as_info(f'Negligible Violations: {neg} ({str(round(neg/total*100, 1))}% of constraints)'))
-    if mid > 0:
-        print(as_warning(f'Mild Violations: {mid} ({str(round(mid/total*100, 1))})% of constraints'))
-    if sev > 0:
-        print(as_fail(f'Severe Violations: {sev} ({str(round(sev/total*100, 1))})% of constraints'))
+
+    constraint_numbers = {
+        VIOLATION_OUTFLOW: number_of_commodities,
+        VIOLATION_INFLOW: number_of_commodities,
+        VIOLATION_LEAK: number_of_commodities,
+        VIOLATION_LOOP: number_of_commodities,
+        VIOLATION_TRANSIT: number_of_commodities * (number_of_nodes - 2)
+    }
+    constraint_names = {
+        VIOLATION_OUTFLOW: 'Source Outflow',
+        VIOLATION_INFLOW: 'Destination Inflow',
+        VIOLATION_LEAK: 'Destination Consume',
+        VIOLATION_LOOP: 'Source Produce',
+        VIOLATION_TRANSIT: 'Transit Conservation'
+    }
+
+    if len(neg) > 0:
+        print(as_info(f'Negligible Violations:'))
+        groups = Counter(type_key(item) for item in neg)
+        for violation_type in LIST_OF_VIOLATION_TYPES:
+            if groups[violation_type] == 0:
+                continue
+            print(as_info(f'\t{constraint_names[violation_type]}: {groups[violation_type]}' 
+                          f'({str(round(groups[violation_type]/constraint_numbers[violation_type]*100, 1))}% of constraints)'))
+    if len(mid) > 0:
+        print(as_warning(f'Mild Violations:'))
+        groups = Counter(type_key(item) for item in mid)
+        for violation_type in LIST_OF_VIOLATION_TYPES:
+            if groups[violation_type] == 0:
+                continue
+            print(as_warning(f'\t{constraint_names[violation_type]}: {groups[violation_type]}' 
+                             f'({str(round(groups[violation_type]/constraint_numbers[violation_type]*100, 1))}% of constraints)'))
+    if len(sev) > 0:
+        print(as_fail(f'Severe Violations:'))
+        groups = Counter(type_key(item) for item in sev)
+        for violation_type in LIST_OF_VIOLATION_TYPES:
+            if groups[violation_type] == 0:
+                continue
+            print(as_fail(f'\t{constraint_names[violation_type]}: {groups[violation_type]}' 
+                          f'({str(round(groups[violation_type]/constraint_numbers[violation_type]*100, 1))}% of constraints)'))
 
 
 def _check_centralized_flow_conservation(
@@ -198,4 +239,4 @@ def check_flow_conservation(
     if report:
         report_violations(violations)
     else:
-        show_violation_severity(violations, K * graph.number_of_nodes())
+        show_violation_severity(violations, K, graph.number_of_nodes())

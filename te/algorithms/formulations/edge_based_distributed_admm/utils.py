@@ -1,3 +1,4 @@
+import grpc
 import struct
 import numpy as np
 import protos.distributed_lp.distributed_lp_pb2 as distributed_lp_messages
@@ -52,4 +53,15 @@ def rebuild_chunked_array(chunks: Union[Iterator[distributed_lp_messages.Chunk],
             arrays.append(cpu_frombuffer_serial(chunk.data))
     else:
         raise ValueError(f'Unexpected type: {type(chunks)}')
+    return np.hstack(arrays).reshape(shape)
+
+
+async def async_rebuild_chunked_array(chunk_async_stream: grpc.aio._call.UnaryStreamCall) -> np.ndarray:
+    arrays = []
+    shape_chunk: distributed_lp_messages.Chunk = await chunk_async_stream.read()
+    shape = struct.unpack(array_2d_dim_struct_format, shape_chunk.data)
+    next_chunk: distributed_lp_messages.Chunk = await chunk_async_stream.read()
+    while next_chunk != grpc.aio.EOF:
+        arrays.append(cpu_frombuffer_serial(next_chunk.data))
+        next_chunk = await chunk_async_stream.read()
     return np.hstack(arrays).reshape(shape)
