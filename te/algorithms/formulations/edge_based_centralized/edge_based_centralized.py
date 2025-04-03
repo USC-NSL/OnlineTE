@@ -9,7 +9,8 @@ from te.algorithms.base import TrafficEngineeringLP, SolverParams, GurobiSolverP
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
 from topologies.utils import get_edge_indexing
 from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
-from te.algorithms.utils import check_centralized_flow_conservation, check_capacity_constraint, make_model
+from te.algorithms.sub_algorithms.flow_conservation_test import check_flow_conservation
+from te.algorithms.utils import check_capacity_constraint, make_model
 
 
 class CentralizedEdgeBasedLP(TrafficEngineeringLP):
@@ -235,12 +236,12 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
             print(f'Error code {e.errno}: {e}')
             return -1
 
-    def check(self, feasibility_tol: Optional[float] = None, feasibility_ratio: Optional[float] = None):
+    def check(self, feasibility_tol: Optional[float] = None, feasibility_ratio: Optional[float] = None, report: bool = False):
         assert (feasibility_tol is None) ^ (feasibility_ratio is None)
         PARAMS: GurobiSolverParams = self._solver_params
-        check_centralized_flow_conservation(
+        check_flow_conservation(
             self._X_ek, self._graph, self._commodity_list,
-            PARAMS.FeasibilityTol
+            PARAMS.FeasibilityTol, report=report
         )
         check_capacity_constraint(
             self._X_ek, self._graph, self._commodity_list,

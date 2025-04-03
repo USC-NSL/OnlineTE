@@ -127,7 +127,7 @@ class NetworkWorkerNode:
         C_TK_CHUNK = self._get_current_C()
         # self._lambda_ek_chunk, self._Y_tk_chunk = \
         #     do_pgd_with_backtracking(LAMBDA_EK_CHUNK, X_EK_START_CHUNK, NNT_M, NULL_M, C_TK_CHUNK,
-        #                              PGD_ITERS, 0.8, 5)
+        #                              PGD_ITERS, 0.5, 3)
         # print(f'X0 MEAN: {str(round(np.mean(X_EK_START_CHUNK), 8))}')
         # print(f'C MEAN: {str(round(np.mean(C_TK_CHUNK), 8))}')
         # print(f'LAMBDA MEAN (BEFORE): {str(round(np.mean(LAMBDA_EK_CHUNK), 8))}')

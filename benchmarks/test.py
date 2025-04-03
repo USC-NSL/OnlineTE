@@ -1,10 +1,11 @@
 from gurobipy import GRB
-from te.algorithms.base import GurobiSolverParams, TrafficMatrixBase
-from te.algorithms.formulations.edge_based_centralized import CentralizedEdgeBasedLP
-from te.algorithms.formulations.edge_based_regularized_admm import RegularizedADMMLP, RegularizedADMMSolverParams
-from te.algorithms.formulations.edge_based_unregulated_admm import UnregulatedADMMLP, UnregulatedADMMSolverParams
-from te.algorithms.formulations.edge_based_unregulated_admm_gpu import GPUUnregulatedADMMLP, GPUUnregulatedADMMSolverParams
-from te.algorithms.formulations.edge_based_multi_gpu import MultiGPUUnregulatedADMMLP, MultiGPUUnregulatedADMMSolverParams
+from te.algorithms.formulations import (
+    CentralizedEdgeBasedLP, GurobiSolverParams,
+    UnregulatedADMMLP, UnregulatedADMMSolverParams,
+    RegularizedADMMLP, RegularizedADMMSolverParams,
+    GPUUnregulatedADMMLP, GPUUnregulatedADMMSolverParams,
+    MultiGPUUnregulatedADMMLP, MultiGPUUnregulatedADMMSolverParams
+)
 from te.algorithms.utils import test_mlu
 from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolutionParams, default_solution_name
 from topologies.utils import get_uniform_tm_problem_with_capacity_heuristic
@@ -157,8 +158,8 @@ def multi_gpu_unregulated_admm_test(topology: str, seed: int, scale_factor: floa
 
 if __name__ == '__main__':
     centralized_test(SMALL_TOPOLOGY, RNG_SEED, method=GRB.METHOD_DUAL, save_solution=True)
-    centralized_test(SMALL_TOPOLOGY, RNG_SEED, method=GRB.METHOD_BARRIER, crossover=False, save_solution=True)
-    centralized_test(SMALL_TOPOLOGY, RNG_SEED, method=GRB.METHOD_BARRIER, crossover=True, save_solution=True)
+    # centralized_test(SMALL_TOPOLOGY, RNG_SEED, method=GRB.METHOD_BARRIER, crossover=False, save_solution=True)
+    # centralized_test(SMALL_TOPOLOGY, RNG_SEED, method=GRB.METHOD_BARRIER, crossover=True, save_solution=True)
     # centralized_test(SMALL_MEDIUM_TOPOLOGY, RNG_SEED)
     # centralized_test(MEDIUM_TOPOLOGY, RNG_SEED)
     # centralized_test(HUGE_TOPOLOGY, RNG_SEED, scale_factor=200)

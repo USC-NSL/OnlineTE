@@ -12,6 +12,7 @@ from topologies.utils import (get_edge_indexing, get_node_and_out_edge_index_map
                               get_in_edge_mapping, get_edge_to_out_index_mapping,
                               get_graph_M_matrix, get_adjacency_null_space,
                               get_feasible_flow_assignment)
+from te.algorithms.sub_algorithms.admm_consensus_test import outer_admm_consensus_test
 from te.algorithms.utils import (check_centralized_flow_conservation,
                                  check_capacity_constraint,
                                  optimize_or_scream)
@@ -235,21 +236,21 @@ class SemiDistributedEdgeBasedADMMLP(TrafficEngineeringLP):
         """
         The network objective is:
 
-            \sum_e (
-                rho/2 * (\sum_k \sum_t N_et Y_tk - F_e)^2 +
-            )
+            sum_e [(
+                rho/2 * (sum_k sum_t [N_et Y_tk - F_e])^2 +
+            )]
         
-        Where `F_e := Z_oe + r_e - \sum_k X^(0)_ke`.
+        Where `F_e := Z_oe + r_e - sum_k [X^(0)_ke]`.
 
         With the auxiliary variable `Y_SUM`:
 
-            Y_SUM_t := \sum_k Y_tk
+            Y_SUM_t := sum_k [Y_tk]
         
         Which allows us to write the first part of the objective as:
 
-            \sum_e (
-                rho/2 * (\sum_t N_et Y_SUM_t - F_e)^2 +
-            )
+            sum_e [(
+                rho/2 * (sum_t [N_et Y_SUM_t - F_e])^2
+            )]
 
         Which can be easily expanded and written as a normal QuadExpr.
         """
@@ -290,7 +291,7 @@ class SemiDistributedEdgeBasedADMMLP(TrafficEngineeringLP):
 
         """
         The update rule for r_e is:
-            r_e \gets r_e + (X_oe - \sum_k X_ke)/2
+            r_e <-- r_e + (X_oe - sum_k [X_ke])/2
         """
 
         N = len(self._graph.edges)
@@ -309,7 +310,7 @@ class SemiDistributedEdgeBasedADMMLP(TrafficEngineeringLP):
 
         """
         The update rule for lambda_e is:
-            Z_oe \gets (X_oe + \sum_k X_ke)/2
+            Z_oe <-- (X_oe + sum_k [X_ke])/2
         """
 
         N = len(self._graph.edges)
@@ -383,22 +384,14 @@ class SemiDistributedEdgeBasedADMMLP(TrafficEngineeringLP):
             print(f'Error code {e.errno}: {e}')
             return -1
 
-    def check(self, feasibility_tol: Optional[float] = None, feasibility_ratio: Optional[float] = None):
-        assert (feasibility_tol is None) ^ (feasibility_ratio is None)
-        N = len(self._graph.edges)
-        X_OE = self._X_oe
+    def check(self, feasibility_tol: Optional[float] = None, feasibility_ratio: Optional[float] = None, report: bool = False):
+        NUM_EDGES = self._graph.number_of_edges()
+        XO_E = np.array([self._Xo_e[e].X for e in range(NUM_EDGES)])
         Z_OE = self._Z_oe
         X_KE = self._X_ke
         PARAMS = self._solver_params
-
-        for e in range(N):
-            primal = X_OE[e].X
-            pair = Z_OE[e]
-            primal_str = str(np.round(primal, 4))
-            pair_str = str(np.round(pair, 4))
-            assert abs(primal - pair) < 2*PARAMS.FeasibilityTol, \
-                f"Edge {e} --> ADMM pairing is not in consensus with primal variable: {primal_str} vs {pair_str}"
         
+        outer_admm_consensus_test(XO_E, Z_OE, feasibility_tol, feasibility_ratio, report=report)
         check_centralized_flow_conservation(
             X_KE, self._graph, self._commodity_list, PARAMS.FeasibilityTol
         )
@@ -434,3 +427,7 @@ class SemiDistributedEdgeBasedADMMLP(TrafficEngineeringLP):
             )
             for i, commodity in enumerate(COMMODITIES)
         ]
+    
+    def add_solution_elements(self, solution):
+        raise NotImplementedError
+    

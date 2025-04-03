@@ -3,11 +3,11 @@ import argparse
 import contextlib
 import concurrent.futures
 from typing import List, Tuple
-from te.algorithms.formulations.edge_based_distributed_admm.worker import NetworkWorkerNode
-from te.algorithms.formulations.edge_based_distributed_admm.controller import ControllerNode
-from te.algorithms.formulations.edge_based_distributed_admm import (DistributedADMMSolverParams,
-                                                                    DistributedADMMWorkerRPCParams,
-                                                                    DistributedADMMControllerRPCParams)
+from te.algorithms.formulations import (
+    NetworkWorkerNode, ControllerNode,
+    DistributedADMMSolverParams, DistributedADMMWorkerRPCParams, 
+    DistributedADMMControllerRPCParams
+)
 from te.algorithms.solution import (EdgeBasedMinimizeMaximumUtilitySolution, 
                                     EdgeBasedMinimizeMaximumUtilitySolutionParams, 
                                     default_solution_name)
@@ -31,19 +31,20 @@ HUGE_TOPOLOGY = 'Kdl'
 LOCAL_HOST = "localhost"
 BASE_PORT = 13000
 
-SOLVER_PARAMS = DistributedADMMSolverParams(
-    NumberOfEpochs=150,
-    NumberOfNetworkUpdates=2,
-    PGDIterations=2,
-    Gamma=0.9,
-    Eta=8,
-    Rho=1,
-    Kappa=0.1,
-    Seed=RNG_SEED,
-    BigGamma=1e-7,
-    Precision='double',
-    NumWorkers=2
-)
+# Default values
+DEFAULT_EPOCHS = 100
+DEFAULT_UPDATES = 4
+DEFAULT_PGD_ITERS = 2
+DEFAULT_PGD_STEP_SIZE = 1.0
+DEFAULT_PGD_REDUCTION = 0.2
+DEFAULT_ADMM_INNER = 8.0
+DEFAULT_ADMM_OUTER = 1.0
+DEFAULT_CONTROLLER_OPT_TOL = 1e-7
+DEFAULT_PRECISION = 'single'
+DEFAULT_NUM_WORKERS = 2
+
+
+SOLVER_PARAMS: DistributedADMMSolverParams = None
 
 
 def show_addrs(addrs: List[Tuple[str, int]]):
@@ -175,16 +176,23 @@ if __name__ == '__main__':
     parser.add_argument('--local', action='store_true', help='Perform the test on local network')
     
     solver_params_group = parser.add_argument_group('Solver Parameters', description='ADMM solver parameters')
-    solver_params_group.add_argument('--epochs', type=int, default=150, help='Number of epochs')
-    solver_params_group.add_argument('--updates', type=int, default=2, help='Number of consecutive network updates')
-    solver_params_group.add_argument('--pgd-iters', type=int, default=2, help='Number of PGD iterations at each step')
-    solver_params_group.add_argument('--pgd-step', type=float, default=0.9, help='PGD step size')
-    solver_params_group.add_argument('--pgd-reduction', type=float, default=0.1, help='PGD step size reduction factor')
-    solver_params_group.add_argument('--admm-outer', type=float, default=1.0, help='Outer ADMM step size')
-    solver_params_group.add_argument('--admm-inner', type=float, default=8.0, help='Inner ADMM step size')
-    solver_params_group.add_argument('--controller-opt-tol', type=float, default=1e-7, 
+    solver_params_group.add_argument('--epochs', type=int, default=DEFAULT_EPOCHS, 
+                                     help='Number of epochs')
+    solver_params_group.add_argument('--updates', type=int, default=DEFAULT_UPDATES, 
+                                     help='Number of consecutive network updates')
+    solver_params_group.add_argument('--pgd-iters', type=int, default=DEFAULT_PGD_ITERS, 
+                                     help='Number of PGD iterations at each step')
+    solver_params_group.add_argument('--pgd-step', type=float, default=DEFAULT_PGD_STEP_SIZE, 
+                                     help='PGD step size')
+    solver_params_group.add_argument('--pgd-reduction', type=float, default=DEFAULT_PGD_REDUCTION, 
+                                     help='PGD step size reduction factor')
+    solver_params_group.add_argument('--admm-outer', type=float, default=DEFAULT_ADMM_OUTER, 
+                                     help='Outer ADMM step size')
+    solver_params_group.add_argument('--admm-inner', type=float, default=DEFAULT_ADMM_INNER, 
+                                     help='Inner ADMM step size')
+    solver_params_group.add_argument('--controller-opt-tol', type=float, default=DEFAULT_CONTROLLER_OPT_TOL, 
                                      help='Barrier method convergence tolerance')
-    solver_params_group.add_argument('--precision', choices=['half', 'single', 'double'], default='single',
+    solver_params_group.add_argument('--precision', choices=['half', 'single', 'double'], default=DEFAULT_PRECISION,
                                      help='Floating point operation precision')
 
     runtime_params_group = parser.add_argument_group('Runtime Parameters')

@@ -1,4 +1,3 @@
-import grpc
 import tqdm
 import pickle
 import gurobipy
@@ -13,7 +12,6 @@ from gurobipy import GRB, GurobiError, quicksum
 from te.algorithms.base import TrafficEngineeringLP, SolverParams, GurobiSolverParams
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
 from topologies.utils import get_node_and_out_edge_index_mapping, get_in_edge_mapping
-from google.protobuf.empty_pb2 import Empty
 
 
 # Shared between the controller and node solvers

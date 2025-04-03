@@ -1,7 +1,7 @@
 import numpy as np
 from typing import Optional
 from utils.logging import as_warning
-from te.algorithms.utils import is_satisfied
+from te.algorithms.utils import is_satisfied, str_round
 
 
 NEGLIGIBLE_FLOW_ABS_TOL = 1e-3
@@ -24,8 +24,8 @@ def outer_admm_consensus_test(primal: np.ndarray, pair: np.ndarray, feasibility_
         violated = False
         primal_e = primal[e]
         pair_e = pair[e]
-        primal_str = str(np.round(primal_e, 4))
-        pair_str = str(np.round(pair_e, 4))
+        primal_str = str_round(primal_e, 4)
+        pair_str = str_round(pair_e, 4)
         if (abs(primal_e) < NEGLIGIBLE_FLOW_ABS_TOL) and (abs(pair_e) < NEGLIGIBLE_FLOW_ABS_TOL):
             violations += 1
             violated = True
@@ -54,8 +54,8 @@ def inner_admm_consensus_test(primal: np.ndarray, pair: np.ndarray, feasibility_
         violated = False
         primal_t = primal[t]
         pair_t = pair[t]
-        primal_str = str(np.round(primal_t, 4))
-        pair_str = str(np.round(pair_t, 4))
+        primal_str = str_round(primal_t, 4)
+        pair_str = str_round(pair_t, 4)
         if (abs(primal_t) < NEGLIGIBLE_NULL_SPACE_ELEMENT) and (abs(pair_t) < NEGLIGIBLE_NULL_SPACE_ELEMENT):
             violations += 1
             violated = True
@@ -68,3 +68,11 @@ def inner_admm_consensus_test(primal: np.ndarray, pair: np.ndarray, feasibility_
     if not report and violations > 0:
         print(as_warning(f'Inner ADMM Consensus Violations: {violations} ({str(round(violations/T*100, 1))})% of pairs'))
 
+
+def norm_in_consensus(primal: np.ndarray, pair: np.ndarray, ratio: Optional[float]) -> bool:
+    primal_norm = np.linalg.norm(primal)
+    pair_norm = np.linalg.norm(pair)
+    div = min(pair_norm, primal_norm)
+    if div < 1e-8:
+        return False
+    return (abs(primal_norm - pair_norm) / div) < ratio

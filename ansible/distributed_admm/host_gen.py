@@ -1,22 +1,25 @@
 import argparse
+from benchmarks.distributed_test import (DEFAULT_ADMM_INNER, DEFAULT_ADMM_OUTER, DEFAULT_CONTROLLER_OPT_TOL,
+                                         DEFAULT_EPOCHS, DEFAULT_PGD_ITERS, DEFAULT_PGD_REDUCTION,
+                                         DEFAULT_PGD_STEP_SIZE, DEFAULT_PRECISION, DEFAULT_UPDATES)
 
 
 WORKER_NODE_NAME_FORMAT = 'n{index}'
 CONTROLLER_NODE_NAME = 'controller'
 LOCALHOST_NODE_REFERENCE = 'localhost'
 
-double_quoted = lambda s: f'\"{s}\"'
+double_quoted = lambda s: f'\"{str(s)}\"'
 
 CONTROLLER_PARAMETER_LIST = {
-    "epochs": double_quoted("150"),
-    "updates": double_quoted("2"),
-    "pgd_iters": double_quoted("2"),
-    "pgd_step": double_quoted("0.9"),
-    "pgd_reduction": double_quoted("0.1"),
-    "admm_outer": double_quoted("1.0"),
-    "admm_inner": double_quoted("8.0"),
-    "controller_opt_tol": double_quoted("1e-7"),
-    "precision": double_quoted("double")
+    "epochs": double_quoted(DEFAULT_EPOCHS),
+    "updates": double_quoted(DEFAULT_UPDATES),
+    "pgd_iters": double_quoted(DEFAULT_PGD_ITERS),
+    "pgd_step": double_quoted(DEFAULT_PGD_STEP_SIZE),
+    "pgd_reduction": double_quoted(DEFAULT_PGD_REDUCTION),
+    "admm_outer": double_quoted(DEFAULT_ADMM_OUTER),
+    "admm_inner": double_quoted(DEFAULT_ADMM_INNER),
+    "controller_opt_tol": double_quoted(DEFAULT_CONTROLLER_OPT_TOL),
+    "precision": double_quoted(DEFAULT_PRECISION)
 }
 
 

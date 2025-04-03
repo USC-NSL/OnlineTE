@@ -197,7 +197,7 @@ class DistributedEdgeBasedLP(TrafficEngineeringLP):
         """
         Controller objective is:
 
-            u^2 + \sum_{v \in V} \sum_{e \in E_v^{out}} f_oe(X_oe) - \lambda_e X_{oe}
+            u^2 + sum_{v \in V} sum_{e \in E_v^{out}} [f_oe(X_oe) - lambda_e X_{oe}]
         """
 
         OBJECTIVE_CONTROLLER = \
@@ -224,9 +224,9 @@ class DistributedEdgeBasedLP(TrafficEngineeringLP):
         """
         Node objective is:
 
-            \sum_k \sum_v \sum_{e \in E_v^{out}} (
-                f_{ke}(X_{ke}) + X_{ke} (\lambda_e + mu_{kv} - mu_{kv'})
-            )
+            sum_k sum_v sum_{e \in E_v^{out}} [(
+                f_{ke}(X_{ke}) + X_{ke} (lambda_e + mu_{kv} - mu_{kv'})
+            )]
         """
 
         OBJECTIVE_NODES = [
@@ -254,7 +254,7 @@ class DistributedEdgeBasedLP(TrafficEngineeringLP):
 
         """
         The update rule for lambda_e is:
-            \lambda_e \gets [\lambda_e + alpha * (\sum_k X_{ke} - X_{oe})]
+            lambda_e <-- [lambda_e + alpha * (sum_k [X_{ke} - X_{oe}])]
         """
 
         M = len(self._graph.nodes)

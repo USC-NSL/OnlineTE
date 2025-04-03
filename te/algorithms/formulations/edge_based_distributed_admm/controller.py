@@ -14,9 +14,9 @@ from te.algorithms.array_utils import set_global_precision
 from te.algorithms.array_utils.cpu_utils import (CPUArray, DoublePrecisionCPUArray, 
                                                  cpu_array, cpu_zeros, cpu_double_array, 
                                                  set_cpu_float_precision)
-from te.algorithms.utils import check_capacity_constraint, optimize_or_scream, make_model
+from te.algorithms.utils import check_capacity_constraint, optimize_or_scream, make_model, get_solution_maximum_utilization
 from te.algorithms.sub_algorithms.feasible_assignment import get_feasible_flow_assignment
-from te.algorithms.sub_algorithms.admm_consensus_test import outer_admm_consensus_test, inner_admm_consensus_test
+from te.algorithms.sub_algorithms.admm_consensus_test import outer_admm_consensus_test, inner_admm_consensus_test, norm_in_consensus
 from te.algorithms.sub_algorithms.flow_conservation_test import check_flow_conservation
 from te.algorithms.formulations.edge_based_distributed_admm import DistributedADMMSolverParams, DistributedADMMControllerRPCParams
 from te.algorithms.formulations.edge_based_distributed_admm.controller_backends import get_backend
@@ -52,6 +52,7 @@ class ControllerNode(TrafficEngineeringLP):
         self._X_ek: Optional[CPUArray] = None
         self._X_ek_start: Optional[CPUArray] = None
         self._Xo_e_start: Optional[CPUArray] = None
+        self._Xo_e_assigned: Optional[CPUArray] = None
         self._Xo_e: Optional[gurobipy.tupledict] = None
         self._Zo_e: Optional[CPUArray] = None
         self._utility: Optional[gurobipy.Var] = None
@@ -61,10 +62,10 @@ class ControllerNode(TrafficEngineeringLP):
         self._Y_bar_t: Optional[CPUArray] = None
         self._u_t: Optional[CPUArray] = None
 
-        self._backend = get_backend('gRPC-synchronous')(rpc_params, solver_params.NumWorkers)
-        # self._backend = get_backend('gRPC-asynchronous')(rpc_params, solver_params.NumWorkers)
+        # self._backend = get_backend('gRPC-synchronous')(rpc_params, solver_params.NumWorkers)
+        self._backend = get_backend('gRPC-asynchronous')(rpc_params, solver_params.NumWorkers)
 
-        self._objective_trace = []
+        self._objective_trace: List[Tuple[float, float]] = []
         self._objective_gap_trace = []
 
         set_global_precision(solver_params.Precision)
@@ -100,7 +101,7 @@ class ControllerNode(TrafficEngineeringLP):
         return self._utility.X
     
     @property
-    def objective_trace(self) -> Optional[List[float]]:
+    def objective_trace(self) -> Optional[List[Tuple[float, float]]]:
         return self._objective_trace
 
     @property
@@ -249,7 +250,15 @@ class ControllerNode(TrafficEngineeringLP):
 
         self._u_t = U_T + (Y_BAR_T - P_BAR_T)
     
-    def _reconvene_network_updates(self):
+    # def _reconvene_network_updates(self):
+    #     self._update_P_bar()
+    #     self._update_u_t()
+    #     self._backend.reconvene_network_updates(
+    #         P_bar_t=self._P_bar_t,
+    #         Y_bar_t=self._Y_bar_t,
+    #         u_t=self._u_t
+    #     )
+    def _reconvene_network_updates(self) -> bool:
         self._update_P_bar()
         self._update_u_t()
         self._backend.reconvene_network_updates(
@@ -257,6 +266,7 @@ class ControllerNode(TrafficEngineeringLP):
             Y_bar_t=self._Y_bar_t,
             u_t=self._u_t
         )
+        return norm_in_consensus(self._P_bar_t, self._Y_bar_t, 5e-4)
     
     def _update_Zo_e_and_r_e(self):
         assert self._model_controller is not None
@@ -270,6 +280,7 @@ class ControllerNode(TrafficEngineeringLP):
         Zo_e = (XO_E_ + X_KE_SUM_E) / 2
         self._Zo_e = Zo_e
         self._r_e = R_E + (XO_E_ - X_KE_SUM_E) / 2
+        self._Xo_e_assigned = X_KE_SUM_E
 
     def close(self):
         self._backend.close()
@@ -307,16 +318,20 @@ class ControllerNode(TrafficEngineeringLP):
             for epoch in tqdm.tqdm(range(PARAMS.NumberOfEpochs), bar_format='{l_bar}{bar:36}{r_bar}{bar:-36b}'):
             # for epoch in range(PARAMS.NumberOfEpochs):
                 optimize_or_scream(MODEL_CONTROLLER)
+                # for i in reversed(range(PARAMS.NumberOfNetworkUpdates)):
+                #     self._do_network_update(epoch)
+                #     if i > 0:
+                #         self._reconvene_network_updates()
                 for i in reversed(range(PARAMS.NumberOfNetworkUpdates)):
                     self._do_network_update(epoch)
-                    if i > 0:
-                        self._reconvene_network_updates()
+                    if i > 0 and self._reconvene_network_updates():
+                        break
 
                 self._update_Zo_e_and_r_e()
                 self._reconvene_network_updates()
                 self._update_controller_objective()
 
-                self._objective_trace.append(self._utility.X)
+                self._objective_trace.append((self._utility.X, get_solution_maximum_utilization(self._Xo_e_assigned, self._graph)))
             self._set_X_ek()
             return time.time() - t
         except GurobiError as e:
@@ -325,7 +340,6 @@ class ControllerNode(TrafficEngineeringLP):
     
     def check(self, feasibility_tol: Optional[float] = None, feasibility_ratio: Optional[float] = None, report: bool = False):
         NUM_EDGES = self._NUM_EDGES
-        T = self._T
 
         # Are outer ADMM pairs in consensus?
         XO_E = np.array([self._Xo_e[e].X for e in range(NUM_EDGES)])
@@ -339,7 +353,7 @@ class ControllerNode(TrafficEngineeringLP):
         
         # Now, check flow conservation ...
         X_EK = self._X_ek
-        check_flow_conservation(X_EK, self._graph, self._commodity_list, feasibility_tol, feasibility_ratio)
+        check_flow_conservation(X_EK, self._graph, self._commodity_list, feasibility_tol, feasibility_ratio, report=report)
         check_capacity_constraint(
             X_EK, self._graph, self._commodity_list, 
             feasibility_tol=feasibility_tol, feasibility_ratio=feasibility_ratio

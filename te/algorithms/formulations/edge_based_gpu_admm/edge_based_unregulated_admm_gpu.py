@@ -1,4 +1,3 @@
-import math
 import time
 import tqdm
 import gurobipy
@@ -13,13 +12,13 @@ from utils.logging import as_fail, as_warning
 from te.algorithms.base import TrafficEngineeringLP, GurobiSolverParams, SolverParams
 from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
-from te.algorithms.sub_algorithms.pgd import do_plain_pgd_with_step_reduction, do_gpu_pgd_with_exact_line_search
+from te.algorithms.sub_algorithms.pgd import do_plain_pgd_with_step_reduction
 from te.algorithms.sub_algorithms.feasible_assignment import get_feasible_flow_assignment
-from topologies.utils import (get_edge_indexing, get_graph_M_matrix, 
-                              get_adjacency_null_space)
+from te.algorithms.sub_algorithms.flow_conservation_test import check_flow_conservation
+from te.algorithms.sub_algorithms.admm_consensus_test import outer_admm_consensus_test, inner_admm_consensus_test
+from topologies.utils import get_edge_indexing, get_graph_M_matrix, get_adjacency_null_space
 from te.algorithms.utils import (check_capacity_constraint, optimize_or_scream, make_model, 
-                                 get_solution_maximum_utilization, check_centralized_flow_conservation,
-                                 careful_norm, careful_norm_squared)
+                                 careful_norm)
 from te.algorithms.statistics.helpers import (record_cpu_runtime, record_gpu_runtime, record_reserved_gpu_memory, 
                                               record_used_gpu_memory)
 from te.algorithms.array_utils import set_global_precision
@@ -352,7 +351,7 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
 
         """
         Controller objective is:
-            u + rho/2 sum_e (X_oe - Z_oe + r_e)^2
+            u + rho/2 sum_e [(X_oe - Z_oe + r_e)^2]
         """
 
         OBJECTIVE_CONTROLLER = gurobipy.QuadExpr()
@@ -426,7 +425,7 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
         """
         The update rule for `P_bar` is:
 
-            P_bar \gets (NULL_M^T F + (\eta/\rho) (u + Y_bar)) / (K + (\eta/\rho))
+            P_bar <-- (NULL_M^T F + (eta / rho) (u + Y_bar)) / (K + (eta / rho))
         """
 
         K = len(self._commodity_list)
@@ -458,7 +457,7 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
         """
         The update rule for `u` is:
 
-            u \gets u + (Y_bar - P_bar)
+            u <-- u + (Y_bar - P_bar)
         """
 
         U_T = self._u_t
@@ -481,7 +480,7 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
 
         """
         The update rule for Zo_e is:
-            Zo_e \gets (X_oe + \sum_k X_ke)/2
+            Zo_e <-- (X_oe + sum_k [X_ke])/2
         """
         
         NUM_EDGES = self._NUM_EDGES
@@ -532,7 +531,7 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
 
         """
         The update rule for r_e is:
-            r_e \gets r_e + (X_oe - \sum_k X_ke)/2
+            r_e <-- r_e + (X_oe - \sum_k X_ke)/2
         """
 
         R_E = self._r_e
@@ -662,48 +661,22 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
             print(f'Error code {e.errno}: {e}')
             return -1
     
-    def check(self, feasibility_tol: Optional[float] = None, feasibility_ratio: Optional[float] = None):
+    def check(self, feasibility_tol: Optional[float] = None, feasibility_ratio: Optional[float] = None, report: bool = False):
         NUM_EDGES = self._NUM_EDGES
-        T = self._T
-        PARAMS = self._solver_params
-
-        _atol = 0.0 if feasibility_tol is None else feasibility_tol
-        _rtol = 0.0 if feasibility_ratio is None else feasibility_ratio
-
-        # TODO: This is not numerically stable ...
-        def in_consensus(primal, pair):
-            if abs(primal - pair) < te.constants.FLOAT_RES:
-                return True
-            return math.isclose(primal, pair, rel_tol=_rtol, abs_tol=_atol)
-            # if feasibility_tol is not None:
-            #     return abs(primal - pair) < feasibility_tol
-            # return abs((primal - pair) / (primal + te.constants.FLOAT_RES)) < feasibility_ratio
 
         # Are outer ADMM pairs in consensus?
-        XO_E = self._Xo_e
+        XO_E = np.array([self._Xo_e[e].X for e in range(NUM_EDGES)])
         ZO_E = self._Zo_e
-        for e in range(NUM_EDGES):
-            primal = XO_E[e].X
-            pair = ZO_E[e]
-            primal_str = f'{primal:.4f}'
-            pair_str = f'{pair:.4f}'
-            if not in_consensus(primal, pair):
-                print(as_fail(f"Edge {e} --> Outer ADMM pairing is not in consensus with primal variable: {primal_str} vs {pair_str}"))
+        outer_admm_consensus_test(XO_E, ZO_E, feasibility_tol, feasibility_ratio, report=report)
         
         # Are inner ADMM pairs in consensus?
-        Y_BAR_T = self._Y_bar_t
-        P_BAR_T = self._P_bar_t
-        for t in range(T):
-            primal = Y_BAR_T[t]
-            pair = P_BAR_T[t]
-            primal_str = f'{primal:.4f}'
-            pair_str = f'{pair:.4f}'
-            if not in_consensus(primal, pair):
-                print(as_fail(f"Axis {t} --> Inner ADMM pairing is not in consensus with primal variable: {primal_str} vs {pair_str}"))
+        Y_BAR_T = as_cpu_array(self._Y_bar_t)
+        P_BAR_T = as_cpu_array(self._P_bar_t)
+        inner_admm_consensus_test(Y_BAR_T, P_BAR_T, feasibility_tol, feasibility_ratio, report=report)
         
         # Now, check flow conservation ...
         X_EK = self._X_ek
-        # check_centralized_flow_conservation(X_EK, self._graph, self._commodity_list, PARAMS.FeasibilityTol)
+        check_flow_conservation(X_EK, self._graph, self._commodity_list, feasibility_tol, feasibility_ratio, report=report)
         check_capacity_constraint(
             X_EK, self._graph, self._commodity_list, 
             feasibility_tol=feasibility_tol, feasibility_ratio=feasibility_ratio
