@@ -3,15 +3,19 @@
 - name: Check Arguments
   hosts: workers_group
   remote_user: aghavidel
+  vars:
+    upto: "{{num_hosts}}"
   tasks:
     - name: Start Worker Services
       command: systemctl --user start te_worker.service
+      when: 'worker_id|int < upto|int'
     - name: Pause for the controller ...
       ansible.builtin.pause:
         prompt: "Bring up the controller. Once done, press <ENTER> to cleanup ..."
         echo: false
     - name: Stop Worker Services
       command: systemctl --user stop te_worker.service
+      when: 'worker_id|int < upto|int'
 
 - name: Get Controller Plot
   hosts: controller_group
