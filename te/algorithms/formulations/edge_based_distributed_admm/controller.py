@@ -18,8 +18,8 @@ from te.algorithms.utils import check_capacity_constraint, optimize_or_scream, m
 from te.algorithms.sub_algorithms.feasible_assignment import get_feasible_flow_assignment
 from te.algorithms.sub_algorithms.admm_consensus_test import outer_admm_consensus_test, inner_admm_consensus_test, norm_in_consensus
 from te.algorithms.sub_algorithms.flow_conservation_test import check_flow_conservation
-from te.algorithms.formulations.edge_based_distributed_admm import DistributedADMMSolverParams, DistributedADMMControllerRPCParams
-from te.algorithms.formulations.edge_based_distributed_admm.controller_backends import get_backend
+from . import DistributedADMMSolverParams, DistributedADMMControllerRPCParams
+from .controller_backends import get_backend
 
 
 class ControllerNode(TrafficEngineeringLP):

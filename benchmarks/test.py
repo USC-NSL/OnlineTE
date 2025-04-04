@@ -1,5 +1,5 @@
 from gurobipy import GRB
-from te.algorithms.formulations import (
+from te.algorithms.formulations.aggregate import (
     CentralizedEdgeBasedLP, GurobiSolverParams,
     UnregulatedADMMLP, UnregulatedADMMSolverParams,
     RegularizedADMMLP, RegularizedADMMSolverParams,

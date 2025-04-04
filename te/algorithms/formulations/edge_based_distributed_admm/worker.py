@@ -7,11 +7,11 @@ from typing import Optional, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from te.algorithms.array_utils import set_global_precision
 from te.algorithms.array_utils.cpu_utils import cpu_zeros, cpu_array, set_cpu_float_precision
-from te.algorithms.formulations.edge_based_distributed_admm import DistributedADMMSolverParams, DistributedADMMWorkerRPCParams
+from . import DistributedADMMSolverParams, DistributedADMMWorkerRPCParams
 from te.algorithms.sub_algorithms.pgd import do_plain_pgd_with_step_reduction
-from te.algorithms.formulations.edge_based_distributed_admm.utils import (serialized_message_to_array, array_to_serialized_message,
-                                                                          rebuild_chunked_array, chunk_big_array,
-                                                                          get_optional_field, GRPC_ARRAY_STREAM_MAX_LEN)
+from .utils import (serialized_message_to_array, array_to_serialized_message,
+                    rebuild_chunked_array, chunk_big_array,
+                    get_optional_field, GRPC_ARRAY_STREAM_MAX_LEN)
 import protos.distributed_lp.distributed_lp_pb2 as distributed_lp_messages
 from protos.distributed_lp.distributed_lp_pb2_grpc import DistributedADMMSolverServicer, add_DistributedADMMSolverServicer_to_server
 from google.protobuf.empty_pb2 import Empty

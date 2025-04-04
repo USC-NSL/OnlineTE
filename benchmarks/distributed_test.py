@@ -3,7 +3,7 @@ import argparse
 import contextlib
 import concurrent.futures
 from typing import List, Tuple
-from te.algorithms.formulations import (
+from te.algorithms.formulations.aggregate import (
     NetworkWorkerNode, ControllerNode,
     DistributedADMMSolverParams, DistributedADMMWorkerRPCParams, 
     DistributedADMMControllerRPCParams
