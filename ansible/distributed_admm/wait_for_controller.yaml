@@ -3,6 +3,7 @@
 - name: Check Arguments
   hosts: workers_group
   remote_user: aghavidel
+  gather_facts: false
   vars:
     upto: "{{num_hosts}}"
   tasks:
