@@ -225,5 +225,5 @@ if __name__ == '__main__':
         print(as_fail('Worker ID was not properly initialized!'), file=sys.stderr)
         sys.exit(-1)
     else:
-        rpc_params = DistributedADMMWorkerRPCParams(ip=socket.gethostbyname(socket.gethostname()), port=13000 + worker_id)
+        rpc_params = DistributedADMMWorkerRPCParams(IP=socket.gethostbyname(socket.gethostname()), Port=13000 + worker_id)
         NetworkWorkerNode.spawn_and_wait(worker_id, rpc_params)

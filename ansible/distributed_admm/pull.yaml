@@ -1,0 +1,25 @@
+---
+# Playbook for updating code only
+- name: Pull changes
+  hosts: controller_group:workers_group
+  gather_facts: false
+  remote_user: aghavidel
+  tasks:
+
+  - name: Clone repo with force
+    ansible.builtin.git:
+      repo: https://{{access_token}}@github.com/USC-NSL/DistributedTE.git
+      clone: true
+      force: true
+      dest: /home/aghavidel/DistributedTE
+  
+  - name: Compile protobuffs
+    command: chdir=/home/aghavidel/DistributedTE python3 protos/__init__.py
+
+- name: Enable TE Worker Service
+  hosts: workers_group
+  gather_facts: false
+  remote_user: aghavidel
+  tasks:
+    - name: Give EXEC Premission To Launcher
+      command: chdir=/home/aghavidel/DistributedTE chmod +x ansible/distributed_admm/launch_worker.sh
