@@ -5,7 +5,7 @@ import networkx as nx
 import te.constants
 import dataclasses
 from multiprocessing import cpu_count
-from typing import List, Optional, Tuple, Dict, Any
+from typing import List, Optional, Tuple, Dict, Union, Any
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from te.algorithms import SOLUTION_DIR
@@ -73,7 +73,7 @@ class SolverParams(ABC):
         return child_dict
     
     @classmethod
-    def _list_or_tuple_to_str(cls, items: List | Tuple) -> str | List[str]:
+    def _list_or_tuple_to_str(cls, items: Union[List, Tuple]) -> Union[str, List[str]]:
         example = items[0]
         if isinstance(example, (int, float, bool, str)):
             # Multiple things on a single line ...
@@ -85,7 +85,7 @@ class SolverParams(ABC):
             raise ValueError(f'Sequence element type unexpected: {example}')
     
     @classmethod
-    def _param_to_str(cls, value) -> str | List[str]:
+    def _param_to_str(cls, value) -> Union[str, List[str]]:
         if isinstance(value, int):
             return str(value)
         elif isinstance(value, float):
