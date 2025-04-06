@@ -67,10 +67,14 @@ class AsynchronousgRPCBackend(ControllerCommunicationBackendBase):
             stub.SetInitialFeasibleSolution(chunk_big_array(X_EK_START_CHUNKS[i], GRPC_ARRAY_STREAM_MAX_LEN))
             for i, stub in enumerate(WORKERS)
         ])
-          
+
         # Finally, the rest of the things to know ...
-        init = distributed_lp_messages.InitMessage(NULL_M=array_to_serialized_message(NULL_M))
-        await asyncio.gather(*[stub.InitializeWorkerNode(init) for stub in WORKERS])
+        # init = distributed_lp_messages.InitMessage(NULL_M=array_to_serialized_message(NULL_M))
+        # await asyncio.gather(*[stub.InitializeWorkerNode(init) for stub in WORKERS])
+        await asyncio.gather(*[
+            stub.SetNullSpaceBasis(chunk_big_array(NULL_M, GRPC_ARRAY_STREAM_MAX_LEN))
+            for stub in WORKERS
+        ])
     
     def initialize_worker_nodes(self, solver_params: DistributedADMMSolverParams, basis: CPUArray, 
                                 initial_feasible_solution: CPUArray):

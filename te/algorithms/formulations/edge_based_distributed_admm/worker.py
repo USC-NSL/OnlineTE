@@ -85,19 +85,33 @@ class NetworkWorkerNode:
         self._X_ek_start_chunk = X
         self._NUM_EDGES, self._CHUNK_LEN = self._X_ek_start_chunk.shape
     
-    def initialize(self, N: np.ndarray, P_bar_t: Optional[np.ndarray] = None, 
-                   Y_bar_t: Optional[np.ndarray] = None, u_t: Optional[np.ndarray] = None):
+    def set_null_space_basis(self, NULL_M: np.ndarray):
+        self._NULL_M = NULL_M
         assert self._X_ek_start_chunk is not None
         CHUNK_LEN = self._CHUNK_LEN
-        self._NULL_M = N
-        self._NNT_M = N @ N.T
+        self._NULL_M = NULL_M
+        self._NNT_M = NULL_M @ NULL_M.T
         T = self._NULL_M.shape[1]
         self._T = T
         self._Y_tk_chunk = cpu_zeros((T, CHUNK_LEN))
         self._lambda_ek_chunk = cpu_zeros(self._X_ek_start_chunk.shape)
-        self._Y_bar_t_cached: Optional[np.ndarray] = Y_bar_t if Y_bar_t is not None else cpu_zeros((T,))
-        self._P_bar_t_cached: Optional[np.ndarray] = P_bar_t if P_bar_t is not None else cpu_zeros((T,))
-        self._u_t_cached: Optional[np.ndarray] = u_t if u_t is not None else cpu_zeros((T,))
+        self._Y_bar_t_cached: Optional[np.ndarray] = cpu_zeros((T,))
+        self._P_bar_t_cached: Optional[np.ndarray] = cpu_zeros((T,))
+        self._u_t_cached: Optional[np.ndarray] = cpu_zeros((T,))
+    
+    # def initialize(self, N: np.ndarray, P_bar_t: Optional[np.ndarray] = None, 
+    #                Y_bar_t: Optional[np.ndarray] = None, u_t: Optional[np.ndarray] = None):
+    #     assert self._X_ek_start_chunk is not None
+    #     CHUNK_LEN = self._CHUNK_LEN
+    #     self._NULL_M = N
+    #     self._NNT_M = N @ N.T
+    #     T = self._NULL_M.shape[1]
+    #     self._T = T
+    #     self._Y_tk_chunk = cpu_zeros((T, CHUNK_LEN))
+    #     self._lambda_ek_chunk = cpu_zeros(self._X_ek_start_chunk.shape)
+    #     self._Y_bar_t_cached: Optional[np.ndarray] = Y_bar_t if Y_bar_t is not None else cpu_zeros((T,))
+    #     self._P_bar_t_cached: Optional[np.ndarray] = P_bar_t if P_bar_t is not None else cpu_zeros((T,))
+    #     self._u_t_cached: Optional[np.ndarray] = u_t if u_t is not None else cpu_zeros((T,))
 
     def _get_current_C(self) -> np.ndarray:
         Y_TK = self._Y_tk_chunk
@@ -154,12 +168,18 @@ class NetworkWorkerNodeListener(DistributedADMMSolverServicer):
         )
         return Empty()
     
-    def InitializeWorkerNode(self, request: distributed_lp_messages.InitMessage, context):
-        self._worker_node.initialize(
-            N=serialized_message_to_array(request.NULL_M),
-            P_bar_t=serialized_message_to_array(get_optional_field(request, 'P_bar_t')),
-            u_t=serialized_message_to_array(get_optional_field(request, 'u_t')),
-            Y_bar_t=serialized_message_to_array(get_optional_field(request, 'Y_bar_t'))
+    # def InitializeWorkerNode(self, request: distributed_lp_messages.InitMessage, context):
+    #     self._worker_node.initialize(
+    #         N=serialized_message_to_array(request.NULL_M),
+    #         P_bar_t=serialized_message_to_array(get_optional_field(request, 'P_bar_t')),
+    #         u_t=serialized_message_to_array(get_optional_field(request, 'u_t')),
+    #         Y_bar_t=serialized_message_to_array(get_optional_field(request, 'Y_bar_t'))
+    #     )
+    #     return Empty()
+
+    def SetNullSpaceBasis(self, request_iterator: Iterator[distributed_lp_messages.Chunk], context):
+        self._worker_node.set_null_space_basis(
+            NULL_M = rebuild_chunked_array(request_iterator)
         )
         return Empty()
     

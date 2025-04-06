@@ -72,13 +72,18 @@ class SynchronousgRPCBackend(ControllerCommunicationBackendBase):
         ])
           
         # Finally, the rest of the things to know ...
+        # wait([
+        #     self._broadcast_thread_pool.submit(stub.InitializeWorkerNode, 
+        #                                        distributed_lp_messages.InitMessage(
+        #                                            NULL_M=array_to_serialized_message(NULL_M)
+        #                                        ))
+        #         for stub in WORKERS
+        # ])       
         wait([
-            self._broadcast_thread_pool.submit(stub.InitializeWorkerNode, 
-                                               distributed_lp_messages.InitMessage(
-                                                   NULL_M=array_to_serialized_message(NULL_M)
-                                               ))
+            self._broadcast_thread_pool.submit(stub.SetNullSpaceBasis, 
+                                               chunk_big_array(NULL_M, GRPC_ARRAY_STREAM_MAX_LEN))
                 for stub in WORKERS
-        ])        
+        ]) 
 
     def get_X_ek(self, basis: CPUArray, initial_feasible_solution: CPUArray):
         chunks = self._broadcast_thread_pool.map(

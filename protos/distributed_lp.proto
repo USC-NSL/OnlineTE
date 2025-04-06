@@ -4,7 +4,8 @@ import "google/protobuf/empty.proto";
 
 service DistributedADMMSolver {
     rpc SetInitialFeasibleSolution(stream Chunk) returns (google.protobuf.Empty) {}
-    rpc InitializeWorkerNode(InitMessage) returns (google.protobuf.Empty) {}
+    // rpc InitializeWorkerNode(InitMessage) returns (google.protobuf.Empty) {}
+    rpc SetNullSpaceBasis(stream Chunk) returns (google.protobuf.Empty) {}
     rpc DoNetworkUpdate(NetworkUpdateRequest) returns (SerializedNumpyArrayMessage) {}
     rpc UpdateWorkerNode(UpdateMessage) returns (google.protobuf.Empty) {}
     rpc RequestChunk(google.protobuf.Empty) returns (stream Chunk) {}

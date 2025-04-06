@@ -15,7 +15,7 @@ from matplotlib.figure import Figure
 from typing import List, Tuple, Dict, Union, Optional, Type
 from collections import defaultdict
 from utils.logging import (as_bold, as_fail, as_info, as_success, as_warning, method_to_str, 
-                           str_round, log_section_title, log_subsection_separator)
+                           str_round, log_section_title)
 from te.traffic_models.base import Commodity, TrafficMatrixBase
 from te.algorithms.base import TrafficEngineeringLP, SolverParams, GurobiSolverParams
 from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution, EdgeBasedMinimizeMaximumUtilitySolutionParams
