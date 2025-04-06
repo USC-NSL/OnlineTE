@@ -9,9 +9,11 @@ fi
 
 _term() {
   kill -15 "$child" 2>/dev/null
+  echo "Worker was TERMINATED."
 }
 _kill() {
   kill -9 "$child" 2>/dev/null
+  echo "Worker was KILLED."
 }
 
 trap _term SIGTERM
@@ -20,3 +22,5 @@ trap _kill SIGKILL
 /usr/bin/python3 -m te.algorithms.formulations.edge_based_distributed_admm.worker "${WORKER_ID}" &
 child=$!
 wait "$child"
+
+exit 0
