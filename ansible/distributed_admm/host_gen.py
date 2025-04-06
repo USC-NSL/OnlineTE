@@ -1,7 +1,12 @@
+import os
+THIS_DIR = os.path.dirname(os.path.realpath(__file__))
+import sys
 import argparse
+sys.path.append(os.path.join(THIS_DIR, '../..'))
 from benchmarks.distributed_test import (DEFAULT_ADMM_INNER, DEFAULT_ADMM_OUTER, DEFAULT_CONTROLLER_OPT_TOL,
                                          DEFAULT_EPOCHS, DEFAULT_PGD_ITERS, DEFAULT_PGD_REDUCTION,
                                          DEFAULT_PGD_STEP_SIZE, DEFAULT_PRECISION, DEFAULT_UPDATES)
+from utils.logging import as_warning
 
 
 WORKER_NODE_NAME_FORMAT = 'n{index}'
@@ -58,3 +63,4 @@ if __name__ == '__main__':
     parser.add_argument('--path', type=str, default='hosts', help='Output file path')
     args = parser.parse_args()
     generate_host_file(args.n, args.path)
+    print(as_warning('Remember to set the access token for the Github repo!'))
