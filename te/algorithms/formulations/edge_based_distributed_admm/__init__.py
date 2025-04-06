@@ -11,14 +11,14 @@ warnings.filterwarnings("error")
 
 @dataclass
 class DistributedADMMSolverParams(GurobiSolverParams):
-    NumberOfEpochs: Optional[int] = None
-    NumberOfNetworkUpdates: int = te.constants.DEFAULT_NUMBER_OF_NETWORK_UPDATES
-    Rho: float = te.constants.DEFAULT_RHO
-    Eta: float = te.constants.DEFAULT_ETA
-    Gamma: float = 1
-    Kappa: float = 0
-    PGDIterations: int = 5
-    BigGamma: float = te.constants.DEFAULT_BIG_GAMMA
+    NumberOfEpochs: Optional[int] = 100
+    NumberOfNetworkUpdates: int = 4
+    Rho: float = 1.0
+    Eta: float = 8.0
+    Gamma: float = 1.0
+    Kappa: float = 0.2
+    PGDIterations: int = 2
+    BigGamma: float = 1e-7
     Precision: Literal['double', 'single', 'half'] = SINGLE_PRECISION
     Seed: int = te.constants.DEFAULT_SEED
 
@@ -33,7 +33,7 @@ class DistributedADMMWorkerRPCParams(SolverParams):
 @dataclass
 class DistributedADMMControllerRPCParams(SolverParams):
     AddressList: Tuple[Tuple[str, int]] = (("localhost", 13000),)
-    NumWorkers: int = 1
+    NumWorkers: int = 2
     NumThreads: int = 1
     Backends: str = "gRPC-asynchronous"
     

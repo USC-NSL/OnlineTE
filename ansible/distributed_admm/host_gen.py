@@ -3,9 +3,7 @@ THIS_DIR = os.path.dirname(os.path.realpath(__file__))
 import sys
 import argparse
 sys.path.append(os.path.join(THIS_DIR, '../..'))
-from benchmarks.distributed_test import (DEFAULT_ADMM_INNER, DEFAULT_ADMM_OUTER, DEFAULT_CONTROLLER_OPT_TOL,
-                                         DEFAULT_EPOCHS, DEFAULT_PGD_ITERS, DEFAULT_PGD_REDUCTION,
-                                         DEFAULT_PGD_STEP_SIZE, DEFAULT_PRECISION, DEFAULT_UPDATES)
+from te.algorithms.formulations.edge_based_distributed_admm import DistributedADMMSolverParams
 from utils.logging import as_warning
 
 
@@ -15,16 +13,19 @@ LOCALHOST_NODE_REFERENCE = 'localhost'
 
 double_quoted = lambda s: f'\"{str(s)}\"'
 
+solver_params = DistributedADMMSolverParams()
+
+
 CONTROLLER_PARAMETER_LIST = {
-    "epochs": double_quoted(DEFAULT_EPOCHS),
-    "updates": double_quoted(DEFAULT_UPDATES),
-    "pgd_iters": double_quoted(DEFAULT_PGD_ITERS),
-    "pgd_step": double_quoted(DEFAULT_PGD_STEP_SIZE),
-    "pgd_reduction": double_quoted(DEFAULT_PGD_REDUCTION),
-    "admm_outer": double_quoted(DEFAULT_ADMM_OUTER),
-    "admm_inner": double_quoted(DEFAULT_ADMM_INNER),
-    "controller_opt_tol": double_quoted(DEFAULT_CONTROLLER_OPT_TOL),
-    "precision": double_quoted(DEFAULT_PRECISION)
+    "epochs": double_quoted(solver_params.NumberOfEpochs),
+    "updates": double_quoted(solver_params.NumberOfNetworkUpdates),
+    "pgd_iters": double_quoted(solver_params.PGDIterations),
+    "pgd_step": double_quoted(solver_params.Gamma),
+    "pgd_reduction": double_quoted(solver_params.Kappa),
+    "admm_outer": double_quoted(solver_params.Rho),
+    "admm_inner": double_quoted(solver_params.Eta),
+    "controller_opt_tol": double_quoted(solver_params.BigGamma),
+    "precision": double_quoted(solver_params.Precision)
 }
 
 

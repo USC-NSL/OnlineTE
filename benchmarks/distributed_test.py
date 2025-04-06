@@ -31,28 +31,9 @@ HUGE_TOPOLOGY = 'Kdl'
 LOCAL_HOST = "localhost"
 BASE_PORT = 13000
 
-# Default values
-DEFAULT_EPOCHS = 100
-DEFAULT_UPDATES = 4
-DEFAULT_PGD_ITERS = 2
-DEFAULT_PGD_STEP_SIZE = 1.0
-DEFAULT_PGD_REDUCTION = 0.2
-DEFAULT_ADMM_INNER = 8.0
-DEFAULT_ADMM_OUTER = 1.0
-DEFAULT_CONTROLLER_OPT_TOL = 1e-7
-DEFAULT_PRECISION = 'single'
-DEFAULT_NUM_WORKERS = 2
-DEFAULT_BACKEND = 'gRPC-asynchronous'
 
-
-SOLVER_PARAMS: DistributedADMMSolverParams = None
-CONTROLLER_RPC_PARAMS: DistributedADMMControllerRPCParams = None
-
-
-# def show_addrs(addrs: List[Tuple[str, int]]):
-#     print(as_info("Worker Nodes:"))
-#     for host, port in addrs:
-#         print(as_info("\t{:^32} : {:^10}".format(host, str(port))))
+SOLVER_PARAMS: DistributedADMMSolverParams = DistributedADMMSolverParams()
+CONTROLLER_RPC_PARAMS: DistributedADMMControllerRPCParams = DistributedADMMControllerRPCParams()
 
 
 def local_distributed_admm_test(topology: str, seed: int, scale_factor: float = 10.0,
@@ -164,23 +145,23 @@ if __name__ == '__main__':
     parser.add_argument('--local', action='store_true', help='Perform the test on local network')
     
     solver_params_group = parser.add_argument_group('Solver Parameters', description='ADMM solver parameters')
-    solver_params_group.add_argument('--epochs', type=int, default=DEFAULT_EPOCHS, 
+    solver_params_group.add_argument('--epochs', type=int, default=SOLVER_PARAMS.NumberOfEpochs, 
                                      help='Number of epochs')
-    solver_params_group.add_argument('--updates', type=int, default=DEFAULT_UPDATES, 
+    solver_params_group.add_argument('--updates', type=int, default=SOLVER_PARAMS.NumberOfNetworkUpdates, 
                                      help='Number of consecutive network updates')
-    solver_params_group.add_argument('--pgd-iters', type=int, default=DEFAULT_PGD_ITERS, 
+    solver_params_group.add_argument('--pgd-iters', type=int, default=SOLVER_PARAMS.PGDIterations, 
                                      help='Number of PGD iterations at each step')
-    solver_params_group.add_argument('--pgd-step', type=float, default=DEFAULT_PGD_STEP_SIZE, 
+    solver_params_group.add_argument('--pgd-step', type=float, default=SOLVER_PARAMS.Gamma, 
                                      help='PGD step size')
-    solver_params_group.add_argument('--pgd-reduction', type=float, default=DEFAULT_PGD_REDUCTION, 
+    solver_params_group.add_argument('--pgd-reduction', type=float, default=SOLVER_PARAMS.Kappa, 
                                      help='PGD step size reduction factor')
-    solver_params_group.add_argument('--admm-outer', type=float, default=DEFAULT_ADMM_OUTER, 
+    solver_params_group.add_argument('--admm-outer', type=float, default=SOLVER_PARAMS.Rho, 
                                      help='Outer ADMM step size')
-    solver_params_group.add_argument('--admm-inner', type=float, default=DEFAULT_ADMM_INNER, 
+    solver_params_group.add_argument('--admm-inner', type=float, default=SOLVER_PARAMS.Eta, 
                                      help='Inner ADMM step size')
-    solver_params_group.add_argument('--controller-opt-tol', type=float, default=DEFAULT_CONTROLLER_OPT_TOL, 
+    solver_params_group.add_argument('--controller-opt-tol', type=float, default=SOLVER_PARAMS.BigGamma, 
                                      help='Barrier method convergence tolerance')
-    solver_params_group.add_argument('--precision', choices=['half', 'single', 'double'], default=DEFAULT_PRECISION,
+    solver_params_group.add_argument('--precision', choices=['half', 'single', 'double'], default=SOLVER_PARAMS.Precision,
                                      help='Floating point operation precision')
 
     runtime_params_group = parser.add_argument_group('Runtime Parameters')
@@ -191,7 +172,7 @@ if __name__ == '__main__':
                                       help='Report unsatisfied commodity assignments.')
     
     rpc_params_group = parser.add_argument_group('Communication Backend Parameters')
-    rpc_params_group.add_argument('--backend-name', choices=list_backends(), default=DEFAULT_BACKEND,
+    rpc_params_group.add_argument('--backend-name', choices=list_backends(), default=CONTROLLER_RPC_PARAMS.Backends,
                                   help='Communication backend name to use')
     
     args = parser.parse_args()
