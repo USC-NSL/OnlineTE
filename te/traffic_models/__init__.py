@@ -1,6 +1,7 @@
 from typing import Type
-from te.traffic_models.base import (
-    TrafficMatrixBase, TrafficMatrixConverterBase, TrafficMatrixParamsBase, TrafficMatrixConverterParamsBase,
+from .base import (
+    TrafficMatrixBase, TrafficMatrixConverterBase, 
+    TrafficMatrixParamsBase, TrafficMatrixConverterParamsBase,
     _MODELS, _PARAMS, _CONVERTERS, _CONVERTER_PARAMS
 )
 

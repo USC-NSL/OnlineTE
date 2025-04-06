@@ -9,6 +9,7 @@ from typing import List, Optional, Tuple, Dict, Any
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from te.algorithms import SOLUTION_DIR
+from utils.logging import LINE_SEPARATOR_LENGTH
 from te.traffic_models.base import TrafficMatrixBase, Commodity
 
 
@@ -30,8 +31,27 @@ as_simplex_basis_name = lambda name: with_postfix(name, SIMPLEX_BASIS_POSTFIX)
 
 
 class SolverParams(ABC):
-    LINE = "+" + "-"*65 + "+"
-    PRINT_FORMAT = "| {:^30} : {:^30} |"
+    PRINT_FORMAT = "| {:^{left_padding}} | {:^{right_padding}} |"
+
+    @property
+    def left_column_share(self) -> float:
+        return self._left_column_share
+    @left_column_share.setter
+    def left_column_share(self, value: float):
+        assert (value > 0) and (value < 1)
+        self._left_column_share = value
+    @property
+    def left_column_padding(self) -> int:
+        return int(self.left_column_share * (LINE_SEPARATOR_LENGTH - 5))
+    @property
+    def right_column_padding(self) -> int:
+        return LINE_SEPARATOR_LENGTH - 7 - self.left_column_padding
+    @property
+    def line_padding(self) -> int:
+        return LINE_SEPARATOR_LENGTH - 2
+    @property
+    def line(self) -> str:
+        return "+" + "-"*self.line_padding + "+"
 
     @classmethod
     def field_names(cls) -> List[str]:
@@ -52,7 +72,20 @@ class SolverParams(ABC):
             child_dict.pop(key)
         return child_dict
     
-    def _num_to_str(self, value) -> str:
+    @classmethod
+    def _list_or_tuple_to_str(cls, items: List | Tuple) -> str | List[str]:
+        example = items[0]
+        if isinstance(example, (int, float, bool, str)):
+            # Multiple things on a single line ...
+            return ', '.join([str(item) for item in items])
+        elif isinstance(example, tuple):
+            # Sequence of tuples ...
+            return [f'({", ".join([str(e) for e in item])})' for item in items]
+        else:
+            raise ValueError(f'Sequence element type unexpected: {example}')
+    
+    @classmethod
+    def _param_to_str(cls, value) -> str | List[str]:
         if isinstance(value, int):
             return str(value)
         elif isinstance(value, float):
@@ -61,15 +94,41 @@ class SolverParams(ABC):
             return str(value)
         elif isinstance(value, str):
             return value
+        elif isinstance(value, (tuple, list)):
+            return cls._list_or_tuple_to_str(value)
         elif value is None:
             return "None"
         raise ValueError(f'Unexpected instance: {type(value)}')
+    
+    def _field_to_string(self, key: str, value: Any):
+        value_str = self._param_to_str(value)
+        if isinstance(value_str, str):
+            return self.PRINT_FORMAT.format(
+                key, value_str,
+                left_padding=self.left_column_padding,
+                right_padding=self.right_column_padding
+            )
+        elif isinstance(value_str, list):
+            result = '\n'.join(
+                [self.PRINT_FORMAT.format(
+                    key, value_str[0],
+                    left_padding=self.left_column_padding,
+                    right_padding=self.right_column_padding)] + 
+                [self.PRINT_FORMAT.format(
+                    '.', value_line,
+                    left_padding=self.left_column_padding,
+                    right_padding=self.right_column_padding
+                ) for value_line in value_str[1:]]
+            )
+            return result
 
     def __str__(self) -> str:
-        return '\n'.join([self.LINE]+ [
-            self.PRINT_FORMAT.format(key, self._num_to_str(value))
-            for key, value in self.child_fields.items()
-        ] + [self.LINE])
+        return '\n'.join(
+            [self.line] +
+            [self._field_to_string(key, value)
+                for key, value in self.child_fields.items()] +
+            [self.line]
+        )
 
 
 @dataclass(frozen=True)
@@ -107,6 +166,9 @@ class GurobiSolverParams(SolverParams):
     Presolve: int = te.constants.DEFAULT_PRESOLVE
     Threads: int = min(cpu_count(), 32)
     LogFile: str = te.constants.DEFAULT_GUROBI_LOG_FILE
+
+    def __post_init__(self):
+        self.left_column_share = 0.5
 
 
 class TrafficEngineeringLPSolution(ABC):

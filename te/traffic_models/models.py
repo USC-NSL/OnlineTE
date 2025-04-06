@@ -1,7 +1,7 @@
 import numpy as np
 import networkx as nx
 from dataclasses import dataclass
-from te.traffic_models.base import TrafficMatrixBase, TrafficMatrixParamsBase, traffic_matrix, traffic_matrix_param
+from .base import TrafficMatrixBase, TrafficMatrixParamsBase, traffic_matrix, traffic_matrix_param
 
 
 """

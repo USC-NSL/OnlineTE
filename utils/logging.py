@@ -37,3 +37,21 @@ method_to_str = {
     gurobipy.GRB.METHOD_PRIMAL: "PRIMAL-SIMPLEX",
     gurobipy.GRB.METHOD_DUAL: "DUAL-SIMPLEX"
 }
+
+
+LINE_SEPARATOR_LENGTH = 82
+
+def log_section_title(title: str) -> str:
+    assert len(title) < (LINE_SEPARATOR_LENGTH - 2)
+    left_padding = (LINE_SEPARATOR_LENGTH - (len(title) + 2)) // 2
+    right_padding = LINE_SEPARATOR_LENGTH - (left_padding + len(title) + 2)
+    return '\n'.join([
+        '=' * LINE_SEPARATOR_LENGTH,
+        '=' * left_padding + f' {title} ' + '=' * right_padding,
+        '=' * LINE_SEPARATOR_LENGTH
+    ])
+
+_LOG_SUBSECTION_SEPARATOR = '-' * LINE_SEPARATOR_LENGTH
+
+def log_subsection_separator() -> str:
+    return _LOG_SUBSECTION_SEPARATOR

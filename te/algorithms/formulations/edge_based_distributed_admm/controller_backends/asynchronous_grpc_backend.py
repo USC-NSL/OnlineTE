@@ -3,12 +3,11 @@ import asyncio
 import numpy as np
 from typing import List
 from te.algorithms.array_utils.cpu_utils import CPUArray
-from te.algorithms.formulations.edge_based_distributed_admm import DistributedADMMControllerRPCParams, DistributedADMMSolverParams
-from te.algorithms.formulations.edge_based_distributed_admm.controller_backends.base import (ControllerCommunicationBackendBase, 
-                                                                                             controller_communication_backend)
-from te.algorithms.formulations.edge_based_distributed_admm.utils import (serialized_message_to_array, array_to_serialized_message,
-                                                                          chunk_big_array, async_rebuild_chunked_array,
-                                                                          GRPC_ARRAY_STREAM_MAX_LEN)
+from .. import DistributedADMMControllerRPCParams, DistributedADMMSolverParams
+from .base import ControllerCommunicationBackendBase, controller_communication_backend
+from ..utils import (serialized_message_to_array, array_to_serialized_message,
+                     chunk_big_array, async_rebuild_chunked_array,
+                     GRPC_ARRAY_STREAM_MAX_LEN)
 
 import protos.distributed_lp.distributed_lp_pb2 as distributed_lp_messages
 from protos.distributed_lp.distributed_lp_pb2_grpc import DistributedADMMSolverStub
@@ -17,14 +16,13 @@ from google.protobuf.empty_pb2 import Empty
 
 @controller_communication_backend
 class AsynchronousgRPCBackend(ControllerCommunicationBackendBase):
-    def __init__(self, rpc_params: DistributedADMMControllerRPCParams, number_of_nodes: int):
+    def __init__(self, rpc_params: DistributedADMMControllerRPCParams):
         super().__init__()
         self._rpc_params = rpc_params
-        self._number_of_nodes = number_of_nodes
 
         self._worker_channels: List[grpc.Channel] = [
             grpc.aio.insecure_channel(target=":".join([ip, str(port)]))
-                for ip, port in self._rpc_params.addr_list
+                for ip, port in self._rpc_params.AddressList
         ]
         self._worker_stubs: List[DistributedADMMSolverStub] = [
             DistributedADMMSolverStub(ch) for ch in self._worker_channels
@@ -37,7 +35,7 @@ class AsynchronousgRPCBackend(ControllerCommunicationBackendBase):
     
     @property
     def number_of_nodes(self) -> int:
-        return self._number_of_nodes
+        return self._rpc_params.NumWorkers
 
     async def is_node_ready(self, worker_id: int) -> bool:
         try:

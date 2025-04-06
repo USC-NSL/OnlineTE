@@ -2,16 +2,16 @@ import time
 import argparse
 import contextlib
 import concurrent.futures
-from typing import List, Tuple
 from te.algorithms.formulations.aggregate import (
     NetworkWorkerNode, ControllerNode,
     DistributedADMMSolverParams, DistributedADMMWorkerRPCParams, 
     DistributedADMMControllerRPCParams
 )
+from te.algorithms.formulations.edge_based_distributed_admm.controller_backends import list_backends
 from te.algorithms.solution import (EdgeBasedMinimizeMaximumUtilitySolution, 
                                     EdgeBasedMinimizeMaximumUtilitySolutionParams, 
                                     default_solution_name)
-from utils.logging import as_info, as_success
+from utils.logging import as_info, as_success, log_section_title
 from te.algorithms.utils import (get_solution_confusion_matrix, stringify_collected_stats, 
                                  str_round, get_solution_maximum_utilization)
 from topologies.utils import get_uniform_tm_problem_with_capacity_heuristic
@@ -42,15 +42,17 @@ DEFAULT_ADMM_OUTER = 1.0
 DEFAULT_CONTROLLER_OPT_TOL = 1e-7
 DEFAULT_PRECISION = 'single'
 DEFAULT_NUM_WORKERS = 2
+DEFAULT_BACKEND = 'gRPC-asynchronous'
 
 
 SOLVER_PARAMS: DistributedADMMSolverParams = None
+CONTROLLER_RPC_PARAMS: DistributedADMMControllerRPCParams = None
 
 
-def show_addrs(addrs: List[Tuple[str, int]]):
-    print(as_info("Worker Nodes:"))
-    for host, port in addrs:
-        print(as_info("\t{:^32} : {:^10}".format(host, str(port))))
+# def show_addrs(addrs: List[Tuple[str, int]]):
+#     print(as_info("Worker Nodes:"))
+#     for host, port in addrs:
+#         print(as_info("\t{:^32} : {:^10}".format(host, str(port))))
 
 
 def local_distributed_admm_test(topology: str, seed: int, scale_factor: float = 10.0,
@@ -69,24 +71,18 @@ def local_distributed_admm_test(topology: str, seed: int, scale_factor: float = 
             )
         )
 
-    print(as_info("="*60))
-    print(as_info("="*23 + " MLU PROBLEM " + "="*24))
-    print(as_info("="*60))
-
-    worker_addrs = tuple([(LOCAL_HOST, BASE_PORT + worker_id) for worker_id in range(SOLVER_PARAMS.NumWorkers)])
-    show_addrs(worker_addrs)
-    with concurrent.futures.ProcessPoolExecutor(max_workers=SOLVER_PARAMS.NumWorkers) as network_pool:
-        for worker_id, worker_addr in enumerate(worker_addrs):
+    print(as_info(log_section_title("MLU PROBLEM")))
+    
+    # show_addrs(worker_addrs)
+    with concurrent.futures.ProcessPoolExecutor(max_workers=CONTROLLER_RPC_PARAMS.NumWorkers) as network_pool:
+        for worker_id, worker_addr in enumerate(CONTROLLER_RPC_PARAMS.AddressList):
             network_pool.submit(NetworkWorkerNode.spawn_and_wait, 
-                                worker_id, DistributedADMMWorkerRPCParams(ip=worker_addr[0], port=worker_addr[1]))
+                                worker_id, DistributedADMMWorkerRPCParams(IP=worker_addr[0], Port=worker_addr[1]))
         
-        with contextlib.closing(ControllerNode(graph, tm, SOLVER_PARAMS, 
-                                            DistributedADMMControllerRPCParams(
-                                                tuple(worker_addrs),
-                                                num_threads=min(SOLVER_PARAMS.NumWorkers, 8)
-                                            ))) as lp:
+        with contextlib.closing(ControllerNode(graph, tm, SOLVER_PARAMS, CONTROLLER_RPC_PARAMS)) as lp:
             print(as_info(f"Solving With: {lp.alg_name}"))
             print(as_info(f"Solving With Parameters:\n{SOLVER_PARAMS}"))
+            print(as_info(f"Communication Backend Parameters:\n{CONTROLLER_RPC_PARAMS}"))
             print(as_info("Waiting For Network Nodes ..."))
             while True:
                 time.sleep(1)
@@ -112,7 +108,7 @@ def local_distributed_admm_test(topology: str, seed: int, scale_factor: float = 
                 print(as_info(stats))
 
 
-def remote_distributed_admm_test(hosts: List[str], topology: str, seed: int, scale_factor: float = 10.0,
+def remote_distributed_admm_test(topology: str, seed: int, scale_factor: float = 10.0,
                                  save_solution: bool = False, **kwargs):
     c, graph, tm = get_uniform_tm_problem_with_capacity_heuristic(topology, seed, scale_factor=scale_factor)
     print(f"Network link capacity is: {str(round(c, 2))}")
@@ -128,20 +124,12 @@ def remote_distributed_admm_test(hosts: List[str], topology: str, seed: int, sca
             )
         )
 
-    print(as_info("="*60))
-    print(as_info("="*23 + " MLU PROBLEM " + "="*24))
-    print(as_info("="*60))
+    print(as_info(log_section_title("MLU PROBLEM")))
 
-    worker_addrs = tuple([(hosts[worker_id], BASE_PORT + worker_id) 
-                          for worker_id in range(min(SOLVER_PARAMS.NumWorkers, len(hosts)))])
-    show_addrs(worker_addrs)
-    with contextlib.closing(ControllerNode(graph, tm, SOLVER_PARAMS, 
-                                        DistributedADMMControllerRPCParams(
-                                            tuple(worker_addrs),
-                                            num_threads=min(SOLVER_PARAMS.NumWorkers, 8)
-                                        ))) as lp:
+    with contextlib.closing(ControllerNode(graph, tm, SOLVER_PARAMS, CONTROLLER_RPC_PARAMS)) as lp:
         print(as_info(f"Solving With: {lp.alg_name}"))
         print(as_info(f"Solving With Parameters:\n{SOLVER_PARAMS}"))
+        print(as_info(f"Communication Backend Parameters:\n{CONTROLLER_RPC_PARAMS}"))
         print(as_info("Waiting For Network Nodes ..."))
         while True:
             time.sleep(1)
@@ -202,6 +190,10 @@ if __name__ == '__main__':
     runtime_params_group.add_argument('--report-unsat', action='store_true', 
                                       help='Report unsatisfied commodity assignments.')
     
+    rpc_params_group = parser.add_argument_group('Communication Backend Parameters')
+    rpc_params_group.add_argument('--backend-name', choices=list_backends(), default=DEFAULT_BACKEND,
+                                  help='Communication backend name to use')
+    
     args = parser.parse_args()
 
     SOLVER_PARAMS = DistributedADMMSolverParams(
@@ -215,15 +207,26 @@ if __name__ == '__main__':
         Seed=args.seed,
         BigGamma=args.controller_opt_tol,
         Precision=args.precision,
-        NumWorkers=args.num_workers
     )
 
     if args.local:
+        CONTROLLER_RPC_PARAMS = DistributedADMMControllerRPCParams(
+            NumWorkers=args.num_workers,
+            AddressList=tuple([(LOCAL_HOST, BASE_PORT + worker_id) for worker_id in range(args.num_workers)]),
+            NumThreads=args.num_workers,
+            Backends=args.backend_name
+        )
         local_distributed_admm_test(args.topo, args.seed, args.scale_factor, 
                                     save_solution=args.save_sol, report=args.report_unsat)
     else:
-        remote_distributed_admm_test([f'n{i}.infra.v0.unregulatedadmm.distte' for i in range(SOLVER_PARAMS.NumWorkers)], 
-                                     args.topo, args.seed, args.scale_factor, 
+        CONTROLLER_RPC_PARAMS = DistributedADMMControllerRPCParams(
+            NumWorkers=args.num_workers,
+            AddressList=tuple([(f'n{worker_id}.infra.v0.unregulatedadmm.distte', BASE_PORT + worker_id) 
+                               for worker_id in range(args.num_workers)]),
+            NumThreads=args.num_workers,
+            Backends=args.backend_name
+        )
+        remote_distributed_admm_test(args.topo, args.seed, args.scale_factor, 
                                      save_solution=args.save_sol, report=args.report_unsat)
     # local_distributed_admm_test(SMALL_TOPOLOGY, RNG_SEED, save_solution=True)
     # local_distributed_admm_test(SMALL_MEDIUM_TOPOLOGY, RNG_SEED)

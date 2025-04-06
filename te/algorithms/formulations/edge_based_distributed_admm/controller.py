@@ -9,7 +9,7 @@ from te.algorithms.base import TrafficEngineeringLP, SolverParams
 from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
 from topologies.utils import get_edge_indexing, get_graph_M_matrix, get_adjacency_null_space
-from utils.logging import as_info
+from utils.logging import as_info, log_subsection_separator
 from te.algorithms.array_utils import set_global_precision
 from te.algorithms.array_utils.cpu_utils import (CPUArray, DoublePrecisionCPUArray, 
                                                  cpu_array, cpu_zeros, cpu_double_array, 
@@ -62,8 +62,7 @@ class ControllerNode(TrafficEngineeringLP):
         self._Y_bar_t: Optional[CPUArray] = None
         self._u_t: Optional[CPUArray] = None
 
-        # self._backend = get_backend('gRPC-synchronous')(rpc_params, solver_params.NumWorkers)
-        self._backend = get_backend('gRPC-asynchronous')(rpc_params, solver_params.NumWorkers)
+        self._backend = get_backend(rpc_params)
 
         self._objective_trace: List[Tuple[float, float]] = []
         self._objective_gap_trace = []
@@ -150,20 +149,20 @@ class ControllerNode(TrafficEngineeringLP):
         T = self._T
         K = len(self._commodity_list)
 
-        print(as_info("-"*60))
+        print(as_info(log_subsection_separator()))
         print(as_info(f"Graph Size: {M} nodes | {N} edges"))
         print(as_info(f"Number of commodities: {K}"))
         print(as_info(f"Nullity of commodity assignment matrix: {T}"))
-        print(as_info("-"*60))
+        print(as_info(log_subsection_separator()))
         print(as_info("CONTROLLER PROBLEM:\n" +
               f"\t TOTAL NUMBER OF VARIABLES: {N + 1}\n"
               f"\t TOTAL NUMBER OF CONSTRAINTS: {N + 1}"))
-        print(as_info("-"*60))
+        print(as_info(log_subsection_separator()))
         print(as_info("NODE PROBLEM:\n" +
               f"\t NUMBER OF INDEPENDENT QPs PER NODE: {M - 1}\n"
               f"\t NUMBER OF VARIABLES PER QP PER NODE: {T}\n"
               f"\t NUMBER CONSTRAINTS PER QP PER NODE: {T}"))
-        print(as_info("-"*60))
+        print(as_info(log_subsection_separator()))
 
     def initialize_to(self, assignment: np.ndarray):
         raise NotImplementedError

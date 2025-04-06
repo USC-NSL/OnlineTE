@@ -49,22 +49,18 @@ class NetworkWorkerNode:
     def _initialize_listener(self):
         assert self._server is None and self._listener is None
         RPC_PARAMS = self._rpc_params
-        IP = RPC_PARAMS.ip
-        PORT = RPC_PARAMS.port
-        self._server = grpc.server(thread_pool=ThreadPoolExecutor(max_workers=RPC_PARAMS.num_threads))
+        IP = RPC_PARAMS.IP
+        PORT = RPC_PARAMS.Port
+        self._server = grpc.server(thread_pool=ThreadPoolExecutor(max_workers=RPC_PARAMS.NumThreads))
         self._listener = NetworkWorkerNodeListener(self)
         add_DistributedADMMSolverServicer_to_server(self._listener, self._server)
         addr = ":".join([IP, str(PORT)])
         self._server.add_insecure_port(addr)
 
-        # print(f"[NODE {self.worker_id}] Initialized listener at address {addr}")
-
     def _start_listener(self):
         assert self._server is not None and self._listener is not None
         self._server.start()
         self._is_active = True
-
-        # print(f"[NODE {self.worker_id}] Listener started")
     
     def _stop_listener(self):
         self._is_active = False
@@ -73,9 +69,7 @@ class NetworkWorkerNode:
     
     def wait(self):
         if self._server is not None:
-            # print(f"[NODE {self.worker_id}] Will now wait for termination.")
             self._server.wait_for_termination()
-        # print(f"[NODE {self.worker_id}] Will soon terminate")
     
     def close(self):
         self.int_handler(None, None)
@@ -110,10 +104,7 @@ class NetworkWorkerNode:
         Y_BAR = self._Y_bar_t_cached
         P_BAR = self._P_bar_t_cached
         U_T = self._u_t_cached
-        # print(f'Y MEAN (BEFORE): {str(round(np.mean(Y_TK), 8))}')
-        # print(f'Y BAR MEAN: {str(round(np.mean(Y_BAR), 8))}')
-        # print(f'P BAR MEAN: {str(round(np.mean(P_BAR), 8))}')
-        # print(f'U MEAN: {str(round(np.mean(U_T), 8))}')
+        
         return Y_TK - np.expand_dims(Y_BAR - P_BAR + U_T, axis=1)
 
     def do_inner_loop_update(self, epoch: int) -> np.ndarray:
@@ -125,17 +116,11 @@ class NetworkWorkerNode:
         X_EK_START_CHUNK = self._X_ek_start_chunk
         LAMBDA_EK_CHUNK = self._lambda_ek_chunk
         C_TK_CHUNK = self._get_current_C()
-        # self._lambda_ek_chunk, self._Y_tk_chunk = \
-        #     do_pgd_with_backtracking(LAMBDA_EK_CHUNK, X_EK_START_CHUNK, NNT_M, NULL_M, C_TK_CHUNK,
-        #                              PGD_ITERS, 0.5, 3)
-        # print(f'X0 MEAN: {str(round(np.mean(X_EK_START_CHUNK), 8))}')
-        # print(f'C MEAN: {str(round(np.mean(C_TK_CHUNK), 8))}')
-        # print(f'LAMBDA MEAN (BEFORE): {str(round(np.mean(LAMBDA_EK_CHUNK), 8))}')
+        
         self._lambda_ek_chunk, self._Y_tk_chunk = \
             do_plain_pgd_with_step_reduction(LAMBDA_EK_CHUNK, X_EK_START_CHUNK, NNT_M, NULL_M, C_TK_CHUNK, GAMMA, 
                                              PGD_ITERS, KAPPA, epoch)
-        # print(f'Y MEAN: {str(round(np.mean(self._Y_tk_chunk), 8))}')
-        # print(f'LAMBDA MEAN (AFTER): {str(round(np.mean(self._lambda_ek_chunk), 8))}')
+        
         return np.mean(self._Y_tk_chunk, axis=1)
 
     def update_cached_values(self, u_t: np.ndarray, P_bar_t: np.ndarray, Y_bar_t: np.ndarray):

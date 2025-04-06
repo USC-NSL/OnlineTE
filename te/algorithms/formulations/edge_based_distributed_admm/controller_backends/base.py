@@ -2,7 +2,6 @@ from typing import Dict, Type
 from abc import ABC, abstractmethod
 from te.algorithms.array_utils.cpu_utils import CPUArray
 from te.algorithms.base import SolverParams
-import te.algorithms.formulations.edge_based_distributed_admm.controller_backends
 
 
 class ControllerCommunicationBackendBase(ABC):

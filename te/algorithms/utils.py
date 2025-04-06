@@ -14,7 +14,8 @@ import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 from typing import List, Tuple, Dict, Union, Optional, Type
 from collections import defaultdict
-from utils.logging import as_bold, as_fail, as_info, as_success, as_warning, method_to_str, str_round
+from utils.logging import (as_bold, as_fail, as_info, as_success, as_warning, method_to_str, 
+                           str_round, log_section_title, log_subsection_separator)
 from te.traffic_models.base import Commodity, TrafficMatrixBase
 from te.algorithms.base import TrafficEngineeringLP, SolverParams, GurobiSolverParams
 from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution, EdgeBasedMinimizeMaximumUtilitySolutionParams
@@ -44,13 +45,13 @@ def make_model(name: str, params: SolverParams, env: Optional[gurobipy.Env], ver
             setattr(model.Params, k, v)
 
     if verbose:
-        print(as_bold(
+        print(as_info(as_bold(
             "Created Gurobi Model With:\n"
             f"\tMethod: {method_to_str[params.Method]}\n"
             f"\tSimplex Optimality Tolerance (OptimalityTol): {model.Params.OptimalityTol}\n"
             f"\tBarrier Optimality Tolerance (BarConvTol): {model.Params.BarConvTol}\n"
             f"\tCosntraint Feasibility Tolerance (FeasibilityTol): {model.Params.FeasibilityTol}\n"
-        ))
+        )))
     
     if model.Params.OptimalityTol != model.Params.BarConvTol:
         print(as_warning(f'Simplex and Barrier have different convergence tolerances. Make sure this is actualy intended to be!!'))
@@ -455,9 +456,7 @@ def test_mlu(lp_cls: Type[TrafficEngineeringLP], graph: nx.DiGraph, tm: TrafficM
              feasibility_tol: float = None, feasibility_ratio: float = None,
              solution_params: Optional[EdgeBasedMinimizeMaximumUtilitySolutionParams] = None, 
              **kwargs):
-    print(as_info("="*60))
-    print(as_info("="*23 + " MLU PROBLEM " + "="*24))
-    print(as_info("="*60))
+    print(as_info(log_section_title("MLU PROBLEM")))
     with contextlib.closing(lp_cls(graph, tm, solver_params)) as lp:
         print(as_info(f"Solving With: {lp.alg_name}"))
         print(as_info(f"Solving With Parameters:\n{solver_params}"))

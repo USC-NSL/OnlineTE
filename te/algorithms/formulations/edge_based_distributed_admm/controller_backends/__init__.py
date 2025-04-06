@@ -1,18 +1,16 @@
-from typing import Type
-from te.algorithms.formulations.edge_based_distributed_admm.controller_backends.base import (
-    ControllerCommunicationBackendBase, _BACKENDS
-)
+from .base import ControllerCommunicationBackendBase, _BACKENDS
+from .. import DistributedADMMControllerRPCParams
 
 from . import synchronous_grpc_backend
 from . import asynchronous_grpc_backend
 
 
-def get_backend(name: str) -> Type[ControllerCommunicationBackendBase]:
+def get_backend(params: DistributedADMMControllerRPCParams) -> ControllerCommunicationBackendBase:
     global _BACKENDS
-
+    name = params.Backends
     assert name in _BACKENDS, f'No communication backend `{name}` has been registered'
 
-    return _BACKENDS[name]
+    return _BACKENDS[name](params)
 
 
 def list_backends():

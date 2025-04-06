@@ -1,9 +1,11 @@
 import numpy as np
 from dataclasses import dataclass
-from te.traffic_models.base import (
-    TrafficMatrixConverterBase, TrafficMatrixConverterParamsBase, TrafficMatrixBase, 
-    traffic_matrix_converter, traffic_matrix_converter_param)
-from te.traffic_models.models import CustomTrafficMatrix
+from . import traffic_matrix_converter, traffic_matrix_converter_param
+from .base import (
+    TrafficMatrixConverterBase, TrafficMatrixConverterParamsBase, 
+    TrafficMatrixBase
+)
+from .models import CustomTrafficMatrix
 
 
 @traffic_matrix_converter_param('Uniform')
