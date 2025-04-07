@@ -44,27 +44,6 @@
 #   - name: Download and unzip the Topology Zoo dataset
 #     command: chdir=/home/aghavidel/DistributedTE python3 -m topologies.get_topology_zoo
 #     when: (zoo_dir.stat.isdir is not defined or not zoo_dir.stat.isdir)
-- name: Get the zoo
-  hosts: controller_group
-  remote_user: aghavidel
-  tasks:
-
-  - name: Stat the Zoo directory
-    ansible.builtin.stat:
-      path: /home/aghavidel/DistributedTE/topologies/zoo
-    register: zoo_dir
-  - name: Make Zoo directory if needed
-    command: chdir=/home/aghavidel/DistributedTE/topologies mkdir zoo
-    when: (zoo_dir.stat.isdir is not defined or not zoo_dir.stat.isdir
-  - name: Unzip the Topology Zoo dataset
-    command: chdir=/home/aghavidel/DistributedTE/topologies unzip zoo.zip -d zoo
-    when: (zoo_dir.stat.isdir is not defined or not zoo_dir.stat.isdir)
-  - name: Move .gml and .graphml files
-    command: chdir=/home/aghavidel/DistributedTE/topologies/zoo mv zoo/* .
-    when: (zoo_dir.stat.isdir is not defined or not zoo_dir.stat.isdir)
-  - name: Cleanup
-    command: chdir=/home/aghavidel/DistributedTE/topologies/zoo rm -r zoo
-    when: (zoo_dir.stat.isdir is not defined or not zoo_dir.stat.isdir)
 
 - name: Prepare gRPC
   hosts: controller_group:workers_group
