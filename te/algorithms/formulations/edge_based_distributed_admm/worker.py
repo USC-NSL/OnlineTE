@@ -11,9 +11,9 @@ from te.algorithms.sub_algorithms.pgd import do_plain_pgd_with_step_reduction
 
 
 class NetworkWorkerNode:
-    def __init__(self, worker_id: int, rpc_params: DistributedADMMWorkerRPCParams, 
+    def __init__(self, rpc_params: DistributedADMMWorkerRPCParams, 
                  solver_params: Optional[DistributedADMMSolverParams] = None):
-        self.worker_id = worker_id
+        self.worker_id = rpc_params.WorkerID
         self._rpc_params = rpc_params
         self._solver_params = solver_params
         self._ready: bool = False
@@ -104,9 +104,9 @@ class NetworkWorkerNode:
         self._backend.close()
 
     @staticmethod
-    def spawn_and_wait(worker_id: int, rpc_params: DistributedADMMWorkerRPCParams, 
+    def spawn_and_wait(rpc_params: DistributedADMMWorkerRPCParams, 
                        solver_params: Optional[DistributedADMMSolverParams] = None):
-        with contextlib.closing(NetworkWorkerNode(worker_id, rpc_params, solver_params)) as worker:
+        with contextlib.closing(NetworkWorkerNode(rpc_params, solver_params)) as worker:
             worker.wait()
 
 
@@ -118,6 +118,10 @@ if __name__ == '__main__':
         print(as_fail('Worker ID was not properly initialized!'), file=sys.stderr)
         sys.exit(-1)
     else:
-        rpc_params = DistributedADMMWorkerRPCParams(IP=socket.gethostbyname(socket.gethostname()), Port=13000 + worker_id)
+        rpc_params = DistributedADMMWorkerRPCParams(
+            IP=socket.gethostbyname(socket.gethostname()), Port=13000 + worker_id,
+            WorkerID=worker_id
+        )
+        print(f'RPC Parameters:\n{rpc_params}')
         # rpc_params = DistributedADMMWorkerRPCParams(IP='localhost', Port=13000 + worker_id)
-        NetworkWorkerNode.spawn_and_wait(worker_id, rpc_params)
+        NetworkWorkerNode.spawn_and_wait(rpc_params)

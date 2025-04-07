@@ -58,7 +58,7 @@ def local_distributed_admm_test(topology: str, seed: int, scale_factor: float = 
     with concurrent.futures.ProcessPoolExecutor(max_workers=CONTROLLER_RPC_PARAMS.NumWorkers) as network_pool:
         for worker_id, worker_addr in enumerate(CONTROLLER_RPC_PARAMS.AddressList):
             network_pool.submit(NetworkWorkerNode.spawn_and_wait, 
-                                worker_id, DistributedADMMWorkerRPCParams(IP=worker_addr[0], Port=worker_addr[1]))
+                                DistributedADMMWorkerRPCParams(IP=worker_addr[0], Port=worker_addr[1], WorkerID=worker_id))
         
         with contextlib.closing(ControllerNode(graph, tm, SOLVER_PARAMS, CONTROLLER_RPC_PARAMS)) as lp:
             print(as_info(f"Solving With: {lp.alg_name}"))
