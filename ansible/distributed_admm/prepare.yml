@@ -71,6 +71,8 @@
       with_items: "{{ worker_env }}"
     - name: Source ENV
       shell: ". /etc/environment"
+    - name: Allow Service To Linger
+      command: sudo loginctl enable-linger aghavidel
 
 - name: Enable TE Worker Service
   hosts: workers_group
