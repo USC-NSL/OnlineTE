@@ -1,5 +1,6 @@
 import grpc
 import signal
+import inspect
 import protos.distributed_lp.distributed_lp_pb2 as distributed_lp_messages
 from typing import Optional, Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -77,49 +78,62 @@ class NetworkWorkerNodeListener(DistributedADMMSolverServicer):
         self._id = backend.worker_id
     
     def SetInitialFeasibleSolution(self, request_iterator: Iterator[distributed_lp_messages.Chunk], context):
+        print(f'[START] {inspect.currentframe().f_code.co_name}')
         self._backend.set_initial_feasible_solution(rebuild_chunked_array(request_iterator))
+        print(f'[END] {inspect.currentframe().f_code.co_name}')
         return Empty()
-    
-    # def InitializeWorkerNode(self, request: distributed_lp_messages.InitMessage, context):
-    #     self._worker_node.initialize(
-    #         N=serialized_message_to_array(request.NULL_M),
-    #         P_bar_t=serialized_message_to_array(get_optional_field(request, 'P_bar_t')),
-    #         u_t=serialized_message_to_array(get_optional_field(request, 'u_t')),
-    #         Y_bar_t=serialized_message_to_array(get_optional_field(request, 'Y_bar_t'))
-    #     )
-    #     return Empty()
 
     def SetNullSpaceBasis(self, request_iterator: Iterator[distributed_lp_messages.Chunk], context):
+        print(f'[START] {inspect.currentframe().f_code.co_name}')
         self._backend.set_null_space_basis(rebuild_chunked_array(request_iterator))
+        print(f'[END] {inspect.currentframe().f_code.co_name}')
         return Empty()
     
     def DoNetworkUpdate(self, request: distributed_lp_messages.NetworkUpdateRequest, context):
-        return array_to_serialized_message(self._backend.do_inner_loop_update(request.epoch))
+        print(f'[START] {inspect.currentframe().f_code.co_name}')
+        res = array_to_serialized_message(self._backend.do_inner_loop_update(request.epoch))
+        print(f'[END] {inspect.currentframe().f_code.co_name}')
+        return res
     
     def UpdateWorkerNode(self, request: distributed_lp_messages.UpdateMessage, context):
+        print(f'[START] {inspect.currentframe().f_code.co_name}')
         self._backend.update_cached_values(
             serialized_message_to_array(request.u_t),
             serialized_message_to_array(request.P_bar_t),
             serialized_message_to_array(request.Y_bar_t)
         )
+        print(f'[END] {inspect.currentframe().f_code.co_name}')
         return Empty()
     
     def RequestChunk(self, request, context):
-        return chunk_big_array(self._backend.report_chunk(), GRPC_ARRAY_STREAM_MAX_LEN)
+        print(f'[START] {inspect.currentframe().f_code.co_name}')
+        res = chunk_big_array(self._backend.report_chunk(), GRPC_ARRAY_STREAM_MAX_LEN)
+        print(f'[END] {inspect.currentframe().f_code.co_name}')
+        return res
     
     def RequestAggregate(self, request, context):
-        return array_to_serialized_message(self._backend.report_aggregate())
+        print(f'[START] {inspect.currentframe().f_code.co_name}')
+        res = array_to_serialized_message(self._backend.report_aggregate())
+        print(f'[END] {inspect.currentframe().f_code.co_name}')
+        return res
     
     def QueryState(self, request, context):
-        return distributed_lp_messages.State(ready=self._backend.is_worker_node_ready)
+        print(f'[START] {inspect.currentframe().f_code.co_name}')
+        res = distributed_lp_messages.State(ready=self._backend.is_worker_node_ready)
+        print(f'[END] {inspect.currentframe().f_code.co_name}')
+        return res
     
     def SetSolverParameters(self, request: distributed_lp_messages.SolverParameters, context):
+        print(f'[START] {inspect.currentframe().f_code.co_name}')
         new_params = DistributedADMMSolverParams()
         for field in new_params.child_fields.keys():
             setattr(new_params, field, getattr(request, field))
         self._backend.set_solver_parameters(new_params)
+        print(f'[END] {inspect.currentframe().f_code.co_name}')
         return Empty()
     
     def Close(self, request, context):
+        print(f'[START] {inspect.currentframe().f_code.co_name}')
         self._backend.close()
+        print(f'[END] {inspect.currentframe().f_code.co_name}')
         return Empty()
