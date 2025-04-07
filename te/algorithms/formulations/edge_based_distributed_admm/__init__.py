@@ -28,6 +28,7 @@ class DistributedADMMWorkerRPCParams(SolverParams):
     IP: str = "localhost"
     Port: int = 13000
     NumThreads: int = 1
+    WorkerID: int = 0
 
 
 @dataclass

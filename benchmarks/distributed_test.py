@@ -202,7 +202,9 @@ if __name__ == '__main__':
     else:
         CONTROLLER_RPC_PARAMS = DistributedADMMControllerRPCParams(
             NumWorkers=args.num_workers,
-            AddressList=tuple([(f'n{worker_id}.infra.v0.unregulatedadmm.distte', BASE_PORT + worker_id) 
+            # AddressList=tuple([(f'n{worker_id}.infra.v0.unregulatedadmm.distte', BASE_PORT + worker_id) 
+            #                    for worker_id in range(args.num_workers)]),
+            AddressList=tuple([(LOCAL_HOST, BASE_PORT + worker_id) 
                                for worker_id in range(args.num_workers)]),
             NumThreads=args.num_workers,
             Backends=args.backend_name

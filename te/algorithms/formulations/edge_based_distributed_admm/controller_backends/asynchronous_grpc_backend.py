@@ -41,7 +41,7 @@ class AsynchronousgRPCBackend(ControllerCommunicationBackendBase):
         try:
             res = await self._worker_stubs[worker_id].QueryState(Empty())
             return res.ready
-        except grpc._channel._InactiveRpcError:
+        except grpc.aio._call.AioRpcError:
             return False
     
     async def _are_network_nodes_ready(self) -> bool:
