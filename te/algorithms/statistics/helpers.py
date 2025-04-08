@@ -2,8 +2,6 @@ import time
 from typing import Dict, Callable, Optional, Any
 from te.algorithms.statistics.base import (StatisticsCollectorBase, get_global_memory_usage_collecotor, 
                                            get_global_execution_time_collector)
-from te.algorithms.array_utils.gpu_utils import (synchronize_to_all, synchronize_to_device, get_total_reserved_gpu_memory_usage, 
-                                                 get_total_used_gpu_memory_usage)
 
 
 def before_and_after_helper(collector: StatisticsCollectorBase, element_name: str, 
@@ -32,47 +30,19 @@ record_time_ns = lambda: {'start': time.perf_counter_ns()}
 
 
 def get_elapsed_time_ns(start: int) -> int:
+    """Get counter time passed since the given point in `ns`"""
     return time.perf_counter_ns() - start
 
-
-def synchronize_and_get_elapsed_time_ns(start: int, dev: Optional[int] = None):
-    if dev is not None:
-        synchronize_to_device(dev)
-    else:
-        synchronize_to_all()
-    return time.perf_counter_ns() - start
-
-
-# CPU / GPU runtime
 
 def record_cpu_runtime(element_name: str, collector: Optional[StatisticsCollectorBase] = None):
+    """Record CPU runtime in-between the execution of the decorated function"""
     if collector is None:
         collector = get_global_execution_time_collector()
     return before_and_after_helper(collector, element_name, get_elapsed_time_ns, record_time_ns)
 
-def record_gpu_runtime(element_name: str, dev: Optional[int] = None, collector: Optional[StatisticsCollectorBase] = None):
-    if collector is None:
-        collector = get_global_execution_time_collector()
-    def _synchronize_and_get_elapsed_time_ns(start: int):
-        return synchronize_and_get_elapsed_time_ns(start=start, dev=dev)
-    return before_and_after_helper(collector, element_name, _synchronize_and_get_elapsed_time_ns, record_time_ns)
-
-
-# GPU memory usage
-
-def record_reserved_gpu_memory(element_name: str, collector: Optional[StatisticsCollectorBase] = None):
-    if collector is None:
-        collector = get_global_memory_usage_collecotor()
-    return before_and_after_helper(collector, element_name, get_total_reserved_gpu_memory_usage)
-def record_used_gpu_memory(element_name: str, collector: Optional[StatisticsCollectorBase] = None):
-    if collector is None:
-        collector = get_global_memory_usage_collecotor()
-    return before_and_after_helper(collector, element_name, get_total_used_gpu_memory_usage)
-
-
-# Misc. helpers
 
 def record_return_value(element_name: str, collector: Optional[StatisticsCollectorBase] = None):
+    """Record the return value of the decorated function (assumed to be a single integer value)"""
     if collector is None:
         collector = get_global_execution_time_collector()
     def inner(f):
@@ -82,3 +52,41 @@ def record_return_value(element_name: str, collector: Optional[StatisticsCollect
             return res
         return wrapper
     return inner
+
+
+try:
+    from te.algorithms.array_utils.gpu_utils import (synchronize_to_all, synchronize_to_device, get_total_reserved_gpu_memory_usage, 
+                                                     get_total_used_gpu_memory_usage)
+
+
+    def synchronize_and_get_elapsed_time_ns(start: int, dev: Optional[int] = None):
+        """Synchronize to GPU device to get the elapsed time for execution"""
+        if dev is not None:
+            synchronize_to_device(dev)
+        else:
+            synchronize_to_all()
+        return time.perf_counter_ns() - start
+
+
+    def record_gpu_runtime(element_name: str, dev: Optional[int] = None, collector: Optional[StatisticsCollectorBase] = None):
+        """Get runtime of a decorated function that invokes GPU operations"""
+        if collector is None:
+            collector = get_global_execution_time_collector()
+        def _synchronize_and_get_elapsed_time_ns(start: int):
+            return synchronize_and_get_elapsed_time_ns(start=start, dev=dev)
+        return before_and_after_helper(collector, element_name, _synchronize_and_get_elapsed_time_ns, record_time_ns)
+
+
+    # GPU memory usage
+
+    def record_reserved_gpu_memory(element_name: str, collector: Optional[StatisticsCollectorBase] = None):
+        if collector is None:
+            collector = get_global_memory_usage_collecotor()
+        return before_and_after_helper(collector, element_name, get_total_reserved_gpu_memory_usage)
+    def record_used_gpu_memory(element_name: str, collector: Optional[StatisticsCollectorBase] = None):
+        if collector is None:
+            collector = get_global_memory_usage_collecotor()
+        return before_and_after_helper(collector, element_name, get_total_used_gpu_memory_usage)
+
+except ModuleNotFoundError:
+    pass
