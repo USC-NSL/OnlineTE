@@ -18,6 +18,7 @@ from te.algorithms.utils import check_capacity_constraint, optimize_or_scream, m
 from te.algorithms.sub_algorithms.feasible_assignment import get_feasible_flow_assignment
 from te.algorithms.sub_algorithms.admm_consensus_test import outer_admm_consensus_test, inner_admm_consensus_test, norm_in_consensus
 from te.algorithms.sub_algorithms.flow_conservation_test import check_flow_conservation
+from te.algorithms.statistics.helpers import record_cpu_runtime, record_return_value
 from . import DistributedADMMSolverParams, DistributedADMMControllerRPCParams
 from .controller_backends import get_backend
 
@@ -112,6 +113,7 @@ class ControllerNode(TrafficEngineeringLP):
         assert self._X_ek is not None
         return self._X_ek
 
+    @record_cpu_runtime('Feasible-Assignment')
     def _set_initial_feasible_solution(self):
         self._X_ek_start = get_feasible_flow_assignment(self._graph, self._commodity_list)
         self._Xo_e_start = np.sum(self._X_ek_start, axis=1)
@@ -224,8 +226,11 @@ class ControllerNode(TrafficEngineeringLP):
 
         self._update_controller_objective()
 
+    @record_return_value('PGD-Runtime')
+    @record_cpu_runtime('Network-Update')
     def _do_network_update(self, epoch: int):
-        self._Y_bar_t = self._backend.do_network_update(epoch)
+        max_run, self._Y_bar_t = self._backend.do_network_update(epoch)
+        return max_run
     
     def _update_P_bar(self):
         assert self._model_controller is not None
@@ -249,14 +254,7 @@ class ControllerNode(TrafficEngineeringLP):
 
         self._u_t = U_T + (Y_BAR_T - P_BAR_T)
     
-    # def _reconvene_network_updates(self):
-    #     self._update_P_bar()
-    #     self._update_u_t()
-    #     self._backend.reconvene_network_updates(
-    #         P_bar_t=self._P_bar_t,
-    #         Y_bar_t=self._Y_bar_t,
-    #         u_t=self._u_t
-    #     )
+    @record_cpu_runtime('Update-Reconvene')
     def _reconvene_network_updates(self) -> bool:
         self._update_P_bar()
         self._update_u_t()
@@ -267,6 +265,7 @@ class ControllerNode(TrafficEngineeringLP):
         )
         return norm_in_consensus(self._P_bar_t, self._Y_bar_t, 5e-4)
     
+    @record_cpu_runtime('Update-Zo-Re')
     def _update_Zo_e_and_r_e(self):
         assert self._model_controller is not None
 
@@ -274,7 +273,7 @@ class ControllerNode(TrafficEngineeringLP):
         R_E = self._r_e
         XO_E = self._Xo_e
         XO_E_ = cpu_array([XO_E[e].X for e in range(NUM_EDGES)])
-        X_KE_SUM_E = self._backend.get_X_ek_sum()
+        X_KE_SUM_E = self._Xo_e_start + len(self._commodity_list) * self._NULL_M @ self._Y_bar_t
 
         Zo_e = (XO_E_ + X_KE_SUM_E) / 2
         self._Zo_e = Zo_e
@@ -306,6 +305,7 @@ class ControllerNode(TrafficEngineeringLP):
         if with_params:
             self._model_controller.resetParams()
     
+    @record_cpu_runtime('Solve')
     def solve(self, params: SolverParams = None) -> float:
         assert params is None
         
@@ -317,10 +317,6 @@ class ControllerNode(TrafficEngineeringLP):
             for epoch in tqdm.tqdm(range(PARAMS.NumberOfEpochs), bar_format='{l_bar}{bar:36}{r_bar}{bar:-36b}'):
             # for epoch in range(PARAMS.NumberOfEpochs):
                 optimize_or_scream(MODEL_CONTROLLER)
-                # for i in reversed(range(PARAMS.NumberOfNetworkUpdates)):
-                #     self._do_network_update(epoch)
-                #     if i > 0:
-                #         self._reconvene_network_updates()
                 for i in reversed(range(PARAMS.NumberOfNetworkUpdates)):
                     self._do_network_update(epoch)
                     if i > 0 and self._reconvene_network_updates():

@@ -6,7 +6,7 @@ service DistributedADMMSolver {
     rpc SetInitialFeasibleSolution(stream Chunk) returns (google.protobuf.Empty) {}
     // rpc InitializeWorkerNode(InitMessage) returns (google.protobuf.Empty) {}
     rpc SetNullSpaceBasis(stream Chunk) returns (google.protobuf.Empty) {}
-    rpc DoNetworkUpdate(NetworkUpdateRequest) returns (SerializedNumpyArrayMessage) {}
+    rpc DoNetworkUpdate(NetworkUpdateRequest) returns (NetworkUpdateResponse) {}
     rpc UpdateWorkerNode(UpdateMessage) returns (google.protobuf.Empty) {}
     rpc RequestChunk(google.protobuf.Empty) returns (stream Chunk) {}
     rpc RequestAggregate(google.protobuf.Empty) returns (SerializedNumpyArrayMessage) {}
@@ -39,6 +39,11 @@ message UpdateMessage {
 
 message NetworkUpdateRequest {
     int32 epoch = 1;
+}
+
+message NetworkUpdateResponse {
+    int32 runtime_ns = 1;
+    SerializedNumpyArrayMessage means = 2;
 }
 
 message State {

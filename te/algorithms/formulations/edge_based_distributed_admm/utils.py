@@ -11,10 +11,15 @@ GRPC_ARRAY_STREAM_MAX_LEN = 2**20
 
 
 def array_to_serialized_message(array: Optional[np.ndarray]) -> Optional[distributed_lp_messages.SerializedNumpyArrayMessage]:
+    """
+    Serialize a Numpy array into a single chunk of bytes to send (this can be a really large packet).
+    The output RPC message contains the array shape too.
+    """
     if array is not None:
         return distributed_lp_messages.SerializedNumpyArrayMessage(array=array.tobytes(), dims=list(array.shape))
 
 def serialized_message_to_array(message: Optional[distributed_lp_messages.SerializedNumpyArrayMessage]) -> Optional[np.ndarray]:
+    """Deserialize a chunk of bytes into a Numpy array (the input RPC request contains the shape as well)"""
     if message is not None:
         return cpu_frombuffer(message.array, tuple(message.dims))
 
@@ -25,6 +30,7 @@ array_2d_dim_struct_format = "II"
 
 
 def chunk_big_array(array: np.ndarray, chunk_size: int):
+    """Chunk a large array into a sequence of bytes of at most `chunk_size` length"""
     assert array.ndim == 2
     # TODO: Make this more lazy (e.g. avoid copying). This array can be really really big!
     # First, send the array dimenssions ..
@@ -42,6 +48,7 @@ def chunk_big_array(array: np.ndarray, chunk_size: int):
 
 
 def rebuild_chunked_array(chunks: Union[Iterator[distributed_lp_messages.Chunk], List[distributed_lp_messages.Chunk]]) -> np.ndarray:
+    """Rebuild an array from gathered byte chunks (This assumes a synchronous stream)"""
     arrays = []
     if isinstance(chunks, list):
         shape = struct.unpack(array_2d_dim_struct_format, chunks[0].data)
@@ -57,6 +64,7 @@ def rebuild_chunked_array(chunks: Union[Iterator[distributed_lp_messages.Chunk],
 
 
 async def async_rebuild_chunked_array(chunk_async_stream: grpc.aio._call.UnaryStreamCall) -> np.ndarray:
+    """Rebuild an array from gathered byte chunks (This assumes am asymchronous stream)"""
     arrays = []
     shape_chunk: distributed_lp_messages.Chunk = await chunk_async_stream.read()
     shape = struct.unpack(array_2d_dim_struct_format, shape_chunk.data)

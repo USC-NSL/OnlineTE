@@ -69,8 +69,6 @@ class AsynchronousgRPCBackend(ControllerCommunicationBackendBase):
         ])
 
         # Finally, the rest of the things to know ...
-        # init = distributed_lp_messages.InitMessage(NULL_M=array_to_serialized_message(NULL_M))
-        # await asyncio.gather(*[stub.InitializeWorkerNode(init) for stub in WORKERS])
         await asyncio.gather(*[
             stub.SetNullSpaceBasis(chunk_big_array(NULL_M, GRPC_ARRAY_STREAM_MAX_LEN))
             for stub in WORKERS
@@ -100,10 +98,11 @@ class AsynchronousgRPCBackend(ControllerCommunicationBackendBase):
         return self._event_loop.run_until_complete(self._get_X_ek_sum())
     
     async def _do_network_update(self, message: distributed_lp_messages.NetworkUpdateRequest):
-        serialized_y_bar_chunks = await asyncio.gather(*[
+        responses = await asyncio.gather(*[
             stub.DoNetworkUpdate(message) for stub in self._worker_stubs
         ])
-        return np.mean([serialized_message_to_array(chunk) for chunk in serialized_y_bar_chunks], axis=0)
+        runtimes, serialized_y_bar_chunks = zip(*list([(res.runtime_ns, res.means) for res in responses]))
+        return max(runtimes), np.mean([serialized_message_to_array(chunk) for chunk in serialized_y_bar_chunks], axis=0)
     
     def do_network_update(self, epoch: int):
         message = distributed_lp_messages.NetworkUpdateRequest(epoch=epoch)

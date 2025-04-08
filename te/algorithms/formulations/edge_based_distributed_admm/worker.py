@@ -1,9 +1,10 @@
 import sys
+import time
 import contextlib
 import numpy as np
 from typing import Optional
 from te.algorithms.array_utils import set_global_precision
-from te.algorithms.array_utils.cpu_utils import cpu_zeros, cpu_array, set_cpu_float_precision
+from te.algorithms.array_utils.cpu_utils import CPUArray, cpu_zeros, cpu_array, set_cpu_float_precision
 from . import DistributedADMMSolverParams, DistributedADMMWorkerRPCParams
 from .worker_backends.base import WorkerNodeCommunicationBackendBase
 from .worker_backends.synchronous_grpc_backend import SynchronousgRPCBackend
@@ -21,14 +22,14 @@ class NetworkWorkerNode:
         self._T: Optional[int] = None
         self._NUM_EDGES: Optional[int] = None
         self._CHUNK_LEN: Optional[int] = None
-        self._NULL_M: Optional[np.ndarray] = None
-        self._NNT_M: Optional[np.ndarray] = None
-        self._X_ek_start_chunk: Optional[np.ndarray] = None
-        self._Y_tk_chunk: Optional[np.ndarray] = None
-        self._lambda_ek_chunk: Optional[np.ndarray] = None
-        self._Y_bar_t_cached: Optional[np.ndarray] = None
-        self._P_bar_t_cached: Optional[np.ndarray] = None
-        self._u_t_cached: Optional[np.ndarray] = None
+        self._NULL_M: Optional[CPUArray] = None
+        self._NNT_M: Optional[CPUArray] = None
+        self._X_ek_start_chunk: Optional[CPUArray] = None
+        self._Y_tk_chunk: Optional[CPUArray] = None
+        self._lambda_ek_chunk: Optional[CPUArray] = None
+        self._Y_bar_t_cached: Optional[CPUArray] = None
+        self._P_bar_t_cached: Optional[CPUArray] = None
+        self._u_t_cached: Optional[CPUArray] = None
 
         self._backend: WorkerNodeCommunicationBackendBase = SynchronousgRPCBackend(rpc_params)
         self._backend.set_initial_feasible_solution = self.set_initial_feasible_solution
@@ -42,11 +43,11 @@ class NetworkWorkerNode:
     def wait(self):
         self._backend.wait()
     
-    def set_initial_feasible_solution(self, X: np.ndarray):
+    def set_initial_feasible_solution(self, X: CPUArray):
         self._X_ek_start_chunk = X
         self._NUM_EDGES, self._CHUNK_LEN = self._X_ek_start_chunk.shape
     
-    def set_null_space_basis(self, NULL_M: np.ndarray):
+    def set_null_space_basis(self, NULL_M: CPUArray):
         self._NULL_M = NULL_M
         assert self._X_ek_start_chunk is not None
         CHUNK_LEN = self._CHUNK_LEN
@@ -56,11 +57,11 @@ class NetworkWorkerNode:
         self._T = T
         self._Y_tk_chunk = cpu_zeros((T, CHUNK_LEN))
         self._lambda_ek_chunk = cpu_zeros(self._X_ek_start_chunk.shape)
-        self._Y_bar_t_cached: Optional[np.ndarray] = cpu_zeros((T,))
-        self._P_bar_t_cached: Optional[np.ndarray] = cpu_zeros((T,))
-        self._u_t_cached: Optional[np.ndarray] = cpu_zeros((T,))
+        self._Y_bar_t_cached: Optional[CPUArray] = cpu_zeros((T,))
+        self._P_bar_t_cached: Optional[CPUArray] = cpu_zeros((T,))
+        self._u_t_cached: Optional[CPUArray] = cpu_zeros((T,))
 
-    def _get_current_C(self) -> np.ndarray:
+    def _get_current_C(self) -> CPUArray:
         Y_TK = self._Y_tk_chunk
         Y_BAR = self._Y_bar_t_cached
         P_BAR = self._P_bar_t_cached
@@ -73,7 +74,7 @@ class NetworkWorkerNode:
         set_global_precision(precision=new_params.Precision)
         set_cpu_float_precision()
 
-    def do_inner_loop_update(self, epoch: int) -> np.ndarray:
+    def do_inner_loop_update(self, epoch: int) -> CPUArray:
         GAMMA = self._solver_params.Gamma
         KAPPA = self._solver_params.Kappa
         PGD_ITERS = self._solver_params.PGDIterations
@@ -83,21 +84,22 @@ class NetworkWorkerNode:
         LAMBDA_EK_CHUNK = self._lambda_ek_chunk
         C_TK_CHUNK = self._get_current_C()
         
+        start = time.perf_counter_ns()
         self._lambda_ek_chunk, self._Y_tk_chunk = \
             do_plain_pgd_with_step_reduction(LAMBDA_EK_CHUNK, X_EK_START_CHUNK, NNT_M, NULL_M, C_TK_CHUNK, GAMMA, 
                                              PGD_ITERS, KAPPA, epoch)
 
-        return np.mean(self._Y_tk_chunk, axis=1)
+        return time.perf_counter_ns() - start, np.mean(self._Y_tk_chunk, axis=1)
 
-    def update_cached_values(self, u_t: np.ndarray, P_bar_t: np.ndarray, Y_bar_t: np.ndarray):
+    def update_cached_values(self, u_t: CPUArray, P_bar_t: CPUArray, Y_bar_t: CPUArray):
         self._u_t_cached = u_t
         self._P_bar_t_cached = P_bar_t
         self._Y_bar_t_cached = Y_bar_t
     
-    def report_chunk(self) -> np.ndarray:
+    def report_chunk(self) -> CPUArray:
         return cpu_array(self._Y_tk_chunk)
     
-    def report_aggregate(self) -> np.ndarray:
+    def report_aggregate(self) -> CPUArray:
         return np.sum(self._X_ek_start_chunk + self._NULL_M @ self._Y_tk_chunk, axis=1)
     
     def close(self):

@@ -1,4 +1,4 @@
-from typing import Dict, Type, Callable
+from typing import Dict, Type, Callable, Tuple
 from abc import ABC, abstractmethod
 from te.algorithms.array_utils.cpu_utils import CPUArray
 from te.algorithms.base import SolverParams
@@ -42,10 +42,10 @@ class WorkerNodeCommunicationBackendBase(ABC):
         self._set_null_space_basis = f
     
     @property
-    def do_inner_loop_update(self) -> Callable[[int], CPUArray]:
+    def do_inner_loop_update(self) -> Callable[[int], Tuple[int, CPUArray]]:
         return self._do_inner_loop_update
     @do_inner_loop_update.setter
-    def do_inner_loop_update(self, f: Callable[[int], CPUArray]):
+    def do_inner_loop_update(self, f: Callable[[int], Tuple[int, CPUArray]]):
         self._do_inner_loop_update = f
     
     @property

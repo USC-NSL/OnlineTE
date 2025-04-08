@@ -71,14 +71,7 @@ class SynchronousgRPCBackend(ControllerCommunicationBackendBase):
             ) for i, stub in enumerate(WORKERS)
         ])
           
-        # Finally, the rest of the things to know ...
-        # wait([
-        #     self._broadcast_thread_pool.submit(stub.InitializeWorkerNode, 
-        #                                        distributed_lp_messages.InitMessage(
-        #                                            NULL_M=array_to_serialized_message(NULL_M)
-        #                                        ))
-        #         for stub in WORKERS
-        # ])       
+        # Finally, the rest of the things to know ... 
         wait([
             self._broadcast_thread_pool.submit(stub.SetNullSpaceBasis, 
                                                chunk_big_array(NULL_M, GRPC_ARRAY_STREAM_MAX_LEN))
@@ -98,9 +91,10 @@ class SynchronousgRPCBackend(ControllerCommunicationBackendBase):
     
     def do_network_update(self, epoch: int):
         message = distributed_lp_messages.NetworkUpdateRequest(epoch=epoch)
-        serialized_y_bar_chunks = self._broadcast_thread_pool.map(
+        responses = self._broadcast_thread_pool.map(
             lambda stub: stub.DoNetworkUpdate(message), self._worker_stubs)
-        return np.mean([serialized_message_to_array(chunk) for chunk in serialized_y_bar_chunks], axis=0)
+        runtimes, serialized_y_bar_chunks = zip(*list([(res.runtime_ns, res.means) for res in responses]))
+        return max(runtimes), np.mean([serialized_message_to_array(chunk) for chunk in serialized_y_bar_chunks], axis=0)
     
     def reconvene_network_updates(self, P_bar_t: CPUArray, Y_bar_t: CPUArray, u_t: CPUArray):
         message = distributed_lp_messages.UpdateMessage(

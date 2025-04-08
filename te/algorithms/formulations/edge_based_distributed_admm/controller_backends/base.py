@@ -1,4 +1,4 @@
-from typing import Dict, Type
+from typing import Dict, Type, Tuple
 from abc import ABC, abstractmethod
 from te.algorithms.array_utils.cpu_utils import CPUArray
 from te.algorithms.base import SolverParams
@@ -32,7 +32,7 @@ class ControllerCommunicationBackendBase(ABC):
         """Get the total flow over each edge"""
     
     @abstractmethod
-    def do_network_update(self, epoch: int) -> CPUArray:
+    def do_network_update(self, epoch: int) -> Tuple[int, CPUArray]:
         """Do network update for a given epoch and return the aggregate"""
     
     @abstractmethod

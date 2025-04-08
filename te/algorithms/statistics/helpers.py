@@ -68,3 +68,17 @@ def record_used_gpu_memory(element_name: str, collector: Optional[StatisticsColl
     if collector is None:
         collector = get_global_memory_usage_collecotor()
     return before_and_after_helper(collector, element_name, get_total_used_gpu_memory_usage)
+
+
+# Misc. helpers
+
+def record_return_value(element_name: str, collector: Optional[StatisticsCollectorBase] = None):
+    if collector is None:
+        collector = get_global_execution_time_collector()
+    def inner(f):
+        def wrapper(*args, **kwargs):
+            res = f(*args, **kwargs)
+            collector.add_value(element_name, res)
+            return res
+        return wrapper
+    return inner

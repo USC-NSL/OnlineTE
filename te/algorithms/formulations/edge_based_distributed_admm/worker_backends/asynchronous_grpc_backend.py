@@ -86,7 +86,10 @@ class NetworkWorkerNodeListener(DistributedADMMSolverServicer):
         return Empty()
     
     async def DoNetworkUpdate(self, request: distributed_lp_messages.NetworkUpdateRequest, context):
-        return array_to_serialized_message(self._backend.do_inner_loop_update(request.epoch))
+        means, runtime = self._backend.do_inner_loop_update(request.epoch)
+        return distributed_lp_messages.NetworkUpdateResponse(
+            runtime_ns=runtime, means=array_to_serialized_message(means)
+        )
     
     async def UpdateWorkerNode(self, request: distributed_lp_messages.UpdateMessage, context):
         self._backend.update_cached_values(
