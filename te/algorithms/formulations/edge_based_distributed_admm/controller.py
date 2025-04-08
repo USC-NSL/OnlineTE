@@ -205,6 +205,7 @@ class ControllerNode(TrafficEngineeringLP):
         for i, (_, _, c_e) in enumerate(GRAPH.edges(data='capacity')):
             MODEL_CONTROLLER.addConstr(XO_E[i] / c_e <= UTILITY)
     
+    @record_cpu_runtime('Controller-Update')
     def _update_controller_objective(self):
         NUM_EDGES = self._NUM_EDGES
         UTILITY = self._utility

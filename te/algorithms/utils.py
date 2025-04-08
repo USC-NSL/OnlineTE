@@ -19,6 +19,7 @@ from utils.logging import (as_bold, as_fail, as_info, as_success, as_warning, me
 from te.traffic_models.base import Commodity, TrafficMatrixBase
 from te.algorithms.base import TrafficEngineeringLP, SolverParams, GurobiSolverParams
 from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution, EdgeBasedMinimizeMaximumUtilitySolutionParams
+from te.algorithms.statistics.helpers import record_cpu_runtime
 from te.algorithms.statistics.base import stringify_collected_stats
 
 
@@ -59,6 +60,7 @@ def make_model(name: str, params: SolverParams, env: Optional[gurobipy.Env], ver
     return model
 
 
+@record_cpu_runtime('Gurobi-Solve')
 def optimize_or_scream(model: gurobipy.Model):
     """Solve a Gurobi model. Throw an error if the model ends up in any non-optimal state"""
     model.optimize()
