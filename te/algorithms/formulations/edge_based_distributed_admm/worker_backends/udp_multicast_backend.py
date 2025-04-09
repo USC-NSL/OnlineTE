@@ -27,16 +27,17 @@ class MulticastBackend(WorkerNodeCommunicationBackendBase):
 
         for sig in ('TERM', 'INT'):
             signal.signal(getattr(signal, 'SIG'+sig), self.int_handler)
-        
-        self.start()
 
         self._gather_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         self._gather_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._gather_socket.bind(('224.0.0.10', 12000))
 
         self._event_loop = asyncio.get_event_loop()
+        print(self._event_loop)
         self._handler_loop = None
         self.close = lambda: self.int_handler(None, None)
+
+        self.start()
     
     @classmethod
     def backend_name(cls) -> str:
@@ -83,6 +84,8 @@ class MulticastBackend(WorkerNodeCommunicationBackendBase):
     async def gather_updates(self):
         while self.is_worker_node_ready:
             msg_bytes, _ = self._gather_socket.recvfrom(10240)
+            if msg_bytes is None:
+                break
             request = distributed_lp_messages.UpdateMessage.FromString(msg_bytes)
             self.update_cached_values(
                 serialized_message_to_array(request.u_t),
