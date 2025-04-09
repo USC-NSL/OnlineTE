@@ -203,8 +203,8 @@ if __name__ == '__main__':
             rpc_params.NumThreads = args.num_threads if args.num_threads is not None else args.num_workers
         elif args.backend_name == 'gRPC-asynchronous':
             rpc_params.Timeout = args.timeout
-        else:
-            raise ValueError
+        # else:
+        #     raise ValueError
 
     if args.local:
         CONTROLLER_RPC_PARAMS = get_backend_params(args.backend_name)(
