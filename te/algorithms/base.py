@@ -61,14 +61,21 @@ class SolverParams(ABC):
     
     @property
     def child_fields(self) -> Dict[str, Any]:
-        parent_class = self.__class__.__base__
-        if parent_class == ABC.__class__:
-            parent_fields = []
-        else:
-            assert issubclass(parent_class, SolverParams)
-            parent_fields = parent_class.field_names()
+        return self.get_fields_up_to_level(0)
+    
+    def get_fields_up_to_level(self, level: int):
+        ancestor_class = self.__class__
+        for i in range(level+1):
+            ancestor_class = ancestor_class.__base__
+            if ancestor_class == ABC.__class__:
+                ancestor_fields = []
+                break
+            else:
+                assert issubclass(ancestor_class, SolverParams)
+            if i == level:
+                ancestor_fields = ancestor_class.field_names()
         child_dict = dataclasses.asdict(self)
-        for key in parent_fields:
+        for key in ancestor_fields:
             child_dict.pop(key)
         return child_dict
     
@@ -123,10 +130,13 @@ class SolverParams(ABC):
             return result
 
     def __str__(self) -> str:
+        return self.stringify_up_to_level(0)
+    
+    def stringify_up_to_level(self, level: int):
         return '\n'.join(
             [self.line] +
             [self._field_to_string(key, value)
-                for key, value in self.child_fields.items()] +
+                for key, value in self.get_fields_up_to_level(level).items()] +
             [self.line]
         )
 

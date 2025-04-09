@@ -1,11 +1,13 @@
 import grpc
 import numpy as np
-from typing import List
+from typing import List, ClassVar
+from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, wait
 from utils.logging import as_info
 from te.algorithms.array_utils.cpu_utils import CPUArray
 from .. import DistributedADMMControllerRPCParams, DistributedADMMSolverParams
-from .base import ControllerCommunicationBackendBase, controller_communication_backend
+from .base import (ControllerCommunicationBackendBase, controller_communication_backend, 
+                   controller_communication_backend_params)
 from ..utils import (serialized_message_to_array, array_to_serialized_message,
                      chunk_big_array, rebuild_chunked_array,
                      GRPC_ARRAY_STREAM_MAX_LEN)
@@ -13,6 +15,16 @@ from ..utils import (serialized_message_to_array, array_to_serialized_message,
 import protos.distributed_lp.distributed_lp_pb2 as distributed_lp_messages
 from protos.distributed_lp.distributed_lp_pb2_grpc import DistributedADMMSolverStub
 from google.protobuf.empty_pb2 import Empty
+
+
+@controller_communication_backend_params
+@dataclass
+class SynchronousgRPCControllerBackendParams(DistributedADMMControllerRPCParams):
+    Backend: ClassVar[str] = 'gRPC-synchronous'
+    NumThreads: int = 1
+    
+    def __post_init__(self):
+        self.left_column_share = 0.2
 
 
 @controller_communication_backend
@@ -33,7 +45,7 @@ class SynchronousgRPCBackend(ControllerCommunicationBackendBase):
     
     @classmethod
     def backend_name(self) -> str:
-        return 'gRPC-synchronous'
+        return SynchronousgRPCControllerBackendParams.Backend
     
     @property
     def number_of_nodes(self) -> int:

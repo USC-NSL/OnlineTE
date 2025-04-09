@@ -1,10 +1,12 @@
 import grpc
 import asyncio
 import numpy as np
-from typing import List
+from typing import List, ClassVar
+from dataclasses import dataclass
 from te.algorithms.array_utils.cpu_utils import CPUArray
 from .. import DistributedADMMControllerRPCParams, DistributedADMMSolverParams
-from .base import ControllerCommunicationBackendBase, controller_communication_backend
+from .base import (ControllerCommunicationBackendBase, controller_communication_backend,
+                   controller_communication_backend_params)
 from ..utils import (serialized_message_to_array, array_to_serialized_message,
                      chunk_big_array, async_rebuild_chunked_array,
                      GRPC_ARRAY_STREAM_MAX_LEN)
@@ -12,6 +14,16 @@ from ..utils import (serialized_message_to_array, array_to_serialized_message,
 import protos.distributed_lp.distributed_lp_pb2 as distributed_lp_messages
 from protos.distributed_lp.distributed_lp_pb2_grpc import DistributedADMMSolverStub
 from google.protobuf.empty_pb2 import Empty
+
+
+@controller_communication_backend_params
+@dataclass
+class AsynchronousgRPCControllerBackendParams(DistributedADMMControllerRPCParams):
+    Backend: ClassVar[str] = 'gRPC-asynchronous'
+    Timeout: float = 5
+    
+    def __post_init__(self):
+        self.left_column_share = 0.2
 
 
 @controller_communication_backend
@@ -31,7 +43,7 @@ class AsynchronousgRPCBackend(ControllerCommunicationBackendBase):
     
     @classmethod
     def backend_name(self) -> str:
-        return 'gRPC-asynchronous'
+        return AsynchronousgRPCControllerBackendParams.Backend
     
     @property
     def number_of_nodes(self) -> int:
@@ -130,7 +142,7 @@ class AsynchronousgRPCBackend(ControllerCommunicationBackendBase):
     async def aclose(self):
         await asyncio.wait(
             [asyncio.create_task(self._close_node(i)) for i in range(self.number_of_nodes)],
-            timeout=5
+            timeout=self._rpc_params.Timeout
         )
     
     def close(self):

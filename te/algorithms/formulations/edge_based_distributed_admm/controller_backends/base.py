@@ -2,6 +2,7 @@ from typing import Dict, Type, Tuple
 from abc import ABC, abstractmethod
 from te.algorithms.array_utils.cpu_utils import CPUArray
 from te.algorithms.base import SolverParams
+from .. import DistributedADMMControllerRPCParams
 
 
 class ControllerCommunicationBackendBase(ABC):
@@ -45,6 +46,7 @@ class ControllerCommunicationBackendBase(ABC):
 
 
 _BACKENDS: Dict[str, Type[ControllerCommunicationBackendBase]] = dict()
+_PARAMS: Dict[str, Type[DistributedADMMControllerRPCParams]] = dict()
 
 
 def controller_communication_backend(cls: Type[ControllerCommunicationBackendBase]) -> ControllerCommunicationBackendBase:
@@ -55,4 +57,15 @@ def controller_communication_backend(cls: Type[ControllerCommunicationBackendBas
     tpe = cls.backend_name()
     assert tpe not in _BACKENDS
     _BACKENDS[tpe] = cls
+    return cls
+
+
+def controller_communication_backend_params(cls: Type[DistributedADMMControllerRPCParams]) -> DistributedADMMControllerRPCParams:
+    """Decorator that registers any communication backend parameters for simple use"""
+    global _PARAMS
+
+    assert issubclass(cls, DistributedADMMControllerRPCParams)
+    tpe = cls.Backend
+    assert tpe not in _PARAMS
+    _PARAMS[tpe] = cls
     return cls

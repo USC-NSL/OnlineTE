@@ -38,8 +38,7 @@ class DistributedADMMWorkerRPCParams(SolverParams):
 class DistributedADMMControllerRPCParams(SolverParams):
     AddressList: Tuple[Tuple[str, int]] = (("localhost", 13000),)
     NumWorkers: int = 2
-    NumThreads: int = 1
-    Backends: str = "gRPC-asynchronous"
+    Backend: ClassVar[str] = ""
     
     def __post_init__(self):
         self.left_column_share = 0.2

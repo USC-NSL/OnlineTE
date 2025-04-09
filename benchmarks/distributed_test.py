@@ -7,7 +7,7 @@ from te.algorithms.formulations.aggregate import (
     DistributedADMMSolverParams, DistributedADMMWorkerRPCParams, 
     DistributedADMMControllerRPCParams
 )
-from te.algorithms.formulations.edge_based_distributed_admm.controller_backends import list_backends
+from te.algorithms.formulations.edge_based_distributed_admm.controller_backends import list_backends, get_backend_params
 from te.algorithms.solution import (EdgeBasedMinimizeMaximumUtilitySolution, 
                                     EdgeBasedMinimizeMaximumUtilitySolutionParams, 
                                     default_solution_name)
@@ -63,7 +63,7 @@ def local_distributed_admm_test(topology: str, seed: int, scale_factor: float = 
         with contextlib.closing(ControllerNode(graph, tm, SOLVER_PARAMS, CONTROLLER_RPC_PARAMS)) as lp:
             print(as_info(f"Solving With: {lp.alg_name}"))
             print(as_info(f"Solving With Parameters:\n{SOLVER_PARAMS}"))
-            print(as_info(f"Communication Backend Parameters:\n{CONTROLLER_RPC_PARAMS}"))
+            print(as_info(f"Communication Backend Parameters:\n{CONTROLLER_RPC_PARAMS.stringify_up_to_level(1)}"))
             print(as_info("Waiting For Network Nodes ..."))
             while True:
                 time.sleep(1)
@@ -171,9 +171,17 @@ if __name__ == '__main__':
     runtime_params_group.add_argument('--report-unsat', action='store_true', 
                                       help='Report unsatisfied commodity assignments.')
     
-    rpc_params_group = parser.add_argument_group('Communication Backend Parameters')
-    rpc_params_group.add_argument('--backend-name', choices=list_backends(), default=CONTROLLER_RPC_PARAMS.Backends,
+    rpc_params_group = parser.add_argument_group('General Communication Backend Parameters')
+    rpc_params_group.add_argument('--backend-name', choices=list_backends(), default='gRPC-asynchronous',
                                   help='Communication backend name to use')
+    
+    sync_rcp_params_group = parser.add_argument_group('Synchronous gRPC Backend Parameters')
+    sync_rcp_params_group.add_argument('--num-threads', type=int, default=None,
+                                       help='Number of threads in backend thread pool. Defaults to number of workers.')
+    
+    async_rpc_params_group = parser.add_argument_group('Asynchronous gRPC Backend Parameters')
+    async_rpc_params_group.add_argument('--timeout', type=float, default=5.0,
+                                        help='Future `get` timeout for `asyncio`')
     
     args = parser.parse_args()
 
@@ -190,25 +198,29 @@ if __name__ == '__main__':
         Precision=args.precision,
     )
 
+    def set_backend_specific_params(rpc_params: DistributedADMMControllerRPCParams):
+        if args.backend_name == 'gRPC-synchronous':
+            rpc_params.NumThreads = args.num_threads if args.num_threads is not None else args.num_workers
+        elif args.backend_name == 'gRPC-asynchronous':
+            rpc_params.Timeout = args.timeout
+        else:
+            raise ValueError
+
     if args.local:
-        CONTROLLER_RPC_PARAMS = DistributedADMMControllerRPCParams(
+        CONTROLLER_RPC_PARAMS = get_backend_params(args.backend_name)(
             NumWorkers=args.num_workers,
-            AddressList=tuple([(LOCAL_HOST, BASE_PORT + worker_id) for worker_id in range(args.num_workers)]),
-            NumThreads=args.num_workers,
-            Backends=args.backend_name
+            AddressList=tuple([(LOCAL_HOST, BASE_PORT + worker_id) for worker_id in range(args.num_workers)])
         )
+        set_backend_specific_params(CONTROLLER_RPC_PARAMS)
         local_distributed_admm_test(args.topo, args.seed, args.scale_factor, 
                                     save_solution=args.save_sol, report=args.report_unsat)
     else:
-        CONTROLLER_RPC_PARAMS = DistributedADMMControllerRPCParams(
+        CONTROLLER_RPC_PARAMS = get_backend_params(args.backend_name)(
             NumWorkers=args.num_workers,
             AddressList=tuple([(f'n{worker_id}.infra.v0.unregulatedadmm.distte', BASE_PORT + worker_id) 
-                               for worker_id in range(args.num_workers)]),
-            # AddressList=tuple([(LOCAL_HOST, BASE_PORT + worker_id) 
-            #                    for worker_id in range(args.num_workers)]),
-            NumThreads=args.num_workers,
-            Backends=args.backend_name
+                               for worker_id in range(args.num_workers)])
         )
+        set_backend_specific_params(CONTROLLER_RPC_PARAMS)
         remote_distributed_admm_test(args.topo, args.seed, args.scale_factor, 
                                      save_solution=args.save_sol, report=args.report_unsat)
     # local_distributed_admm_test(SMALL_TOPOLOGY, RNG_SEED, save_solution=True)
