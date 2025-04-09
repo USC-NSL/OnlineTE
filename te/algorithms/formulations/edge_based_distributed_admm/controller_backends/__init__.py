@@ -4,6 +4,7 @@ from .. import DistributedADMMControllerRPCParams
 
 from . import synchronous_grpc_backend
 from . import asynchronous_grpc_backend
+from . import udp_multicast_backend
 
 
 def get_backend(params: DistributedADMMControllerRPCParams) -> ControllerCommunicationBackendBase:

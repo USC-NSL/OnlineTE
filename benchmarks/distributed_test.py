@@ -63,7 +63,7 @@ def local_distributed_admm_test(topology: str, seed: int, scale_factor: float = 
         with contextlib.closing(ControllerNode(graph, tm, SOLVER_PARAMS, CONTROLLER_RPC_PARAMS)) as lp:
             print(as_info(f"Solving With: {lp.alg_name}"))
             print(as_info(f"Solving With Parameters:\n{SOLVER_PARAMS}"))
-            print(as_info(f"Communication Backend Parameters:\n{CONTROLLER_RPC_PARAMS.stringify_up_to_level(1)}"))
+            print(as_info(f"Communication Backend `{CONTROLLER_RPC_PARAMS.Backend}` With Parameters:\n{CONTROLLER_RPC_PARAMS.stringify_up_to_level(1)}"))
             print(as_info("Waiting For Network Nodes ..."))
             while True:
                 time.sleep(1)
@@ -110,7 +110,7 @@ def remote_distributed_admm_test(topology: str, seed: int, scale_factor: float =
     with contextlib.closing(ControllerNode(graph, tm, SOLVER_PARAMS, CONTROLLER_RPC_PARAMS)) as lp:
         print(as_info(f"Solving With: {lp.alg_name}"))
         print(as_info(f"Solving With Parameters:\n{SOLVER_PARAMS}"))
-        print(as_info(f"Communication Backend Parameters:\n{CONTROLLER_RPC_PARAMS}"))
+        print(as_info(f"Communication Backend `{CONTROLLER_RPC_PARAMS.Backend}` With Parameters:\n{CONTROLLER_RPC_PARAMS.stringify_up_to_level(1)}"))
         print(as_info("Waiting For Network Nodes ..."))
         while True:
             time.sleep(1)
