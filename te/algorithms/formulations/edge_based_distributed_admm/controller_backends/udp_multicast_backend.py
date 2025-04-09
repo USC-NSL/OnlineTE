@@ -25,6 +25,7 @@ class MulticastControllerBackendParams(DistributedADMMControllerRPCParams):
     HostName: str = 'controller.infra.v0.unregulatedadmm.distte'
     TTL: int = 2
     ScatterPort: int = 12000
+    Timeout: float = 5
     
     def __post_init__(self):
         self.left_column_share = 0.2
