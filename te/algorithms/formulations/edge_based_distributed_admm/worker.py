@@ -8,6 +8,7 @@ from te.algorithms.array_utils.cpu_utils import CPUArray, cpu_zeros, cpu_array, 
 from . import DistributedADMMSolverParams, DistributedADMMWorkerRPCParams
 from .worker_backends.base import WorkerNodeCommunicationBackendBase
 from .worker_backends.synchronous_grpc_backend import SynchronousgRPCBackend
+from .worker_backends.udp_multicast_backend import MulticastBackend
 from te.algorithms.sub_algorithms.pgd import do_plain_pgd_with_step_reduction
 
 
@@ -31,7 +32,8 @@ class NetworkWorkerNode:
         self._P_bar_t_cached: Optional[CPUArray] = None
         self._u_t_cached: Optional[CPUArray] = None
 
-        self._backend: WorkerNodeCommunicationBackendBase = SynchronousgRPCBackend(rpc_params)
+        # self._backend: WorkerNodeCommunicationBackendBase = SynchronousgRPCBackend(rpc_params)
+        self._backend: WorkerNodeCommunicationBackendBase = MulticastBackend(rpc_params)
         self._backend.set_initial_feasible_solution = self.set_initial_feasible_solution
         self._backend.set_null_space_basis = self.set_null_space_basis
         self._backend.do_inner_loop_update = self.do_inner_loop_update

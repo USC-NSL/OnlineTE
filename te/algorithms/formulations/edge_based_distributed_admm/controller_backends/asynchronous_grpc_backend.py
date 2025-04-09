@@ -124,6 +124,11 @@ class AsynchronousgRPCBackend(ControllerCommunicationBackendBase):
         await asyncio.gather(*[
             stub.UpdateWorkerNode(message) for stub in self._worker_stubs
         ])
+        # TODO: Why not make this completely asynchronous?
+        # async def _wait(stub, message):
+        #     await stub.UpdateWorkerNode(message)
+        # for stub in self._worker_stubs:
+        #     self._event_loop.create_task(_wait(stub, message))
     
     def reconvene_network_updates(self, P_bar_t: CPUArray, Y_bar_t: CPUArray, u_t: CPUArray):
         message = distributed_lp_messages.UpdateMessage(
