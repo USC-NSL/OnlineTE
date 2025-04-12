@@ -19,7 +19,14 @@ _kill() {
 trap _term SIGTERM
 trap _kill SIGKILL
 
-/usr/bin/python3 -m te.algorithms.formulations.edge_based_distributed_admm.worker "${WORKER_ID}" &
+if [ "${TE_MULTICAST}" = "0" ]; then
+  echo "Using gRPC backend"
+  /usr/bin/python3 -m te.algorithms.formulations.edge_based_distributed_admm.worker "${WORKER_ID}" &
+else
+/usr/bin/python3 -m te.algorithms.formulations.edge_based_distributed_admm.worker "${WORKER_ID}" --multicast &
+  echo "Using UDP multicast backend"
+fi
+
 child=$!
 wait "$child"
 

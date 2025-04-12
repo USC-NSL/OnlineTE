@@ -1,0 +1,29 @@
+---
+# Setup UDP multicast on a predefined group across the whole network
+- name: Configure APT dependencies
+  hosts: controller_group:workers_group
+  become: true
+  tasks:
+
+  - name: Gather Package Facts
+    package_facts:
+      manager: apt
+  - name: Ensure smcroute
+    ansible.builtin.apt:
+      update_cache: true
+      name: smcroute
+    when: '"smcroute" not in ansible_facts.packages'
+
+- name: Create Multicast Group For Controller
+  hosts: controller_group
+  become: true
+  tasks:
+  - name: Add Group 224.0.0.10
+    command: sudo smcroutectl add eth0 {{ansible_default_ipv4.address}} 224.0.0.10 eth0
+
+- name: Join Multicast Group On Workers
+  hosts: workers_group
+  become: true
+  tasks:
+    - name: Join Group 224.0.0.10
+      command: sudo smcroutectl join eth0 224.0.0.10

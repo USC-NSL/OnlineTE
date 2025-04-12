@@ -41,7 +41,7 @@ def generate_host_file(number_of_nodes: int, paths: str):
     ]
     controller_group = [CONTROLLER_NODE_NAME]
     controller_group_vars = [f'{k}={v}' for k, v in CONTROLLER_PARAMETER_LIST.items()]
-    all_vars = ['access_token=`FILL ME`', f'num_hosts={number_of_nodes}']
+    all_vars = ['access_token=`FILL ME`', f'num_hosts={number_of_nodes}', 'multicast=0']
 
     all_group_str = '\n'.join(['[all]'] + all_group)
     workers_group_str = '\n'.join(['[workers_group]'] + workers_group)

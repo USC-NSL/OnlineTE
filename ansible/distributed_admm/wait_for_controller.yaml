@@ -6,7 +6,19 @@
   gather_facts: false
   vars:
     upto: "{{num_hosts}}"
+    runtime_env:
+      - key: TE_MULTICAST
+        value: "{{multicast}}"
   tasks:
+    - name: Set TE_MULTICAST Env-Var
+      ansible.builtin.lineinfile:
+        dest: "/etc/environment"
+        state: present
+        regexp: "^{{ item.key }}="
+        line: "{{ item.key }}={{ item.value }}"
+      with_items: "{{ runtime_env }}"
+    - name: Source ENV
+      shell: ". /etc/environment"
     - name: Start Worker Services
       command: systemctl --user start te_worker.service
       when: 'worker_id|int < upto|int'
