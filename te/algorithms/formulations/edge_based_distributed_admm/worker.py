@@ -32,8 +32,10 @@ class NetworkWorkerNode:
         self._P_bar_t_cached: Optional[CPUArray] = None
         self._u_t_cached: Optional[CPUArray] = None
 
-        # self._backend: WorkerNodeCommunicationBackendBase = SynchronousgRPCBackend(rpc_params)
-        self._backend: WorkerNodeCommunicationBackendBase = MulticastBackend(rpc_params)
+        if rpc_params.Multicast:
+            self._backend: WorkerNodeCommunicationBackendBase = MulticastBackend(rpc_params)
+        else:
+            self._backend: WorkerNodeCommunicationBackendBase = SynchronousgRPCBackend(rpc_params)
         self._backend.set_initial_feasible_solution = self.set_initial_feasible_solution
         self._backend.set_null_space_basis = self.set_null_space_basis
         self._backend.do_inner_loop_update = self.do_inner_loop_update
@@ -116,16 +118,22 @@ class NetworkWorkerNode:
 
 if __name__ == '__main__':
     import socket
+    import argparse
     from utils.logging import as_fail
-    worker_id = int(sys.argv[1])
+
+    parser =argparse.ArgumentParser('Spawn A Worker Node')
+    parser.add_argument('worker_id', type=int, help='Worker ID')
+    parser.add_argument('--multicast', action='store_true', help='Use UDP Multicast backend')
+    args = parser.parse_args()
+
+    worker_id = args.worker_id
     if worker_id < 0:
         print(as_fail('Worker ID was not properly initialized!'), file=sys.stderr)
         sys.exit(-1)
     else:
         rpc_params = DistributedADMMWorkerRPCParams(
             IP=socket.gethostbyname(socket.gethostname()), Port=13000 + worker_id,
-            WorkerID=worker_id
+            WorkerID=worker_id, Multicast=args.multicast
         )
         print(f'RPC Parameters:\n{rpc_params}')
-        # rpc_params = DistributedADMMWorkerRPCParams(IP='localhost', Port=13000 + worker_id)
         NetworkWorkerNode.spawn_and_wait(rpc_params)

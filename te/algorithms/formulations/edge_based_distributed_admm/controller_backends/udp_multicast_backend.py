@@ -157,3 +157,4 @@ class MulticastBackend(ControllerCommunicationBackendBase):
     
     def close(self):
         self._event_loop.run_until_complete(self.aclose())
+        self._scatter_socket.close()

@@ -37,7 +37,7 @@ CONTROLLER_RPC_PARAMS: DistributedADMMControllerRPCParams = DistributedADMMContr
 
 
 def local_distributed_admm_test(topology: str, seed: int, scale_factor: float = 10.0,
-                                save_solution: bool = False, **kwargs):
+                                save_solution: bool = False, multicast: bool = False, **kwargs):
     c, graph, tm = get_uniform_tm_problem_with_capacity_heuristic(topology, seed, scale_factor=scale_factor)
     print(f"Network link capacity is: {str(round(c, 2))}")
 
@@ -54,11 +54,22 @@ def local_distributed_admm_test(topology: str, seed: int, scale_factor: float = 
 
     print(as_info(log_section_title("MLU PROBLEM")))
     
-    # show_addrs(worker_addrs)
     with concurrent.futures.ProcessPoolExecutor(max_workers=CONTROLLER_RPC_PARAMS.NumWorkers) as network_pool:
+        display_param = DistributedADMMWorkerRPCParams(
+            IP=[addr[0] for addr in CONTROLLER_RPC_PARAMS.AddressList],
+            Port=[addr[1] for addr in CONTROLLER_RPC_PARAMS.AddressList],
+            WorkerID=[i for i in range(len(CONTROLLER_RPC_PARAMS.AddressList))],
+            Multicast=multicast
+        )
+        print(as_info(f"Local Worker Backend Parameters:\n{display_param}"))
         for worker_id, worker_addr in enumerate(CONTROLLER_RPC_PARAMS.AddressList):
-            network_pool.submit(NetworkWorkerNode.spawn_and_wait, 
-                                DistributedADMMWorkerRPCParams(IP=worker_addr[0], Port=worker_addr[1], WorkerID=worker_id))
+            network_pool.submit(
+                NetworkWorkerNode.spawn_and_wait, 
+                DistributedADMMWorkerRPCParams(
+                    IP=worker_addr[0], Port=worker_addr[1], 
+                    WorkerID=worker_id, Multicast=multicast
+                )
+            )
         
         with contextlib.closing(ControllerNode(graph, tm, SOLVER_PARAMS, CONTROLLER_RPC_PARAMS)) as lp:
             print(as_info(f"Solving With: {lp.alg_name}"))
@@ -227,7 +238,9 @@ if __name__ == '__main__':
         )
         set_backend_specific_params(CONTROLLER_RPC_PARAMS)
         local_distributed_admm_test(args.topo, args.seed, args.scale_factor, 
-                                    save_solution=args.save_sol, report=args.report_unsat)
+                                    save_solution=args.save_sol, 
+                                    multicast=(args.backend_name == 'multicast'),
+                                    report=args.report_unsat)
     else:
         if len(args.hosts) > 0:
             assert len(args.hosts) == args.num_workers

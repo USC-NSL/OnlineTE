@@ -93,7 +93,6 @@ class MulticastBackend(WorkerNodeCommunicationBackendBase):
             while self.is_worker_node_ready:
                 msg_bytes, _ = self._gather_socket.recvfrom(10240)
                 if msg_bytes is None or len(msg_bytes) == 0:
-                    print('None or Zero!')
                     break
                 request = distributed_lp_messages.UpdateMessage.FromString(msg_bytes)
                 self.update_cached_values(

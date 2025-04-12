@@ -29,6 +29,7 @@ class DistributedADMMWorkerRPCParams(SolverParams):
     Port: int = 13000
     NumThreads: int = 1
     WorkerID: int = 0
+    Multicast: bool = False
 
     def __post_init__(self):
         self.left_column_share = 0.5
