@@ -136,7 +136,6 @@ def remote_distributed_admm_test(topology: str, seed: int, scale_factor: float =
             elif ready is None:
                 print(as_warning("Aborting"))
                 return
-        print(as_success("All Network Nodes Ready"))
 
         lp.make_lp()
         t = lp.solve()
@@ -203,6 +202,14 @@ if __name__ == '__main__':
     async_rpc_params_group.add_argument('--timeout', type=float, default=5.0,
                                         help='Future `get` timeout for `asyncio`')
     
+    multicast_backend_params_group = parser.add_argument_group('UDP Multicast Backend Parameters')
+    multicast_backend_params_group.add_argument('--group', default='224.0.0.10',
+                                                help='Multicast group address for all worker nodes')
+    multicast_backend_params_group.add_argument('--mport', type=int, default=12000,
+                                                help='UDP port to listen for responses')
+    multicast_backend_params_group.add_argument('--ttl', type=int, default=2,
+                                                help='Multicast packet TTL (should be at least 2)')
+    
     host_params_group = parser.add_argument_group('Remote Host Parameters')
     host_params_group.add_argument('--hosts', nargs='+', help='List of remote hosts to connect to')
     
@@ -228,6 +235,9 @@ if __name__ == '__main__':
             rpc_params.Timeout = args.timeout
         elif args.backend_name == 'multicast':
             rpc_params.Timeout = args.timeout
+            rpc_params.ScatterAddress = args.group
+            rpc_params.ScatterPort = args.mport
+            rpc_params.TTL = args.ttl
         else:
             raise ValueError
 

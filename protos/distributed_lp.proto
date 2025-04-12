@@ -42,8 +42,9 @@ message NetworkUpdateRequest {
 }
 
 message NetworkUpdateResponse {
-    int32 runtime_ns = 1;
-    SerializedNumpyArrayMessage means = 2;
+    int32 worker_id = 1;
+    int32 runtime_ns = 2;
+    SerializedNumpyArrayMessage means = 3;
 }
 
 message State {

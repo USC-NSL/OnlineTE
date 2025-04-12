@@ -91,15 +91,21 @@ class MulticastBackend(WorkerNodeCommunicationBackendBase):
     async def gather_updates(self):
         try:
             while self.is_worker_node_ready:
-                msg_bytes, _ = self._gather_socket.recvfrom(10240)
-                if msg_bytes is None or len(msg_bytes) == 0:
-                    break
-                request = distributed_lp_messages.UpdateMessage.FromString(msg_bytes)
-                self.update_cached_values(
-                    serialized_message_to_array(request.u_t),
-                    serialized_message_to_array(request.P_bar_t),
-                    serialized_message_to_array(request.Y_bar_t)
-                )
+                msg_bytes, addr = self._gather_socket.recvfrom(10240)
+                if len(msg_bytes) <= 6:
+                    request = distributed_lp_messages.NetworkUpdateRequest.FromString(msg_bytes)
+                    runtime, means = self.do_inner_loop_update(request.epoch)
+                    response = distributed_lp_messages.NetworkUpdateResponse(
+                        worker_id=self.worker_id, runtime_ns=runtime, means=array_to_serialized_message(means)
+                    )
+                    self._gather_socket.sendto(response.SerializeToString(), addr)
+                else:
+                    request = distributed_lp_messages.UpdateMessage.FromString(msg_bytes)
+                    self.update_cached_values(
+                        serialized_message_to_array(request.u_t),
+                        serialized_message_to_array(request.P_bar_t),
+                        serialized_message_to_array(request.Y_bar_t)
+                    )
         except OSError:
             pass
         finally:
@@ -122,18 +128,10 @@ class NetworkWorkerNodeListener(DistributedADMMSolverServicer):
         return Empty()
     
     def DoNetworkUpdate(self, request: distributed_lp_messages.NetworkUpdateRequest, context):
-        runtime, means = self._backend.do_inner_loop_update(request.epoch)
-        return distributed_lp_messages.NetworkUpdateResponse(
-            runtime_ns=runtime, means=array_to_serialized_message(means)
-        )
+        raise NotImplementedError('This should NEVER be invoked!')
     
     def UpdateWorkerNode(self, request: distributed_lp_messages.UpdateMessage, context):
-        self._backend.update_cached_values(
-            serialized_message_to_array(request.u_t),
-            serialized_message_to_array(request.P_bar_t),
-            serialized_message_to_array(request.Y_bar_t)
-        )
-        return Empty()
+        raise NotImplementedError('This should NEVER be invoked!')
     
     def RequestChunk(self, request, context):
         return chunk_big_array(self._backend.report_chunk(), GRPC_ARRAY_STREAM_MAX_LEN)

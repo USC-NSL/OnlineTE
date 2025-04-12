@@ -22,7 +22,7 @@ from google.protobuf.empty_pb2 import Empty
 class MulticastControllerBackendParams(DistributedADMMControllerRPCParams):
     Backend: ClassVar[str] = 'multicast'
     ScatterAddress: str = '224.0.0.10'
-    HostName: str = 'controller.infra.v0.unregulatedadmm.distte'
+    HostName: str = socket.gethostname()
     TTL: int = 2
     ScatterPort: int = 12000
     Timeout: float = 5
@@ -120,11 +120,15 @@ class MulticastBackend(ControllerCommunicationBackendBase):
     
     def get_X_ek_sum(self):
         return self._event_loop.run_until_complete(self._get_X_ek_sum())
-    
+
     async def _do_network_update(self, message: distributed_lp_messages.NetworkUpdateRequest):
-        responses = await asyncio.gather(*[
-            stub.DoNetworkUpdate(message) for stub in self._worker_stubs
-        ])
+        self._scatter_socket.sendto(message.SerializeToString(), self.SCATTER_ADDRESS)
+        responses = [None for _ in range(self.number_of_nodes)]
+        for _ in range(self.number_of_nodes):
+            res = distributed_lp_messages.NetworkUpdateResponse.FromString(
+                await self._event_loop.sock_recv(self._scatter_socket, 10240)
+            )
+            responses[res.worker_id] = res
         runtimes, serialized_y_bar_chunks = zip(*list([(res.runtime_ns, res.means) for res in responses]))
         return max(runtimes), np.mean([serialized_message_to_array(chunk) for chunk in serialized_y_bar_chunks], axis=0)
     
