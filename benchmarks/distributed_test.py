@@ -11,7 +11,7 @@ from te.algorithms.formulations.edge_based_distributed_admm.controller_backends 
 from te.algorithms.solution import (EdgeBasedMinimizeMaximumUtilitySolution, 
                                     EdgeBasedMinimizeMaximumUtilitySolutionParams, 
                                     default_solution_name)
-from utils.logging import as_info, as_success, log_section_title
+from utils.logging import as_info, as_warning, as_success, log_section_title
 from te.algorithms.utils import (get_solution_confusion_matrix, stringify_collected_stats, 
                                  str_round, get_solution_maximum_utilization)
 from topologies.utils import get_uniform_tm_problem_with_capacity_heuristic
@@ -67,9 +67,13 @@ def local_distributed_admm_test(topology: str, seed: int, scale_factor: float = 
             print(as_info("Waiting For Network Nodes ..."))
             while True:
                 time.sleep(1)
-                if lp.are_network_nodes_ready():
+                ready = lp.are_network_nodes_ready()
+                if ready is True:
+                    print(as_success("All Network Nodes Ready"))
                     break
-            print(as_success("All Network Nodes Ready"))
+                elif ready is None:
+                    print(as_warning("Aborting"))
+                    return
 
             lp.make_lp()
             t = lp.solve()
@@ -114,8 +118,13 @@ def remote_distributed_admm_test(topology: str, seed: int, scale_factor: float =
         print(as_info("Waiting For Network Nodes ..."))
         while True:
             time.sleep(1)
-            if lp.are_network_nodes_ready():
+            ready = lp.are_network_nodes_ready()
+            if ready is True:
+                print(as_success("All Network Nodes Ready"))
                 break
+            elif ready is None:
+                print(as_warning("Aborting"))
+                return
         print(as_success("All Network Nodes Ready"))
 
         lp.make_lp()
@@ -183,6 +192,9 @@ if __name__ == '__main__':
     async_rpc_params_group.add_argument('--timeout', type=float, default=5.0,
                                         help='Future `get` timeout for `asyncio`')
     
+    host_params_group = parser.add_argument_group('Remote Host Parameters')
+    host_params_group.add_argument('--hosts', nargs='+', help='List of remote hosts to connect to')
+    
     args = parser.parse_args()
 
     SOLVER_PARAMS = DistributedADMMSolverParams(
@@ -217,10 +229,15 @@ if __name__ == '__main__':
         local_distributed_admm_test(args.topo, args.seed, args.scale_factor, 
                                     save_solution=args.save_sol, report=args.report_unsat)
     else:
+        if len(args.hosts) > 0:
+            assert len(args.hosts) == args.num_workers
+            hosts = [(host, BASE_PORT + worker_id) for worker_id, host in enumerate(args.hosts)]
+        else:
+            hosts = [(f'n{worker_id}.infra.v0.unregulatedadmm.distte', BASE_PORT + worker_id) 
+                        for worker_id in range(args.num_workers)]
         CONTROLLER_RPC_PARAMS = get_backend_params(args.backend_name)(
             NumWorkers=args.num_workers,
-            AddressList=tuple([(f'n{worker_id}.infra.v0.unregulatedadmm.distte', BASE_PORT + worker_id) 
-                               for worker_id in range(args.num_workers)])
+            AddressList=tuple(hosts)
         )
         set_backend_specific_params(CONTROLLER_RPC_PARAMS)
         remote_distributed_admm_test(args.topo, args.seed, args.scale_factor, 

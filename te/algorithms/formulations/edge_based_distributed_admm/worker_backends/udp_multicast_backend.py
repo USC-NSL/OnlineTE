@@ -22,20 +22,19 @@ class MulticastBackend(WorkerNodeCommunicationBackendBase):
 
         self._server: Optional[grpc.Server] = None
         self._listener: Optional[NetworkWorkerNodeListener] = None
-
         self._initialize_listener()
 
         for sig in ('TERM', 'INT'):
             signal.signal(getattr(signal, 'SIG'+sig), self.int_handler)
-
+        
         self._gather_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         self._gather_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._gather_socket.bind(('224.0.0.10', 12000))
-
+        
         self._event_loop = asyncio.get_event_loop()
-        print(self._event_loop)
         self._handler_loop = None
-        self.close = lambda: self.int_handler(None, None)
+        
+        self.close = self.stop
 
         self.start()
     
@@ -59,10 +58,10 @@ class MulticastBackend(WorkerNodeCommunicationBackendBase):
         self._server.add_insecure_port(addr)
 
     def int_handler(self, _, __):
-        try:
-            self.stop()
-        except:
-            pass
+        self.is_worker_node_ready = False
+        if self._gather_socket:
+            self._gather_socket.close()
+            self._gather_socket = None
     
     def start(self):
         assert self._server is not None and self._listener is not None
@@ -72,26 +71,41 @@ class MulticastBackend(WorkerNodeCommunicationBackendBase):
 
     def stop(self):
         self.is_worker_node_ready = False
-        self._gather_socket.close()
+        try:
+            _s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            _s.sendto(''.encode(), ('224.0.0.10', 12000))
+            _s.close()
+        except ConnectionError as e:
+            print(e)
+            pass
         if self._server is not None:
             self._server.stop(1)
     
     def wait(self):
         if self._server is not None:
-            asyncio.wait_for(self._handler_loop, timeout=5)
+            self._event_loop.run_until_complete(asyncio.wait_for(self._handler_loop, timeout=5))
+            if not self.is_worker_node_ready:
+                self._server.stop(1)
             self._server.wait_for_termination()
     
     async def gather_updates(self):
-        while self.is_worker_node_ready:
-            msg_bytes, _ = self._gather_socket.recvfrom(10240)
-            if msg_bytes is None:
-                break
-            request = distributed_lp_messages.UpdateMessage.FromString(msg_bytes)
-            self.update_cached_values(
-                serialized_message_to_array(request.u_t),
-                serialized_message_to_array(request.P_bar_t),
-                serialized_message_to_array(request.Y_bar_t)
-            )
+        try:
+            while self.is_worker_node_ready:
+                msg_bytes, _ = self._gather_socket.recvfrom(10240)
+                if msg_bytes is None or len(msg_bytes) == 0:
+                    print('None or Zero!')
+                    break
+                request = distributed_lp_messages.UpdateMessage.FromString(msg_bytes)
+                self.update_cached_values(
+                    serialized_message_to_array(request.u_t),
+                    serialized_message_to_array(request.P_bar_t),
+                    serialized_message_to_array(request.Y_bar_t)
+                )
+        except OSError:
+            pass
+        finally:
+            if self._gather_socket:
+                self._gather_socket.close()
 
 
 class NetworkWorkerNodeListener(DistributedADMMSolverServicer):
