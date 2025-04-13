@@ -3,7 +3,6 @@
 - name: Set Multicast ENV
   hosts: workers_group
   become: true
-  gather_facts: false
   vars:
     runtime_env:
       - key: TE_MULTICAST
@@ -28,6 +27,9 @@
   vars:
     upto: "{{num_hosts}}"
   tasks:
+    - name: Restart Systemd (User Level)
+      command: systemctl --user daemon-reload
+      when: 'worker_id|int < upto|int'
     - name: Start Worker Services
       command: systemctl --user start te_worker.service
       when: 'worker_id|int < upto|int'

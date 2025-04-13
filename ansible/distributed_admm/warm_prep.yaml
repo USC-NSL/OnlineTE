@@ -1,0 +1,40 @@
+---
+# Prepare controller/worker nodes assuming PIP/APT/Zoo dependencies are already satisfied
+- name: Prepare gRPC
+  hosts: controller_group:workers_group
+  remote_user: aghavidel
+  tasks:
+
+  - name: Compile protobuffs
+    command: chdir=/home/aghavidel/DistributedTE python3 protos/__init__.py
+
+- name: Copy TE Worker Service File
+  hosts: workers_group
+  become: true
+  vars:
+    worker_env:
+      - key: WORKER_ID
+        value: "{{worker_id}}"
+  tasks:
+    - name: Copy TE Worker Service File To Systemd
+      command: chdir=/home/aghavidel/DistributedTE sudo cp ansible/distributed_admm/te_worker.service /etc/systemd/user
+    - name: Set WORKER_ID Env-Var
+      ansible.builtin.lineinfile:
+        dest: "/etc/environment"
+        state: present
+        regexp: "^{{ item.key }}="
+        line: "{{ item.key }}={{ item.value }}"
+      with_items: "{{ worker_env }}"
+    - name: Source ENV
+      shell: ". /etc/environment"
+    - name: Allow Service To Linger
+      command: sudo loginctl enable-linger aghavidel
+
+- name: Enable TE Worker Service
+  hosts: workers_group
+  remote_user: aghavidel
+  tasks:
+    - name: Give EXEC Premission To Launcher
+      command: chdir=/home/aghavidel/DistributedTE chmod +x ansible/distributed_admm/launch_worker.sh
+    - name: Restart Systemd (User Level)
+      command: systemctl --user daemon-reload
