@@ -1,11 +1,10 @@
 ---
 # Spawn workers and a controller node for a distributed test
-- name: Check Arguments
+- name: Set Multicast ENV
   hosts: workers_group
-  remote_user: aghavidel
+  become: true
   gather_facts: false
   vars:
-    upto: "{{num_hosts}}"
     runtime_env:
       - key: TE_MULTICAST
         value: "{{multicast}}"
@@ -17,8 +16,18 @@
         regexp: "^{{ item.key }}="
         line: "{{ item.key }}={{ item.value }}"
       with_items: "{{ runtime_env }}"
+      when: 'worker_id|int < upto|int'
     - name: Source ENV
       shell: ". /etc/environment"
+      when: 'worker_id|int < upto|int'
+
+- name: Start-Wait-Stop TE Workers
+  hosts: workers_group
+  remote_user: aghavidel
+  gather_facts: false
+  vars:
+    upto: "{{num_hosts}}"
+  tasks:
     - name: Start Worker Services
       command: systemctl --user start te_worker.service
       when: 'worker_id|int < upto|int'
@@ -33,6 +42,7 @@
 - name: Get Controller Plot
   hosts: controller_group
   remote_user: aghavidel
+  gather_facts: false
   tasks:
     - name: Get `res.png`
       fetch:

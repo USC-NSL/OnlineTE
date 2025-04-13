@@ -211,7 +211,7 @@ if __name__ == '__main__':
                                                 help='Multicast packet TTL (should be at least 2)')
     
     host_params_group = parser.add_argument_group('Remote Host Parameters')
-    host_params_group.add_argument('--hosts', nargs='+', help='List of remote hosts to connect to')
+    host_params_group.add_argument('--hosts', nargs='*', default=[], help='List of remote hosts to connect to')
     
     args = parser.parse_args()
 
