@@ -132,7 +132,7 @@ if __name__ == '__main__':
         sys.exit(-1)
     else:
         rpc_params = DistributedADMMWorkerRPCParams(
-            IP=socket.gethostbyname(socket.gethostname()), Port=13000 + worker_id,
+            IP=socket.gethostbyname(f'n{worker_id}'), Port=13000 + worker_id,
             WorkerID=worker_id, Multicast=args.multicast
         )
         print(f'RPC Parameters:\n{rpc_params}')
