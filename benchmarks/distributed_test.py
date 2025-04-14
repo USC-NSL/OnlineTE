@@ -256,7 +256,7 @@ if __name__ == '__main__':
             assert len(args.hosts) == args.num_workers
             hosts = [(host, BASE_PORT + worker_id) for worker_id, host in enumerate(args.hosts)]
         else:
-            hosts = [(f'n{worker_id}.infra.v0.unregulatedadmm.distte', BASE_PORT + worker_id) 
+            hosts = [(f'n{worker_id}', BASE_PORT + worker_id) 
                         for worker_id in range(args.num_workers)]
         CONTROLLER_RPC_PARAMS = get_backend_params(args.backend_name)(
             NumWorkers=args.num_workers,
