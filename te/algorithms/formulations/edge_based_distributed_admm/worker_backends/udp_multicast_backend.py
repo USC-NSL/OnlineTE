@@ -10,6 +10,8 @@ from .. import DistributedADMMSolverParams, DistributedADMMWorkerRPCParams
 from ..utils import (serialized_message_to_array, array_to_serialized_message,
                      rebuild_chunked_array, chunk_big_array,
                      GRPC_ARRAY_STREAM_MAX_LEN)
+from utils.logging import as_success, as_fail
+
 from protos.distributed_lp.distributed_lp_pb2_grpc import DistributedADMMSolverServicer, add_DistributedADMMSolverServicer_to_server
 from google.protobuf.empty_pb2 import Empty
 
@@ -36,6 +38,10 @@ class MulticastBackend(WorkerNodeCommunicationBackendBase):
         
         self.close = self.stop
 
+        self._report_queue = asyncio.Queue()
+        self._report_task = self._event_loop.create_task(self.report_updates())
+        self._xid = None
+
         self.start()
     
     @classmethod
@@ -45,6 +51,20 @@ class MulticastBackend(WorkerNodeCommunicationBackendBase):
     @property
     def worker_id(self) -> int:
         return self._rpc_params.WorkerID
+
+    @property
+    def current_xid(self) -> int:
+        return self._xid
+    
+    def update_xid(self):
+        self._xid = self._xid + 1
+
+    async def report_updates(self):
+        while self.is_worker_node_ready:
+            event = await self._report_queue.get()
+            if event is None:
+                break
+            print(event)
 
     def _initialize_listener(self):
         assert self._server is None and self._listener is None
@@ -59,6 +79,7 @@ class MulticastBackend(WorkerNodeCommunicationBackendBase):
 
     def int_handler(self, _, __):
         self.is_worker_node_ready = False
+        self._report_queue.put_nowait(None)
         if self._gather_socket:
             self._gather_socket.close()
             self._gather_socket = None
@@ -71,6 +92,8 @@ class MulticastBackend(WorkerNodeCommunicationBackendBase):
 
     def stop(self):
         self.is_worker_node_ready = False
+        self._report_queue.put_nowait(None)
+
         try:
             _s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             _s.sendto(''.encode(), ('224.0.0.10', 12000))
@@ -82,6 +105,9 @@ class MulticastBackend(WorkerNodeCommunicationBackendBase):
             self._server.stop(1)
     
     def wait(self):
+        async def _helper():
+            await self._report_task
+        self._event_loop.run_until_complete(_helper())
         if self._server is not None:
             self._event_loop.run_until_complete(asyncio.wait_for(self._handler_loop, timeout=5))
             if not self.is_worker_node_ready:
@@ -94,19 +120,39 @@ class MulticastBackend(WorkerNodeCommunicationBackendBase):
                 msg_bytes, addr = self._gather_socket.recvfrom(10240)
                 if len(msg_bytes) <= 6:
                     request = distributed_lp_messages.NetworkUpdateRequest.FromString(msg_bytes)
-                    runtime, means = self.do_inner_loop_update(request.epoch)
-                    response = distributed_lp_messages.NetworkUpdateResponse(
-                        worker_id=self.worker_id, runtime_ns=runtime, means=array_to_serialized_message(means)
-                    )
-                    self._gather_socket.sendto(response.SerializeToString(), addr)
+                    if self.current_xid == None:
+                        # self._report_queue.put_nowait(as_success(f'[INIT] XID={request.xid} | WORKER={self.worker_id}'))
+                        print(as_success(f'[INIT] XID={request.xid} | WORKER={self.worker_id}'))
+                        self._xid = request.xid
+                    if request.xid == self.current_xid:
+                        runtime, means = self.do_inner_loop_update(request.epoch)
+                        response = distributed_lp_messages.NetworkUpdateResponse(
+                            worker_id=self.worker_id, runtime_ns=runtime, 
+                            means=array_to_serialized_message(means),
+                            xid=request.xid
+                        )
+                        self._gather_socket.sendto(response.SerializeToString(), addr)
+                        # self._report_queue.put_nowait(as_success(f'[NET-UPDATE] XID={request.xid} | WORKER={self.worker_id}'))
+                        print(as_success(f'[NET-UPDATE] XID={request.xid} | WORKER={self.worker_id}'))
+                    else:
+                        # self._report_queue.put_nowait(as_success(f'[NET-UPDATE] XID={request.xid} (SHOULD BE {self.current_xid}) | WORKER={self.worker_id}'))
+                        print(as_fail(f'[NET-UPDATE] XID={request.xid} (SHOULD BE {self.current_xid}) | WORKER={self.worker_id}'))
                 else:
                     request = distributed_lp_messages.UpdateMessage.FromString(msg_bytes)
-                    self.update_cached_values(
-                        serialized_message_to_array(request.u_t),
-                        serialized_message_to_array(request.P_bar_t),
-                        serialized_message_to_array(request.Y_bar_t)
-                    )
-        except OSError:
+                    if request.xid == self.current_xid:
+                        self.update_cached_values(
+                            serialized_message_to_array(request.u_t),
+                            serialized_message_to_array(request.P_bar_t),
+                            serialized_message_to_array(request.Y_bar_t)
+                        )
+                        # self._report_queue.put_nowait(as_success(f'[CACHE-UPDATE] XID={request.xid} | WORKER={self.worker_id}'))
+                        print(as_success(f'[CACHE-UPDATE] XID={request.xid} | WORKER={self.worker_id}'))
+                        self.update_xid()
+                    else:
+                        # self._report_queue.put_nowait(as_success(f'[CACHE-UPDATE] XID={request.xid} (SHOULD BE {self.current_xid}) | WORKER={self.worker_id}'))
+                        print(as_fail(f'[CACHE-UPDATE] XID={request.xid} (SHOULD BE {self.current_xid}) | WORKER={self.worker_id}'))
+        except OSError as e:
+            print(f'Error in gatherer loop: {e}')
             pass
         finally:
             if self._gather_socket:

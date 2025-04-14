@@ -35,16 +35,19 @@ message UpdateMessage {
     SerializedNumpyArrayMessage P_bar_t = 1;
     SerializedNumpyArrayMessage u_t = 2;
     SerializedNumpyArrayMessage Y_bar_t = 3;
+    int32 xid = 4;
 }
 
 message NetworkUpdateRequest {
     int32 epoch = 1;
+    int32 xid = 2;
 }
 
 message NetworkUpdateResponse {
     int32 worker_id = 1;
     int32 runtime_ns = 2;
     SerializedNumpyArrayMessage means = 3;
+    int32 xid = 4;
 }
 
 message State {
