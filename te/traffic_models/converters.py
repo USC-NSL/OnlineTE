@@ -93,6 +93,5 @@ class NCFlowTrafficMatrixConverter(TrafficMatrixConverterBase):
             self._original_mean = np.mean(arr)
         new_mean = self._original_mean * self._params.rel_mean * self._rng.choice([-1, 1])
         new_stddev = self._original_mean * self._params.rel_stddev
-        # sample = self._rng.normal(new_mean, new_stddev, arr.shape)
-        sample = (self._rng.random(arr.shape) * 2 * new_stddev - new_stddev) + new_mean
+        sample = self._rng.normal(new_mean, new_stddev, arr.shape)
         return CustomTrafficMatrix(tm=np.clip(arr + sample, a_min=0, a_max=1))
