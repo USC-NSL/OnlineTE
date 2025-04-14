@@ -17,6 +17,7 @@
 
 - name: Clone repo and configure PIP
   hosts: controller_group:workers_group
+  gather_facts: false
   remote_user: aghavidel
   tasks:
 
@@ -47,6 +48,7 @@
 
 - name: Prepare gRPC
   hosts: controller_group:workers_group
+  gather_facts: false
   remote_user: aghavidel
   tasks:
 
@@ -55,6 +57,7 @@
 
 - name: Copy TE Worker Service File
   hosts: workers_group
+  gather_facts: false
   become: true
   vars:
     worker_env:
@@ -77,6 +80,7 @@
 
 - name: Enable TE Worker Service
   hosts: workers_group
+  gather_facts: false
   remote_user: aghavidel
   tasks:
     - name: Give EXEC Premission To Launcher

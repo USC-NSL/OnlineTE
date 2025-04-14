@@ -11,7 +11,6 @@ from .base import (ControllerCommunicationBackendBase, controller_communication_
 from ..utils import (serialized_message_to_array, array_to_serialized_message,
                      chunk_big_array, async_rebuild_chunked_array,
                      GRPC_ARRAY_STREAM_MAX_LEN)
-from utils.logging import as_success, as_fail
 
 import protos.distributed_lp.distributed_lp_pb2 as distributed_lp_messages
 from protos.distributed_lp.distributed_lp_pb2_grpc import DistributedADMMSolverStub
@@ -54,8 +53,6 @@ class MulticastBackend(ControllerCommunicationBackendBase):
         self._gethered_results = []
         self._gather_done = asyncio.Event()
 
-        self._report_queue = asyncio.Queue()
-        self._report_task = self._event_loop.create_task(self.report_updates())
         self._xid = 0
     
     @classmethod
@@ -72,22 +69,6 @@ class MulticastBackend(ControllerCommunicationBackendBase):
     
     def update_xid(self):
         self._xid = self._xid + 1
-    
-    async def report_updates(self):
-        events_to_print = []
-        while True:
-            try:
-                event = self._report_queue.get_nowait()
-                if event is None:
-                    if len(events_to_print) > 0:
-                        print('\n'.join(events_to_print))
-                    break
-                events_to_print.append(event)
-            except asyncio.QueueEmpty:
-                if len(events_to_print) > 0:
-                    print('\n'.join(events_to_print))
-                    events_to_print.clear()
-                await asyncio.sleep(3.0)
 
     async def is_node_ready(self, worker_id: int) -> bool:
         try:
@@ -157,10 +138,6 @@ class MulticastBackend(ControllerCommunicationBackendBase):
                 await self._event_loop.sock_recv(self._scatter_socket, 10240)
             )
             responses[res.worker_id] = res
-            if res.xid == self.current_xid:
-                self._report_queue.put_nowait(as_success(f'[NET-UPDATE] XID={res.xid} | WORKER={res.worker_id}'))
-            else:
-                self._report_queue.put_nowait(as_fail(f'[NET-UPDATE] XID={res.xid} (SHOULD BE {self.current_xid}) | WORKER={res.worker_id}'))
         runtimes, serialized_y_bar_chunks = zip(*list([(res.runtime_ns, res.means) for res in responses]))
         return max(runtimes), np.mean([serialized_message_to_array(chunk) for chunk in serialized_y_bar_chunks], axis=0)
     
@@ -188,16 +165,11 @@ class MulticastBackend(ControllerCommunicationBackendBase):
             pass
     
     async def aclose(self):
-        await self._report_task
         await asyncio.wait(
             [asyncio.create_task(self._close_node(i)) for i in range(self.number_of_nodes)],
             timeout=self._rpc_params.Timeout
         )
     
     def close(self):
-        self._report_queue.put_nowait(None)
-        async def _helper():
-            await self._report_task
-        self._event_loop.run_until_complete(_helper())
         self._event_loop.run_until_complete(self.aclose())
         self._scatter_socket.close()

@@ -63,6 +63,9 @@ class ControllerNode(TrafficEngineeringLP):
         self._Y_bar_t: Optional[CPUArray] = None
         self._u_t: Optional[CPUArray] = None
 
+        # TODO: Does invoking this here pervent the log-spam from gRPC?
+        self._set_initial_feasible_solution()
+
         self._backend = get_backend(rpc_params)
 
         self._objective_trace: List[Tuple[float, float]] = []
@@ -71,7 +74,6 @@ class ControllerNode(TrafficEngineeringLP):
         set_global_precision(solver_params.Precision)
         set_cpu_float_precision()
 
-        self._set_initial_feasible_solution()
         self._set_NULL_M()
         self._initialize_variables_and_residuals()
         self._report_problem_size()
