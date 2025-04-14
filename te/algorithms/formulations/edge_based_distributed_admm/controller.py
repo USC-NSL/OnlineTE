@@ -392,6 +392,7 @@ class ControllerNode(TrafficEngineeringLP):
         # Get a new feasible solution (if the matrix did not change too much),
         # then this also will not change too much.
         self._set_initial_feasible_solution()
+        self._Zo_e = cpu_array(self._Xo_e_start)
         # Send it to the backend
         self._backend.update_demands(self._X_ek_start)
     
