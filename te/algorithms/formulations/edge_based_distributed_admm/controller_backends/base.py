@@ -23,6 +23,10 @@ class ControllerCommunicationBackendBase(ABC):
     @abstractmethod
     def initialize_worker_nodes(self, solver_params: SolverParams, basis: CPUArray, initial_feasible_solution: CPUArray):
         """Initialize worker nodes with solver parameters and initial feasible solution (X_ek_0)"""
+
+    @abstractmethod
+    def update_demands(self, updated_feasible_solution: CPUArray):
+        """Update the initial feasible solution (X_ek_0)"""
     
     @abstractmethod
     def get_X_ek(self, basis: CPUArray, initial_feasible_solution: CPUArray) -> CPUArray:

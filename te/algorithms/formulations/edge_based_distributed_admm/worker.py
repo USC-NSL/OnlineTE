@@ -124,6 +124,7 @@ if __name__ == '__main__':
     parser =argparse.ArgumentParser('Spawn A Worker Node')
     parser.add_argument('worker_id', type=int, help='Worker ID')
     parser.add_argument('--multicast', action='store_true', help='Use UDP Multicast backend')
+    parser.add_argument('--hostname', help='Hostname to use')
     args = parser.parse_args()
 
     worker_id = args.worker_id
@@ -131,8 +132,9 @@ if __name__ == '__main__':
         print(as_fail('Worker ID was not properly initialized!'), file=sys.stderr)
         sys.exit(-1)
     else:
+        hostname = args.hostname if args.hostname is not None else f'n{worker_id}'
         rpc_params = DistributedADMMWorkerRPCParams(
-            IP=socket.gethostbyname(f'n{worker_id}'), Port=13000 + worker_id,
+            IP=socket.gethostbyname(hostname), Port=13000 + worker_id,
             WorkerID=worker_id, Multicast=args.multicast
         )
         print(f'RPC Parameters:\n{rpc_params}')

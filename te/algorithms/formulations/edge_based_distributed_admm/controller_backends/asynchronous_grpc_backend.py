@@ -102,6 +102,17 @@ class AsynchronousgRPCBackend(ControllerCommunicationBackendBase):
                                 initial_feasible_solution: CPUArray):
         self._event_loop.run_until_complete(self._initialize_worker_nodes(solver_params, basis, initial_feasible_solution))
     
+    async def _update_demands(self, updated_feasible_solution: CPUArray):
+        X_EK_START_CHUNKS = np.array_split(updated_feasible_solution, self.number_of_nodes, axis=1)
+        WORKERS = self._worker_stubs
+        await asyncio.gather(*[
+            stub.SetInitialFeasibleSolution(chunk_big_array(X_EK_START_CHUNKS[i], GRPC_ARRAY_STREAM_MAX_LEN))
+            for i, stub in enumerate(WORKERS)
+        ])
+    
+    def update_demands(self, updated_feasible_solution: CPUArray):
+        self._event_loop.run_until_complete(self._update_demands(updated_feasible_solution))
+    
     async def _get_X_ek(self, basis: CPUArray, initial_feasible_solution: CPUArray):
         chunks = await asyncio.gather(*[
             async_rebuild_chunked_array(stub.RequestChunk(Empty()))

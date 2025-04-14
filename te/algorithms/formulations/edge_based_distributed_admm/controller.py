@@ -309,19 +309,19 @@ class ControllerNode(TrafficEngineeringLP):
             self._model_controller.resetParams()
     
     @record_cpu_runtime('Solve')
-    def solve(self, params: SolverParams = None) -> float:
-        assert params is None
-        
+    def solve(self, params: Optional[int] = None) -> float:        
         MODEL_CONTROLLER = self._model_controller
         PARAMS = self._solver_params
+        EPOCHS = params if params is not None else PARAMS.NumberOfEpochs
+        SHIFT = 0 if params is None else PARAMS.NumberOfEpochs // 2
         
         try:
             t = time.time()
-            for epoch in tqdm.tqdm(range(PARAMS.NumberOfEpochs), bar_format='{l_bar}{bar:36}{r_bar}{bar:-36b}'):
+            for epoch in tqdm.tqdm(range(EPOCHS), bar_format='{l_bar}{bar:36}{r_bar}{bar:-36b}'):
             # for epoch in range(PARAMS.NumberOfEpochs):
                 optimize_or_scream(MODEL_CONTROLLER)
                 for i in reversed(range(PARAMS.NumberOfNetworkUpdates)):
-                    self._do_network_update(epoch)
+                    self._do_network_update(epoch + SHIFT)
                     if i > 0 and self._reconvene_network_updates():
                         break
 
@@ -386,22 +386,14 @@ class ControllerNode(TrafficEngineeringLP):
         ]
     
     def update_traffic_matrix(self, tm):
-        pass
-        # # First, record the matrix and the new commodities
-        # self._traffic = tm
-        # self._commodity_list = traffic_to_commodity(self._traffic)
-        # # Get a new feasible solution (if the matrix did not change too much),
-        # # then this also will not change too much.
-        # self._set_initial_feasible_solution()
-        # # Send the new solution
-        # NUM_WORKERS = self._solver_params.NumWorkers
-        # X_EK_START_CHUNKS = np.array_split(self._X_ek_start, NUM_WORKERS, axis=1)
-        # WORKERS = self._worker_stubs
-        # wait([
-        #     self._broadcast_thread_pool.submit(
-        #         stub.SetInitialFeasibleSolution, chunk_big_array(X_EK_START_CHUNKS[i], GRPC_ARRAY_STREAM_MAX_LEN)
-        #     ) for i, stub in enumerate(WORKERS)
-        # ])
+        # First, record the matrix and the new commodities
+        self._traffic = tm
+        self._commodity_list = traffic_to_commodity(self._traffic)
+        # Get a new feasible solution (if the matrix did not change too much),
+        # then this also will not change too much.
+        self._set_initial_feasible_solution()
+        # Send it to the backend
+        self._backend.update_demands(self._X_ek_start)
     
     def initialize_to(self, solution: EdgeBasedMinimizeMaximumUtilitySolution):
         raise NotImplementedError

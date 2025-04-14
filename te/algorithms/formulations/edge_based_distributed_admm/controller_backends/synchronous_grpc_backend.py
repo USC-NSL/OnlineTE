@@ -90,6 +90,15 @@ class SynchronousgRPCBackend(ControllerCommunicationBackendBase):
                 for stub in WORKERS
         ]) 
 
+    def update_demands(self, updated_feasible_solution: CPUArray):
+        X_EK_START_CHUNKS = np.array_split(updated_feasible_solution, self.number_of_nodes, axis=1)
+        WORKERS = self._worker_stubs
+        wait([
+            self._broadcast_thread_pool.submit(
+                stub.SetInitialFeasibleSolution, chunk_big_array(X_EK_START_CHUNKS[i], GRPC_ARRAY_STREAM_MAX_LEN)
+            ) for i, stub in enumerate(WORKERS)
+        ])
+
     def get_X_ek(self, basis: CPUArray, initial_feasible_solution: CPUArray):
         chunks = self._broadcast_thread_pool.map(
             lambda stub: rebuild_chunked_array(stub.RequestChunk(Empty())), self._worker_stubs
