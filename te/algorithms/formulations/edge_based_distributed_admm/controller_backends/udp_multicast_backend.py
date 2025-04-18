@@ -2,7 +2,7 @@ import grpc
 import socket
 import asyncio
 import numpy as np
-from typing import List, ClassVar
+from typing import List, ClassVar, Optional
 from dataclasses import dataclass
 from te.algorithms.array_utils.cpu_utils import CPUArray
 from .. import DistributedADMMControllerRPCParams, DistributedADMMSolverParams
@@ -152,8 +152,9 @@ class MulticastBackend(ControllerCommunicationBackendBase):
         runtimes, serialized_y_bar_chunks = zip(*list([(res.runtime_ns, res.means) for res in responses]))
         return max(runtimes), np.mean([serialized_message_to_array(chunk) for chunk in serialized_y_bar_chunks], axis=0)
     
-    def do_network_update(self, epoch: int):
-        message = distributed_lp_messages.NetworkUpdateRequest(epoch=epoch, xid=self.current_xid)
+    def do_network_update(self, epoch: int, F_e: Optional[CPUArray] = None):
+        message = distributed_lp_messages.NetworkUpdateRequest(epoch=epoch, xid=self.current_xid, 
+                                                               F_e=array_to_serialized_message(F_e))
         return self._event_loop.run_until_complete(self._do_network_update(message))
     
     def _reconvene_network_updates(self, message: distributed_lp_messages.UpdateMessage):
