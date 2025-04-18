@@ -20,6 +20,7 @@ class NetworkWorkerNode:
         self._solver_params = solver_params
         self._ready: bool = False
 
+        self._K: Optional[int] = None
         self._T: Optional[int] = None
         self._NUM_EDGES: Optional[int] = None
         self._CHUNK_LEN: Optional[int] = None
@@ -43,6 +44,7 @@ class NetworkWorkerNode:
         self._backend.update_cached_values = self.update_cached_values
         self._backend.report_chunk = self.report_chunk
         self._backend.report_aggregate = self.report_aggregate
+        self._backend.set_active_commodity_count = self.set_active_commodity_count
     
     def wait(self):
         self._backend.wait()
@@ -78,9 +80,10 @@ class NetworkWorkerNode:
         set_global_precision(precision=new_params.Precision)
         set_cpu_float_precision()
 
-    def do_inner_loop_update(self, epoch: int) -> CPUArray:
+    def do_inner_loop_update(self, epoch: int, F_e: Optional[CPUArray] = None) -> CPUArray:
         GAMMA = self._solver_params.Gamma
         KAPPA = self._solver_params.Kappa
+        LOCAL_ITERS = self._solver_params.NumberOfLocalUpdates
         PGD_ITERS = self._solver_params.PGDIterations
         NULL_M = self._NULL_M
         NNT_M = self._NNT_M
@@ -89,11 +92,28 @@ class NetworkWorkerNode:
         C_TK_CHUNK = self._get_current_C()
         
         start = time.perf_counter_ns()
-        self._lambda_ek_chunk, self._Y_tk_chunk = \
-            do_plain_pgd_with_step_reduction(LAMBDA_EK_CHUNK, X_EK_START_CHUNK, NNT_M, NULL_M, C_TK_CHUNK, GAMMA, 
-                                             PGD_ITERS, KAPPA, epoch)
-
-        return time.perf_counter_ns() - start, np.mean(self._Y_tk_chunk, axis=1)
+        local_iters = 0
+        while True:
+            self._lambda_ek_chunk, self._Y_tk_chunk = \
+                do_plain_pgd_with_step_reduction(LAMBDA_EK_CHUNK, X_EK_START_CHUNK, NNT_M, NULL_M, C_TK_CHUNK, GAMMA, 
+                                                 PGD_ITERS, KAPPA, epoch)
+            means = np.mean(self._Y_tk_chunk, axis=1)
+            if F_e is not None and local_iters < LOCAL_ITERS:
+                self.do_local_update(F_e, means)
+                local_iters += 1
+            else:
+                break
+        return time.perf_counter_ns() - start, means
+    
+    def do_local_update(self, F_e: CPUArray, means: CPUArray):
+        K = self._K
+        ETA = self._solver_params.Eta
+        RHO = self._solver_params.Rho
+        self._P_bar_t_cached = self._P_bar_t_cached + (ETA/RHO) / (K + ETA/RHO) * (means - self._Y_bar_t_cached)
+        self._Y_bar_t_cached = means
+    
+    def set_active_commodity_count(self, K: int):
+        self._K = K
 
     def update_cached_values(self, u_t: CPUArray, P_bar_t: CPUArray, Y_bar_t: CPUArray):
         self._u_t_cached = u_t

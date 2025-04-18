@@ -229,6 +229,8 @@ if __name__ == '__main__':
                                      help='Number of epochs')
     solver_params_group.add_argument('--updates', type=int, default=SOLVER_PARAMS.NumberOfNetworkUpdates, 
                                      help='Number of consecutive network updates')
+    solver_params_group.add_argument('--local-updates', type=int, default=SOLVER_PARAMS.NumberOfLocalUpdates,
+                                     help='Number of local updates per network update')
     solver_params_group.add_argument('--pgd-iters', type=int, default=SOLVER_PARAMS.PGDIterations, 
                                      help='Number of PGD iterations at each step')
     solver_params_group.add_argument('--pgd-step', type=float, default=SOLVER_PARAMS.Gamma, 
@@ -288,6 +290,7 @@ if __name__ == '__main__':
     SOLVER_PARAMS = DistributedADMMSolverParams(
         NumberOfEpochs=args.epochs,
         NumberOfNetworkUpdates=args.updates,
+        NumberOfLocalUpdates=args.local_updates,
         PGDIterations=args.pgd_iters,
         Gamma=args.pgd_step,
         Eta=args.admm_inner,

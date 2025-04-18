@@ -9,6 +9,7 @@ from te.algorithms.base import TrafficEngineeringLP, SolverParams
 from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
 from topologies.utils import get_edge_indexing, get_graph_M_matrix, get_adjacency_null_space
+from topologies.utils import get_sparse_null_space, get_symbolic_graph_M_matrix
 from utils.logging import as_info, log_subsection_separator
 from te.algorithms.array_utils import set_global_precision
 from te.algorithms.array_utils.cpu_utils import (CPUArray, DoublePrecisionCPUArray, 
@@ -29,6 +30,7 @@ class ControllerNode(TrafficEngineeringLP):
         super().__init__()
         self._graph = graph
         self._M = get_graph_M_matrix(graph)
+        self._symbolic_M = get_symbolic_graph_M_matrix(graph)
         self._traffic = traffic
         self._solver_params = solver_params
         self._rpc_params = rpc_params
@@ -126,6 +128,7 @@ class ControllerNode(TrafficEngineeringLP):
         m, n = M.shape
         assert m < n
         N = cpu_array(get_adjacency_null_space(M))
+        # N = cpu_array(get_sparse_null_space(self._symbolic_M))
         T = N.shape[1]
         self._NULL_M = N
         self._NNT_M = N @ N.T
@@ -232,7 +235,10 @@ class ControllerNode(TrafficEngineeringLP):
     @record_return_value('PGD-Runtime')
     @record_cpu_runtime('Network-Update')
     def _do_network_update(self, epoch: int):
-        max_run, self._Y_bar_t = self._backend.do_network_update(epoch)
+        if self._solver_params.NumberOfLocalUpdates > 0:
+            max_run, self._Y_bar_t = self._backend.do_network_update(epoch, self._get_F())
+        else:
+            max_run, self._Y_bar_t = self._backend.do_network_update(epoch)
         return max_run
     
     def _update_P_bar(self):
@@ -302,6 +308,7 @@ class ControllerNode(TrafficEngineeringLP):
             self._NULL_M, 
             self._X_ek_start
         )
+        self._backend.set_active_commodity_count(len(self._commodity_list))
     
     def reset(self, with_params: False):
         self._model_controller.reset()

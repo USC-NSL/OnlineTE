@@ -1,4 +1,4 @@
-from typing import Dict, Type, Tuple
+from typing import Dict, Type, Tuple, Optional
 from abc import ABC, abstractmethod
 from te.algorithms.array_utils.cpu_utils import CPUArray
 from te.algorithms.base import SolverParams
@@ -37,12 +37,16 @@ class ControllerCommunicationBackendBase(ABC):
         """Get the total flow over each edge"""
     
     @abstractmethod
-    def do_network_update(self, epoch: int) -> Tuple[int, CPUArray]:
+    def do_network_update(self, epoch: int, F_e: Optional[CPUArray] = None) -> Tuple[int, CPUArray]:
         """Do network update for a given epoch and return the aggregate"""
     
     @abstractmethod
     def reconvene_network_updates(self, P_bar_t: CPUArray, Y_bar_t: CPUArray, u_t: CPUArray):
         """Finalize network updates for a single inner ADMM iteration"""
+    
+    # @abstractmethod
+    def set_active_commodity_count(self, K: int):
+        """Set total number of active commodities in the network (needed for local updates)"""
     
     @abstractmethod
     def close(self):

@@ -12,6 +12,7 @@ service DistributedADMMSolver {
     rpc RequestAggregate(google.protobuf.Empty) returns (SerializedNumpyArrayMessage) {}
     rpc QueryState(google.protobuf.Empty) returns (State) {}
     rpc SetSolverParameters(SolverParameters) returns (google.protobuf.Empty) {}
+    rpc SetActiveCommodityCount(ActiveCommodityCount) returns (google.protobuf.Empty) {}
     rpc Close(google.protobuf.Empty) returns (google.protobuf.Empty) {}
 }
 
@@ -41,6 +42,7 @@ message UpdateMessage {
 message NetworkUpdateRequest {
     int32 epoch = 1;
     int32 xid = 2;
+    optional SerializedNumpyArrayMessage F_e = 3;
 }
 
 message NetworkUpdateResponse {
@@ -57,13 +59,18 @@ message State {
 message SolverParameters {
     int32 NumberOfEpochs = 1;
     int32 NumberOfNetworkUpdates = 2;
-    float Rho = 3;
-    float Eta = 4;
-    float Gamma = 5;
-    float Kappa = 6;
-    int32 PGDIterations = 7;
-    int32 NumWorkers = 8;
-    string Precision = 9;
-    float BigGamma = 10;
-    int32 Seed = 11;
+    int32 NumberOfLocalUpdates = 3;
+    float Rho = 4;
+    float Eta = 5;
+    float Gamma = 6;
+    float Kappa = 7;
+    int32 PGDIterations = 8;
+    int32 NumWorkers = 9;
+    string Precision = 10;
+    float BigGamma = 11;
+    int32 Seed = 12;
+}
+
+message ActiveCommodityCount {
+    int32 TotalNumberOfCommodities = 1;
 }

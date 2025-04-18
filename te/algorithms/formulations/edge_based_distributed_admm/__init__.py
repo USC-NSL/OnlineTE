@@ -13,6 +13,7 @@ warnings.filterwarnings("error")
 class DistributedADMMSolverParams(GurobiSolverParams):
     NumberOfEpochs: Optional[int] = 100
     NumberOfNetworkUpdates: int = 4
+    NumberOfLocalUpdates: int = 0
     Rho: float = 1.0
     Eta: float = 8.0
     Gamma: float = 1.0

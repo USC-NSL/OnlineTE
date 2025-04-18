@@ -1,6 +1,7 @@
 import os
 import json
 import numpy as np
+import sympy as sp
 try:
     import cupy as cp
 except ModuleNotFoundError:
@@ -363,10 +364,30 @@ def get_graph_M_matrix(graph: nx.DiGraph) -> np.ndarray:
     return M
 
 
+def get_symbolic_graph_M_matrix(graph: nx.DiGraph) -> sp.Matrix:
+    assert isinstance(graph, nx.DiGraph)
+
+    m = len(graph.nodes())
+    n = len(graph.edges())
+    M = [[0 for _ in range(n)] for __ in range(m)]
+    
+    for i, (s, d) in enumerate(graph.edges(data=False)):
+        M[s][i] = +1
+        M[d][i] = -1
+    
+    return sp.Matrix(M)
+
+
 def get_adjacency_null_space(M_matrix: np.ndarray) -> np.ndarray:
     assert len(M_matrix.shape) == 2
 
     return null_space(M_matrix)
+
+
+def get_sparse_null_space(symbolic_M_matrix: sp.Matrix) -> np.ndarray:
+    basis = symbolic_M_matrix.rref(pivots=False).nullspace()
+    orthonormal_basis = sp.GramSchmidt(basis, orthonormal=True)
+    return np.hstack([np.array(base.tolist(), dtype=np.float64) for base in orthonormal_basis])
 
 
 def get_feasible_flow_assignment(graph: nx.DiGraph, commodities: List[Commodity]):

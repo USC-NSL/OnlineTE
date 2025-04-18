@@ -2,7 +2,7 @@ import grpc
 import signal
 import asyncio
 import numpy as np
-from typing import List, ClassVar
+from typing import List, ClassVar, Optional
 from dataclasses import dataclass
 from te.algorithms.array_utils.cpu_utils import CPUArray
 from .. import DistributedADMMControllerRPCParams, DistributedADMMSolverParams
@@ -139,8 +139,8 @@ class AsynchronousgRPCBackend(ControllerCommunicationBackendBase):
         runtimes, serialized_y_bar_chunks = zip(*list([(res.runtime_ns, res.means) for res in responses]))
         return max(runtimes), np.mean([serialized_message_to_array(chunk) for chunk in serialized_y_bar_chunks], axis=0)
     
-    def do_network_update(self, epoch: int):
-        message = distributed_lp_messages.NetworkUpdateRequest(epoch=epoch)
+    def do_network_update(self, epoch: int, F_e: Optional[CPUArray] = None):
+        message = distributed_lp_messages.NetworkUpdateRequest(epoch=epoch, F_e=array_to_serialized_message(F_e))
         return self._event_loop.run_until_complete(self._do_network_update(message))
     
     async def _reconvene_network_updates(self, message: distributed_lp_messages.UpdateMessage):
@@ -175,3 +175,10 @@ class AsynchronousgRPCBackend(ControllerCommunicationBackendBase):
     
     def close(self):
         self._event_loop.run_until_complete(self.aclose())
+    
+    async def _set_active_commodity_count(self, K: int):
+        message = distributed_lp_messages.ActiveCommodityCount(TotalNumberOfCommodities=K)
+        await asyncio.gather(*[stub.SetActiveCommodityCount(message) for stub in self._worker_stubs])
+    
+    def set_active_commodity_count(self, K: int):
+        self._event_loop.run_until_complete(self._set_active_commodity_count(K))

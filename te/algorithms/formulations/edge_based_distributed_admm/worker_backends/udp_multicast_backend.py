@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from .base import WorkerNodeCommunicationBackendBase, worker_node_communication_backend
 from .. import DistributedADMMSolverParams, DistributedADMMWorkerRPCParams
 from ..utils import (serialized_message_to_array, array_to_serialized_message,
-                     rebuild_chunked_array, chunk_big_array,
+                     rebuild_chunked_array, chunk_big_array, get_optional_field,
                      GRPC_ARRAY_STREAM_MAX_LEN)
 
 from protos.distributed_lp.distributed_lp_pb2_grpc import DistributedADMMSolverServicer, add_DistributedADMMSolverServicer_to_server
@@ -106,7 +106,8 @@ class MulticastBackend(WorkerNodeCommunicationBackendBase):
                     request = distributed_lp_messages.NetworkUpdateRequest.FromString(msg_bytes)
                     if self.current_xid == None:
                         self._xid = request.xid
-                    runtime, means = self.do_inner_loop_update(request.epoch)
+                    F_e = serialized_message_to_array(get_optional_field(request, 'F_e'))
+                    runtime, means = self.do_inner_loop_update(request.epoch, F_e)
                     response = distributed_lp_messages.NetworkUpdateResponse(
                         worker_id=self.worker_id, runtime_ns=runtime, 
                         means=array_to_serialized_message(means),
@@ -167,4 +168,8 @@ class NetworkWorkerNodeListener(DistributedADMMSolverServicer):
     
     def Close(self, request, context):
         self._backend.close()
+        return Empty()
+
+    def SetActiveCommodityCount(self, request: distributed_lp_messages.ActiveCommodityCount, context):
+        self._backend.set_active_commodity_count(request.TotalNumberOfCommodities)
         return Empty()

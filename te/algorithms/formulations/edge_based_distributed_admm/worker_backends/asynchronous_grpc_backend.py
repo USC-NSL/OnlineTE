@@ -6,7 +6,7 @@ from typing import Optional, Iterator
 from .base import WorkerNodeCommunicationBackendBase, worker_node_communication_backend
 from .. import DistributedADMMSolverParams, DistributedADMMWorkerRPCParams
 from ..utils import (serialized_message_to_array, array_to_serialized_message,
-                     rebuild_chunked_array, chunk_big_array,
+                     rebuild_chunked_array, chunk_big_array, get_optional_field,
                      GRPC_ARRAY_STREAM_MAX_LEN)
 from protos.distributed_lp.distributed_lp_pb2_grpc import DistributedADMMSolverServicer, add_DistributedADMMSolverServicer_to_server
 from google.protobuf.empty_pb2 import Empty
@@ -86,9 +86,19 @@ class NetworkWorkerNodeListener(DistributedADMMSolverServicer):
         return Empty()
     
     async def DoNetworkUpdate(self, request: distributed_lp_messages.NetworkUpdateRequest, context):
-        means, runtime = self._backend.do_inner_loop_update(request.epoch)
+        F_e = serialized_message_to_array(get_optional_field(request, 'F_e'))
+        total_runtime = 0
+        # Number of local updates is 3 for now
+        for _ in range(3):
+            means, runtime = self._backend.do_inner_loop_update(request.epoch)
+            total_runtime += runtime
+            break
+            # if F_e is not None:
+            #     self._backend.do_local_update(F_e, means)
+            # else:
+            #     break
         return distributed_lp_messages.NetworkUpdateResponse(
-            runtime_ns=runtime, means=array_to_serialized_message(means)
+            runtime_ns=total_runtime, means=array_to_serialized_message(means)
         )
     
     async def UpdateWorkerNode(self, request: distributed_lp_messages.UpdateMessage, context):
@@ -117,4 +127,8 @@ class NetworkWorkerNodeListener(DistributedADMMSolverServicer):
     
     async def Close(self, request, context):
         self._backend.close()
+        return Empty()
+    
+    async def SetActiveCommodityCount(self, request: distributed_lp_messages.ActiveCommodityCount, context):
+        self._backend._set_active_commodity_count(request.TotalNumberOfCommodities)
         return Empty()
