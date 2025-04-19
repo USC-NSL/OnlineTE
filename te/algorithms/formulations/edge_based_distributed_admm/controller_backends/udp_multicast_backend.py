@@ -229,3 +229,10 @@ class MulticastBackend(ControllerCommunicationBackendBase):
     def close(self):
         self._event_loop.run_until_complete(self.aclose())
         self._scatter_socket.close()
+
+    async def _set_active_commodity_count(self, K: int):
+        message = distributed_lp_messages.ActiveCommodityCount(TotalNumberOfCommodities=K)
+        await asyncio.gather(*[stub.SetActiveCommodityCount(message) for stub in self._worker_stubs])
+    
+    def set_active_commodity_count(self, K: int):
+        self._event_loop.run_until_complete(self._set_active_commodity_count(K))
