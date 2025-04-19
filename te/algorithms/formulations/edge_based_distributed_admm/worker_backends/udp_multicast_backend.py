@@ -10,6 +10,7 @@ from .. import DistributedADMMSolverParams, DistributedADMMWorkerRPCParams
 from ..utils import (serialized_message_to_array, array_to_serialized_message,
                      rebuild_chunked_array, chunk_big_array, get_optional_field,
                      GRPC_ARRAY_STREAM_MAX_LEN)
+from ..controller_backends.udp_multicast_backend import TLVRPCMessages
 
 from protos.distributed_lp.distributed_lp_pb2_grpc import DistributedADMMSolverServicer, add_DistributedADMMSolverServicer_to_server
 from google.protobuf.empty_pb2 import Empty
@@ -99,32 +100,37 @@ class MulticastBackend(WorkerNodeCommunicationBackendBase):
             self._server.wait_for_termination()
     
     async def gather_updates(self):
+        buffer = b''
         try:
             while self.is_worker_node_ready:
-                msg_bytes, addr = self._gather_socket.recvfrom(10240)
-                if len(msg_bytes) <= 6:
-                    request = distributed_lp_messages.NetworkUpdateRequest.FromString(msg_bytes)
-                    if self.current_xid == None:
-                        self._xid = request.xid
-                    F_e = serialized_message_to_array(get_optional_field(request, 'F_e'))
-                    runtime, means = self.do_inner_loop_update(request.epoch, F_e)
-                    response = distributed_lp_messages.NetworkUpdateResponse(
-                        worker_id=self.worker_id, runtime_ns=runtime, 
-                        means=array_to_serialized_message(means),
-                        xid=request.xid
-                    )
-                    self._gather_socket.sendto(response.SerializeToString(), addr)
-                else:
-                    request = distributed_lp_messages.UpdateMessage.FromString(msg_bytes)
-                    self.update_cached_values(
-                        serialized_message_to_array(request.u_t),
-                        serialized_message_to_array(request.P_bar_t),
-                        serialized_message_to_array(request.Y_bar_t)
-                    )
-                    self.update_xid()
+                packet, addr = self._gather_socket.recvfrom(10240)
+                buffer += packet
+                update = TLVRPCMessages.get_packet_rpc_message(buffer)
+                if update is not None:
+                    update_type, consumed_length, request = update
+                    if update_type == TLVRPCMessages.DoInnerLoops:
+                        if self.current_xid == None:
+                            self._xid = request.xid
+                        F_e = serialized_message_to_array(get_optional_field(request, 'F_e'))
+                        runtime, means = self.do_inner_loop_update(request.epoch, F_e)
+                        response = distributed_lp_messages.NetworkUpdateResponse(
+                            worker_id=self.worker_id, runtime_ns=runtime, 
+                            means=array_to_serialized_message(means),
+                            xid=request.xid
+                        )
+                        self._gather_socket.sendto(response.SerializeToString(), addr)
+                    elif update_type == TLVRPCMessages.UpdateNetworkNodes:
+                        self.update_cached_values(
+                            serialized_message_to_array(request.u_t),
+                            serialized_message_to_array(request.P_bar_t),
+                            serialized_message_to_array(request.Y_bar_t)
+                        )
+                        self.update_xid()
+                    else:
+                        raise ValueError(f'Unexpected update type: {update_type}')
+                    buffer = buffer[consumed_length:]
         except OSError as e:
             print(f'Error in gatherer loop: {e}')
-            pass
         finally:
             if self._gather_socket:
                 self._gather_socket.close()

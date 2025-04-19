@@ -1,8 +1,9 @@
 import grpc
 import socket
+import struct
 import asyncio
 import numpy as np
-from typing import List, ClassVar, Optional
+from typing import List, ClassVar, Optional, Tuple, Any
 from dataclasses import dataclass
 from te.algorithms.array_utils.cpu_utils import CPUArray
 from .. import DistributedADMMControllerRPCParams, DistributedADMMSolverParams
@@ -29,6 +30,49 @@ class MulticastControllerBackendParams(DistributedADMMControllerRPCParams):
     
     def __post_init__(self):
         self.left_column_share = 0.2
+
+class TLVRPCMessages:
+    DoInnerLoops = 0x00
+    UpdateNetworkNodes = 0x01
+    
+    HEADER_FORMAT = "!HI"
+    HEADER_LENGTH = struct.calcsize(HEADER_FORMAT)
+
+    @classmethod
+    def get_packet_header(cls, packet: bytes) -> Optional[bytes]:
+        if len(packet) >= cls.HEADER_LENGTH:
+            return packet[:cls.HEADER_LENGTH]
+    
+    @classmethod
+    def get_packet_rpc_message(cls, packet: bytes) -> Optional[Tuple[int, int, Any]]:
+        """
+        Assuming `packet` has at least one finished packet, return the RPC message
+        type, the length of the packet and its protobuff representation.
+        """
+        header = cls.get_packet_header(packet)
+        if header is not None:
+            message_type, message_len = struct.unpack_from(cls.HEADER_FORMAT, header)
+            if len(packet) >= message_len:
+                message_serialized = packet[cls.HEADER_LENGTH:message_len]
+                if message_type == cls.DoInnerLoops:
+                    message = distributed_lp_messages.NetworkUpdateRequest.FromString(message_serialized)
+                elif message_type == cls.UpdateNetworkNodes:
+                    message = distributed_lp_messages.UpdateMessage.FromString(message_serialized)
+                else:
+                    raise ValueError(f'Unexpected RPC message type: {message_type}')
+                return (message_type, message_len, message)
+
+    @classmethod
+    def serialize_do_inner_loop(cls, message: distributed_lp_messages.NetworkUpdateRequest) -> bytes:
+        body = message.SerializeToString()
+        header = struct.pack(cls.HEADER_FORMAT, cls.DoInnerLoops, len(body) + cls.HEADER_LENGTH)
+        return header + body
+    
+    @classmethod
+    def serialize_update_network_nodes(cls, message: distributed_lp_messages.UpdateMessage) -> bytes:
+        body = message.SerializeToString()
+        header = struct.pack(cls.HEADER_FORMAT, cls.UpdateNetworkNodes, len(body) + cls.HEADER_LENGTH)
+        return header + body
 
 
 @controller_communication_backend
@@ -142,7 +186,7 @@ class MulticastBackend(ControllerCommunicationBackendBase):
         return self._event_loop.run_until_complete(self._get_X_ek_sum())
 
     async def _do_network_update(self, message: distributed_lp_messages.NetworkUpdateRequest):
-        self._scatter_socket.sendto(message.SerializeToString(), self.SCATTER_ADDRESS)
+        self._scatter_socket.sendto(TLVRPCMessages.serialize_do_inner_loop(message), self.SCATTER_ADDRESS)
         responses = [None for _ in range(self.number_of_nodes)]
         for _ in range(self.number_of_nodes):
             res = distributed_lp_messages.NetworkUpdateResponse.FromString(
@@ -158,7 +202,7 @@ class MulticastBackend(ControllerCommunicationBackendBase):
         return self._event_loop.run_until_complete(self._do_network_update(message))
     
     def _reconvene_network_updates(self, message: distributed_lp_messages.UpdateMessage):
-        self._scatter_socket.sendto(message.SerializeToString(), self.SCATTER_ADDRESS)
+        self._scatter_socket.sendto(TLVRPCMessages.serialize_update_network_nodes(message), self.SCATTER_ADDRESS)
     
     def reconvene_network_updates(self, P_bar_t: CPUArray, Y_bar_t: CPUArray, u_t: CPUArray):
         message = distributed_lp_messages.UpdateMessage(
