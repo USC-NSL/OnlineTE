@@ -18,7 +18,8 @@ class DistributedADMMSolverParams(GurobiSolverParams):
     Eta: float = 8.0
     Gamma: float = 1.0
     Kappa: float = 0.2
-    PGDIterations: int = 2
+    QPIterations: int = 2
+    QPMethod: Literal['PGD', 'ADMM'] = 'PGD'
     BigGamma: float = 1e-7
     Precision: Literal['double', 'single', 'half'] = SINGLE_PRECISION
     Seed: int = te.constants.DEFAULT_SEED

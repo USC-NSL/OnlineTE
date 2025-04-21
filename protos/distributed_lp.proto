@@ -64,11 +64,12 @@ message SolverParameters {
     float Eta = 5;
     float Gamma = 6;
     float Kappa = 7;
-    int32 PGDIterations = 8;
-    int32 NumWorkers = 9;
-    string Precision = 10;
-    float BigGamma = 11;
-    int32 Seed = 12;
+    int32 QPIterations = 8;
+    string QPMethod = 9;
+    int32 NumWorkers = 10;
+    string Precision = 11;
+    float BigGamma = 12;
+    int32 Seed = 13;
 }
 
 message ActiveCommodityCount {

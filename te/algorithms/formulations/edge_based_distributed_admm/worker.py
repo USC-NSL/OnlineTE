@@ -27,11 +27,17 @@ class NetworkWorkerNode:
         self._NULL_M: Optional[CPUArray] = None
         self._NNT_M: Optional[CPUArray] = None
         self._X_ek_start_chunk: Optional[CPUArray] = None
-        self._Y_tk_chunk: Optional[CPUArray] = None
-        self._lambda_ek_chunk: Optional[CPUArray] = None
         self._Y_bar_t_cached: Optional[CPUArray] = None
         self._P_bar_t_cached: Optional[CPUArray] = None
         self._u_t_cached: Optional[CPUArray] = None
+        self._Y_tk_chunk: Optional[CPUArray] = None
+
+        # Specific to the PGD solution
+        self._lambda_ek_chunk: Optional[CPUArray] = None
+        
+        # Specific to the ADMM solution
+        self._S_ek_chunk: Optional[CPUArray] = None
+        self._t_ek_chunk: Optional[CPUArray] = None
 
         if rpc_params.Multicast:
             self._backend: WorkerNodeCommunicationBackendBase = MulticastBackend(rpc_params)
@@ -39,7 +45,6 @@ class NetworkWorkerNode:
             self._backend: WorkerNodeCommunicationBackendBase = SynchronousgRPCBackend(rpc_params)
         self._backend.set_initial_feasible_solution = self.set_initial_feasible_solution
         self._backend.set_null_space_basis = self.set_null_space_basis
-        self._backend.do_inner_loop_update = self.do_inner_loop_update
         self._backend.set_solver_parameters = self.set_solver_parameters
         self._backend.update_cached_values = self.update_cached_values
         self._backend.report_chunk = self.report_chunk
@@ -62,10 +67,15 @@ class NetworkWorkerNode:
         T = self._NULL_M.shape[1]
         self._T = T
         self._Y_tk_chunk = cpu_zeros((T, CHUNK_LEN))
-        self._lambda_ek_chunk = cpu_zeros(self._X_ek_start_chunk.shape)
         self._Y_bar_t_cached: Optional[CPUArray] = cpu_zeros((T,))
         self._P_bar_t_cached: Optional[CPUArray] = cpu_zeros((T,))
         self._u_t_cached: Optional[CPUArray] = cpu_zeros((T,))
+
+        if self._solver_params.QPMethod == 'PGD':
+            self._lambda_ek_chunk = cpu_zeros(self._X_ek_start_chunk.shape)
+        elif self._solver_params.QPMethod == 'ADMM':
+            self._S_ek_chunk = np.copy(self._X_ek_start_chunk)
+            self._t_ek_chunk = cpu_zeros(self._X_ek_start_chunk.shape)
 
     def _get_current_C(self) -> CPUArray:
         Y_TK = self._Y_tk_chunk
@@ -79,12 +89,17 @@ class NetworkWorkerNode:
         self._solver_params = new_params
         set_global_precision(precision=new_params.Precision)
         set_cpu_float_precision()
+        self._backend.do_inner_loop_update = {
+            'PGD': self.do_inner_loop_pgd_update,
+            'ADMM': self.do_inner_loop_admm_update
+        }[self._solver_params.QPMethod]
 
-    def do_inner_loop_update(self, epoch: int, F_e: Optional[CPUArray] = None) -> CPUArray:
+    def do_inner_loop_pgd_update(self, epoch: int, F_e: Optional[CPUArray] = None) -> CPUArray:
+        assert self._solver_params.QPMethod == 'PGD'
         GAMMA = self._solver_params.Gamma
         KAPPA = self._solver_params.Kappa
         LOCAL_ITERS = self._solver_params.NumberOfLocalUpdates
-        PGD_ITERS = self._solver_params.PGDIterations
+        PGD_ITERS = self._solver_params.QPIterations
         NULL_M = self._NULL_M
         NNT_M = self._NNT_M
         X_EK_START_CHUNK = self._X_ek_start_chunk
@@ -104,6 +119,27 @@ class NetworkWorkerNode:
             else:
                 break
         return time.perf_counter_ns() - start, means
+
+    def do_inner_loop_admm_update(self, epoch: int, F_e: Optional[CPUArray] = None) -> CPUArray:
+        assert self._solver_params.QPMethod == 'ADMM'
+        GAMMA = self._solver_params.Gamma
+        ADMM_ITERS = self._solver_params.QPIterations
+        NULL_M = self._NULL_M
+        Y_TK = self._Y_tk_chunk
+        X_EK_START_CHUNK = self._X_ek_start_chunk
+        C_TK_CHUNK = self._get_current_C()
+        S_EK_CHUNK = self._S_ek_chunk
+        T_EK_CHUNK = self._t_ek_chunk
+        
+        start = time.perf_counter_ns()
+        for _ in range(ADMM_ITERS):
+            Y_TK = (C_TK_CHUNK - GAMMA * NULL_M.T @ (X_EK_START_CHUNK + T_EK_CHUNK - S_EK_CHUNK)) / (1 + GAMMA)
+            S_EK_CHUNK = np.clip(X_EK_START_CHUNK + NULL_M @ Y_TK + T_EK_CHUNK, a_min=0, a_max=None)
+            T_EK_CHUNK = T_EK_CHUNK + (X_EK_START_CHUNK + NULL_M @ Y_TK - S_EK_CHUNK)
+        self._Y_tk_chunk = Y_TK
+        self._S_ek_chunk = S_EK_CHUNK
+        self._t_ek_chunk = T_EK_CHUNK
+        return time.perf_counter_ns() - start, np.mean(self._Y_tk_chunk, axis=1)
     
     def do_local_update(self, F_e: CPUArray, means: CPUArray):
         K = self._K
@@ -111,6 +147,7 @@ class NetworkWorkerNode:
         RHO = self._solver_params.Rho
         self._P_bar_t_cached = self._P_bar_t_cached + (ETA/RHO) / (K + ETA/RHO) * (means - self._Y_bar_t_cached)
         self._Y_bar_t_cached = means
+        self._u_t_cached = self._u_t_cached + (means - self._P_bar_t_cached)
     
     def set_active_commodity_count(self, K: int):
         self._K = K

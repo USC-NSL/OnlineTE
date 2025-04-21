@@ -231,12 +231,14 @@ if __name__ == '__main__':
                                      help='Number of consecutive network updates')
     solver_params_group.add_argument('--local-updates', type=int, default=SOLVER_PARAMS.NumberOfLocalUpdates,
                                      help='Number of local updates per network update')
-    solver_params_group.add_argument('--pgd-iters', type=int, default=SOLVER_PARAMS.PGDIterations, 
-                                     help='Number of PGD iterations at each step')
-    solver_params_group.add_argument('--pgd-step', type=float, default=SOLVER_PARAMS.Gamma, 
-                                     help='PGD step size')
+    solver_params_group.add_argument('--qp-method', default=SOLVER_PARAMS.QPMethod, 
+                                     help='Solver method for the QP at each node', choices=['ADMM', 'PGD'])
+    solver_params_group.add_argument('--qp-iters', type=int, default=SOLVER_PARAMS.QPIterations, 
+                                     help='Number of iterations to solve the node QP for each local update')
+    solver_params_group.add_argument('--qp-step', type=float, default=SOLVER_PARAMS.Gamma, 
+                                     help='Step size for solving the node QP')
     solver_params_group.add_argument('--pgd-reduction', type=float, default=SOLVER_PARAMS.Kappa, 
-                                     help='PGD step size reduction factor')
+                                     help='PGD step size reduction factor (specific to the `PGD` solver for the node QP)')
     solver_params_group.add_argument('--admm-outer', type=float, default=SOLVER_PARAMS.Rho, 
                                      help='Outer ADMM step size')
     solver_params_group.add_argument('--admm-inner', type=float, default=SOLVER_PARAMS.Eta, 
@@ -291,8 +293,9 @@ if __name__ == '__main__':
         NumberOfEpochs=args.epochs,
         NumberOfNetworkUpdates=args.updates,
         NumberOfLocalUpdates=args.local_updates,
-        PGDIterations=args.pgd_iters,
-        Gamma=args.pgd_step,
+        QPIterations=args.qp_iters,
+        QPMethod=args.qp_method,
+        Gamma=args.qp_step,
         Eta=args.admm_inner,
         Rho=args.admm_outer,
         Kappa=args.pgd_reduction,
