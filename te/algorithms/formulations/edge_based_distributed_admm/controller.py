@@ -21,7 +21,7 @@ from te.algorithms.sub_algorithms.admm_consensus_test import outer_admm_consensu
 from te.algorithms.sub_algorithms.flow_conservation_test import check_flow_conservation
 from te.algorithms.statistics.helpers import record_cpu_runtime, record_return_value
 from . import DistributedADMMSolverParams, DistributedADMMControllerRPCParams
-from .controller_backends import get_backend
+from .controller_backends import get_backend, ControllerCommunicationBackendBase
 
 
 class ControllerNode(TrafficEngineeringLP):
@@ -65,19 +65,26 @@ class ControllerNode(TrafficEngineeringLP):
         self._Y_bar_t: Optional[CPUArray] = None
         self._u_t: Optional[CPUArray] = None
 
-        set_global_precision(solver_params.Precision)
-        set_cpu_float_precision()
-
-        # TODO: Does invoking this here pervent the log-spam from gRPC?
-        self._set_initial_feasible_solution()
-
-        self._backend = get_backend(rpc_params)
+        self._backend: Optional[ControllerCommunicationBackendBase] = None
 
         self._objective_trace: List[Tuple[float, float]] = []
         self._objective_gap_trace = []
 
+        # These we call right now, as opposed to doing them under `initialize`
+        set_global_precision(solver_params.Precision)
+        set_cpu_float_precision()
+    
+    def initialize(self):
+        # First, set the initial feasible solutions.
+        # We will do this before spawning the backend, since if we use `gRPC`, 
+        # this function may invoke `fork` which causes `gRPC` to spam warnings.
+        self._set_initial_feasible_solution()
+        # Now, create the backend
+        self._backend = get_backend(self._rpc_params)
+        # Initialize the algorithm
         self._set_NULL_M()
         self._initialize_variables_and_residuals()
+        # Report what we are dealing with
         self._report_problem_size()
 
     @property

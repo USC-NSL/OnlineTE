@@ -39,7 +39,10 @@ class NetworkWorkerNode:
         self._S_ek_chunk: Optional[CPUArray] = None
         self._t_ek_chunk: Optional[CPUArray] = None
 
-        if rpc_params.Multicast:
+        self._backend = None
+    
+    def initialize(self):
+        if self._rpc_params.Multicast:
             self._backend: WorkerNodeCommunicationBackendBase = MulticastBackend(rpc_params)
         else:
             self._backend: WorkerNodeCommunicationBackendBase = SynchronousgRPCBackend(rpc_params)
@@ -170,6 +173,7 @@ class NetworkWorkerNode:
     def spawn_and_wait(rpc_params: DistributedADMMWorkerRPCParams, 
                        solver_params: Optional[DistributedADMMSolverParams] = None):
         with contextlib.closing(NetworkWorkerNode(rpc_params, solver_params)) as worker:
+            worker.initialize()
             worker.wait()
 
 
