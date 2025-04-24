@@ -14,8 +14,8 @@ from ...edge_based_distributed_admm.utils import (serialized_message_to_array, a
                                                   chunk_big_array, async_rebuild_chunked_array,
                                                   GRPC_ARRAY_STREAM_MAX_LEN)
 
-import protos.distributed_lp.distributed_lp_pb2 as distributed_lp_messages
-from protos.distributed_lp.distributed_lp_pb2_grpc import DistributedADMMSolverStub
+import protos.asynchronous_lp.asynchronous_lp_pb2 as asynchronous_lp_messages
+from protos.asynchronous_lp.asynchronous_lp_pb2_grpc import AsynchronousADMMSolverStub
 from google.protobuf.empty_pb2 import Empty
 
 
@@ -35,8 +35,8 @@ class MulticastControllerBackendParams(AsynchronousADMMControllerRPCParams):
 
 
 class TLVRPCMessages:
-    DoInnerLoops = 0x00
-    UpdateNetworkNodes = 0x01
+    ControllerUpdate = 0x00
+    NetworkUpdate = 0x01
     
     HEADER_FORMAT = "!HI"
     HEADER_LENGTH = struct.calcsize(HEADER_FORMAT)
@@ -57,24 +57,24 @@ class TLVRPCMessages:
             message_type, message_len = struct.unpack_from(cls.HEADER_FORMAT, header)
             if len(packet) >= message_len:
                 message_serialized = packet[cls.HEADER_LENGTH:message_len]
-                if message_type == cls.DoInnerLoops:
-                    message = distributed_lp_messages.NetworkUpdateRequest.FromString(message_serialized)
-                elif message_type == cls.UpdateNetworkNodes:
-                    message = distributed_lp_messages.UpdateMessage.FromString(message_serialized)
+                if message_type == cls.NetworkUpdate:
+                    message = asynchronous_lp_messages.SwitchMessage.FromString(message_serialized)
+                elif message_type == cls.ControllerUpdate:
+                    message = asynchronous_lp_messages.ControllerMessage.FromString(message_serialized)
                 else:
-                    raise ValueError(f'Unexpected RPC message type: {message_type}')
+                    raise ValueError(f'Unexpected update message type: {message_type}')
                 return (message_type, message_len, message)
 
     @classmethod
-    def serialize_do_inner_loop(cls, message: distributed_lp_messages.NetworkUpdateRequest) -> bytes:
+    def serialize_controller_update(cls, message: asynchronous_lp_messages.ControllerMessage) -> bytes:
         body = message.SerializeToString()
-        header = struct.pack(cls.HEADER_FORMAT, cls.DoInnerLoops, len(body) + cls.HEADER_LENGTH)
+        header = struct.pack(cls.HEADER_FORMAT, cls.ControllerUpdate, len(body) + cls.HEADER_LENGTH)
         return header + body
     
     @classmethod
-    def serialize_update_network_nodes(cls, message: distributed_lp_messages.UpdateMessage) -> bytes:
+    def serialize_network_update(cls, message: asynchronous_lp_messages.SwitchMessage) -> bytes:
         body = message.SerializeToString()
-        header = struct.pack(cls.HEADER_FORMAT, cls.UpdateNetworkNodes, len(body) + cls.HEADER_LENGTH)
+        header = struct.pack(cls.HEADER_FORMAT, cls.NetworkUpdate, len(body) + cls.HEADER_LENGTH)
         return header + body
 
 
@@ -88,24 +88,22 @@ class MulticastBackend(ControllerCommunicationBackendBase):
             grpc.aio.insecure_channel(target=":".join([ip, str(port)]))
                 for ip, port in self._rpc_params.AddressList
         ]
-        self._worker_stubs: List[DistributedADMMSolverStub] = [
-            DistributedADMMSolverStub(ch) for ch in self._worker_channels
+        self._worker_stubs: List[AsynchronousADMMSolverStub] = [
+            AsynchronousADMMSolverStub(ch) for ch in self._worker_channels
         ]
         self._scatter_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         self._scatter_socket.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, self._rpc_params.TTL)
         self._scatter_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._scatter_socket.setblocking(False)
         self.SCATTER_ADDRESS = (rpc_params.ScatterAddress, rpc_params.ScatterPort)
         self.LISTEN_ADDRESS = (socket.gethostbyname(rpc_params.Hostname), rpc_params.ListenPort)
         self._scatter_socket.bind(self.LISTEN_ADDRESS)
         self._scatter_socket.settimeout(rpc_params.SocketTimeout)
         self._event_loop = asyncio.get_event_loop()
 
-        for sig in ('INT', 'TERM'):
-            signal.signal(f'SIG{sig}', self.int_handler)
-
         self.is_active = True
         self._update_queue: asyncio.Queue = asyncio.Queue()
-        self._gatherer_loop = self._event_loop.create_task(self.gatherer_loop())
+        self._gatherer_loop = None
     
     @classmethod
     def backend_name(self) -> str:
@@ -116,44 +114,49 @@ class MulticastBackend(ControllerCommunicationBackendBase):
         return self._rpc_params.NumWorkers
     
     def int_handler(self, _, __):
-        self.is_active = False
-        self._update_queue.put_nowait(None)
+        self.stop()
+
+    def register_signal_handler(self):
+        for sig in ('TERM', 'INT'):
+            signal.signal(getattr(signal, 'SIG'+sig), self.int_handler)
 
     def stop(self):
         self.is_active = False
     
+    def start_gatherer(self):
+        self._event_loop.create_task(self.gatherer_loop())
+    
     async def gatherer_loop(self):
+        buffer = b''
         while self.is_active:
             try:
-                res = distributed_lp_messages.NetworkUpdateResponse.FromString(
-                    await self._event_loop.sock_recv(self._scatter_socket, 10240)
-                )
-                self._update_queue.put_nowait((res.worker_id, (res.runtime_ns, serialized_message_to_array(res.means))))
-            except socket.timeout:
-                pass
-        buffer = b''
-        while self.is_worker_node_ready:
-            try:
-                packet = self._gather_socket.recv(10240)
+                packet = await self._event_loop.sock_recv(self._scatter_socket, 10240)
                 buffer += packet
                 update = TLVRPCMessages.get_packet_rpc_message(buffer)
                 if update is not None:
                     update_type, consumed_length, request = update
-                    assert update_type == TLVRPCMessages.DoInnerLoops
+                    assert update_type == TLVRPCMessages.NetworkUpdate and \
+                           isinstance(request, asynchronous_lp_messages.SwitchMessage)
                     self._update_queue.put_nowait((request.worker_id, (request.runtime_ns, serialized_message_to_array(request.means))))
                     buffer = buffer[consumed_length:]
             except socket.timeout:
                 pass
 
     async def is_node_ready(self, worker_id: int) -> bool:
+        print(f'Worker {worker_id} is in loop')
         try:
             res = await self._worker_stubs[worker_id].QueryState(Empty())
+            print(f'{worker_id}: {res.ready}')
             return res.ready
         except grpc.aio._call.AioRpcError:
+            print(f'{worker_id} is not available')
             return False
     
     async def _are_network_nodes_ready(self) -> bool:
-        results = await asyncio.gather(*[self.is_node_ready(i) for i in range(self.number_of_nodes)])
+        results = await asyncio.gather(
+            *[self.is_node_ready(i) for i in range(self.number_of_nodes)],
+            loop=self._event_loop
+        )
         return all(results)
     
     def are_network_nodes_ready(self):
@@ -166,7 +169,7 @@ class MulticastBackend(ControllerCommunicationBackendBase):
         X_EK_START_CHUNKS = np.array_split(initial_feasible_solution, NUM_WORKERS, axis=1)
         WORKERS = self._worker_stubs
 
-        params = distributed_lp_messages.SolverParameters(**solver_params.child_fields)
+        params = asynchronous_lp_messages.SolverParameters(**solver_params.child_fields)
         await asyncio.gather(*[stub.SetSolverParameters(params) for stub in WORKERS])
         await asyncio.gather(*[
             stub.SetInitialFeasibleSolution(chunk_big_array(X_EK_START_CHUNKS[i], GRPC_ARRAY_STREAM_MAX_LEN))
@@ -203,19 +206,17 @@ class MulticastBackend(ControllerCommunicationBackendBase):
         return self._event_loop.run_until_complete(self._get_X_ek(basis, initial_feasible_solution))
     
     def update_network_nodes(self, P_bar_t: CPUArray, Y_bar_t: CPUArray, u_t: CPUArray):
-        message = distributed_lp_messages.UpdateMessage(
+        message = asynchronous_lp_messages.UpdateMessage(
             P_bar_t = array_to_serialized_message(P_bar_t),
             Y_bar_t = array_to_serialized_message(Y_bar_t),
             u_t = array_to_serialized_message(u_t)
         )
-        self._scatter_socket.sendto(TLVRPCMessages.serialize_update_network_nodes(message), self.SCATTER_ADDRESS)
+        self._scatter_socket.sendto(TLVRPCMessages.serialize_controller_update(message), self.SCATTER_ADDRESS)
     
     async def _get_network_updates(self) -> List[Tuple[int, NetworkUpdate]]:
         gathered_updates = []
         while self.is_active:
             update = await self._update_queue.get_nowait()
-            if update is None or not self.is_active:
-                break
             gathered_updates.append(update)
             if len(gathered_updates) >= self.Upsilon:
                 break
@@ -243,7 +244,7 @@ class MulticastBackend(ControllerCommunicationBackendBase):
         self._scatter_socket.close()
 
     async def _set_active_commodity_count(self, K: int):
-        message = distributed_lp_messages.ActiveCommodityCount(TotalNumberOfCommodities=K)
+        message = asynchronous_lp_messages.ActiveCommodityCount(TotalNumberOfCommodities=K)
         await asyncio.gather(*[stub.SetActiveCommodityCount(message) for stub in self._worker_stubs])
     
     def set_active_commodity_count(self, K: int):

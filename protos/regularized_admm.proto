@@ -1,5 +1,7 @@
 syntax = "proto3";
 import "google/protobuf/empty.proto";
+import "array.proto";
+
 
 service RegularizedADMMSolver {
     rpc MakeProblem(google.protobuf.Empty) returns (google.protobuf.Empty) {}
@@ -15,11 +17,6 @@ service RegularizedADMMSolver {
 
 message OptimizationRuntime {
     float runtime = 1;
-}
-
-message SerializedNumpyArrayMessage {
-    bytes array = 1;
-    repeated int32 dims = 2;
 }
 
 message NodeObjectiveUpdateMessage {

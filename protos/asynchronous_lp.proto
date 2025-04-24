@@ -3,45 +3,26 @@ import "google/protobuf/empty.proto";
 import "array.proto";
 
 
-service DistributedADMMSolver {
+service AsynchronousADMMSolver {
     rpc SetInitialFeasibleSolution(stream Chunk) returns (google.protobuf.Empty) {}
-    // rpc InitializeWorkerNode(InitMessage) returns (google.protobuf.Empty) {}
     rpc SetNullSpaceBasis(stream Chunk) returns (google.protobuf.Empty) {}
-    rpc DoNetworkUpdate(NetworkUpdateRequest) returns (NetworkUpdateResponse) {}
-    rpc UpdateWorkerNode(UpdateMessage) returns (google.protobuf.Empty) {}
     rpc RequestChunk(google.protobuf.Empty) returns (stream Chunk) {}
-    rpc RequestAggregate(google.protobuf.Empty) returns (SerializedNumpyArrayMessage) {}
     rpc QueryState(google.protobuf.Empty) returns (State) {}
     rpc SetSolverParameters(SolverParameters) returns (google.protobuf.Empty) {}
     rpc SetActiveCommodityCount(ActiveCommodityCount) returns (google.protobuf.Empty) {}
     rpc Close(google.protobuf.Empty) returns (google.protobuf.Empty) {}
 }
 
-message InitMessage {
-    SerializedNumpyArrayMessage NULL_M = 1;
-    optional SerializedNumpyArrayMessage P_bar_t = 2;
-    optional SerializedNumpyArrayMessage u_t = 3;
-    optional SerializedNumpyArrayMessage Y_bar_t = 4;
-}
-
-message UpdateMessage {
+message ControllerMessage {
     SerializedNumpyArrayMessage P_bar_t = 1;
     SerializedNumpyArrayMessage u_t = 2;
     SerializedNumpyArrayMessage Y_bar_t = 3;
-    int32 xid = 4;
 }
 
-message NetworkUpdateRequest {
-    int32 epoch = 1;
-    int32 xid = 2;
-    optional SerializedNumpyArrayMessage F_e = 3;
-}
-
-message NetworkUpdateResponse {
+message SwitchMessage {
     int32 worker_id = 1;
     int32 runtime_ns = 2;
     SerializedNumpyArrayMessage means = 3;
-    int32 xid = 4;
 }
 
 message State {
@@ -62,6 +43,9 @@ message SolverParameters {
     string Precision = 11;
     float BigGamma = 12;
     int32 Seed = 13;
+    int32 Upsilon = 14;
+    int32 Sigma = 15;
+    int32 WorkerBatchSize = 16;
 }
 
 message ActiveCommodityCount {

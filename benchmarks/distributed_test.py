@@ -279,7 +279,7 @@ if __name__ == '__main__':
     host_params_group = parser.add_argument_group('Remote Host Parameters')
     host_params_group.add_argument('--hosts', nargs='*', default=[], help='List of remote hosts to connect to')
 
-    warm_start_params_group = parser.add_argument_group('Remote Host Parameters')
+    warm_start_params_group = parser.add_argument_group('Warm Start Parameters')
     warm_start_params_group.add_argument('--converter-seed', type=int, help='RNG seed for TM converter')
     warm_start_params_group.add_argument('--warm-iters', type=int, help='Number of warm-start iterations')
     warm_start_params_group.add_argument('--warm-epochs', type=int, help='Number of epochs per warm-start iteration')

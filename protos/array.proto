@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+message Chunk {
+    bytes data = 1;
+}
+
+message SerializedNumpyArrayMessage {
+    bytes array = 1;
+    repeated int32 dims = 2;
+}

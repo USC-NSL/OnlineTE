@@ -2,7 +2,7 @@ import sys
 import time
 import contextlib
 import numpy as np
-from typing import Optional
+from typing import Optional, Tuple
 from te.algorithms.array_utils import set_global_precision
 from te.algorithms.array_utils.cpu_utils import CPUArray, cpu_zeros, cpu_array, set_cpu_float_precision
 from . import DistributedADMMSolverParams, DistributedADMMWorkerRPCParams
@@ -97,7 +97,7 @@ class NetworkWorkerNode:
             'ADMM': self.do_inner_loop_admm_update
         }[self._solver_params.QPMethod]
 
-    def do_inner_loop_pgd_update(self, epoch: int, F_e: Optional[CPUArray] = None) -> CPUArray:
+    def do_inner_loop_pgd_update(self, epoch: int, F_e: Optional[CPUArray] = None) -> Tuple[int, CPUArray]:
         assert self._solver_params.QPMethod == 'PGD'
         GAMMA = self._solver_params.Gamma
         KAPPA = self._solver_params.Kappa
@@ -123,7 +123,7 @@ class NetworkWorkerNode:
                 break
         return time.perf_counter_ns() - start, means
 
-    def do_inner_loop_admm_update(self, epoch: int, F_e: Optional[CPUArray] = None) -> CPUArray:
+    def do_inner_loop_admm_update(self, epoch: int, F_e: Optional[CPUArray] = None) -> Tuple[int, CPUArray]:
         assert self._solver_params.QPMethod == 'ADMM'
         GAMMA = self._solver_params.Gamma
         ADMM_ITERS = self._solver_params.QPIterations

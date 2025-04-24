@@ -43,11 +43,15 @@ class WorkerNodeCommunicationBackendBase(ABC):
     @abstractmethod
     def gather_updates(self, block = False) -> Optional[List[Tuple[CPUArray, CPUArray, CPUArray]]]:
         """
-        If immediately available, gathter up to `Upsilon` updates from the queue.
+        If immediately available, gathter up to `WorkerBatchSize` updates from the queue.
         If no update is available and `block` is False, return an empty list.
         If no update is available and `block` is True, block until an update arrives.
         If interrupted, return None.
         """
+    
+    @abstractmethod
+    def send_update_to_controller(self, runtime: int, Y_bar: CPUArray):
+        """Send an update to the controller"""
 
     @property
     def set_initial_feasible_solution(self) -> Callable[[CPUArray], None]:
@@ -90,6 +94,14 @@ class WorkerNodeCommunicationBackendBase(ABC):
     @set_solver_parameters.setter
     def set_solver_parameters(self, f: Callable[[SolverParams], None]):
         self._set_solver_parameters = f
+
+    @property
+    def is_initialized(self) -> Callable[[None], bool]:
+        """Are we ready to start the algorithm?"""
+        return self._is_initialized
+    @is_initialized.setter
+    def is_initialized(self, f: Callable[[None], bool]):
+        self._is_initialized = f
     
     @property
     def close(self) -> Callable[[None], None]:
