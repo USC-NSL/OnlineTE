@@ -143,13 +143,10 @@ class MulticastBackend(ControllerCommunicationBackendBase):
                 pass
 
     async def is_node_ready(self, worker_id: int) -> bool:
-        print(f'Worker {worker_id} is in loop')
         try:
             res = await self._worker_stubs[worker_id].QueryState(Empty())
-            print(f'{worker_id}: {res.ready}')
             return res.ready
         except grpc.aio._call.AioRpcError:
-            print(f'{worker_id} is not available')
             return False
     
     async def _are_network_nodes_ready(self) -> bool:
@@ -236,7 +233,8 @@ class MulticastBackend(ControllerCommunicationBackendBase):
             [asyncio.create_task(self._close_node(i)) for i in range(self.number_of_nodes)],
             timeout=self._rpc_params.SocketTimeout
         )
-        await self._gatherer_loop
+        if self._gatherer_loop is not None:
+            await self._gatherer_loop
     
     def close(self):
         self.stop()

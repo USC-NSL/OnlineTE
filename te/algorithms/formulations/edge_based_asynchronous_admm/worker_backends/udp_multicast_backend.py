@@ -75,13 +75,11 @@ class MulticastBackend(WorkerNodeCommunicationBackendBase):
         self._listener = NetworkWorkerNodeListener(self)
         add_AsynchronousADMMSolverServicer_to_server(self._listener, self._server)
         addr = ":".join([IP, str(PORT)])
-        print(f'gRPC on {addr}')
         self._server.add_insecure_port(addr)
         self._server.start()
 
     def int_handler(self, _, __):
         self.stop()
-        print(as_warning('Will no longer serve update requests.'))
     
     def register_signal_handler(self):
         for sig in ('TERM', 'INT'):
@@ -180,7 +178,6 @@ class NetworkWorkerNodeListener(AsynchronousADMMSolverServicer):
         return array_to_serialized_message(self._backend.report_aggregate())
     
     def QueryState(self, request, context):
-        print(f'Ready RPC: returning {self._backend.is_worker_node_ready}')
         return asynchronous_lp_messages.State(ready=self._backend.is_worker_node_ready)
     
     def SetSolverParameters(self, request: asynchronous_lp_messages.SolverParameters, context):

@@ -1,5 +1,4 @@
 import time
-import socket
 import argparse
 import contextlib
 import concurrent.futures
@@ -29,8 +28,7 @@ MEDIUM_TOPOLOGY = 'Interoute'
 HUGE_TOPOLOGY = 'Kdl'
 
 
-# LOCAL_HOST = "localhost"
-LOCAL_HOST = socket.gethostname()
+LOCAL_HOST = "localhost"
 BASE_PORT = 13000
 
 
@@ -75,8 +73,8 @@ def local_asynchronous_admm_test(topology: str, seed: int, scale_factor: float =
         with contextlib.closing(ControllerNode(graph, tm, SOLVER_PARAMS, CONTROLLER_RPC_PARAMS)) as lp:
             lp.initialize()
             print(as_info(f"Solving With: {lp.alg_name}"))
-            print(as_info(f"Solving With Parameters:\n{SOLVER_PARAMS}"))
-            print(as_info(f"Communication Backend `{CONTROLLER_RPC_PARAMS.Backend}` With Parameters:\n{CONTROLLER_RPC_PARAMS.stringify_up_to_level(1)}"))
+            print(as_info(f"Solving With Parameters:\n{SOLVER_PARAMS.stringify_up_to_level(1)}"))
+            print(as_info(f"Controller backend parameters:\n{CONTROLLER_RPC_PARAMS.stringify_up_to_level(1)}"))
             print(as_info("Waiting For Network Nodes ..."))
             while True:
                 time.sleep(1)

@@ -46,6 +46,7 @@ message SolverParameters {
     int32 Upsilon = 14;
     int32 Sigma = 15;
     int32 WorkerBatchSize = 16;
+    float ADMMConvTol = 17;
 }
 
 message ActiveCommodityCount {

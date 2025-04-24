@@ -11,28 +11,27 @@ from te.algorithms.base import TrafficEngineeringLP, SolverParams
 from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
 from topologies.utils import get_edge_indexing, get_graph_M_matrix, get_adjacency_null_space
+from te.algorithms.array_utils import set_global_precision
 from te.algorithms.array_utils.cpu_utils import (CPUArray, DoublePrecisionCPUArray, 
                                                  cpu_array, cpu_zeros, cpu_double_array, 
                                                  set_cpu_float_precision)
-from te.algorithms.sub_algorithms.admm_consensus_test import norm_in_consensus
 from te.algorithms.statistics.helpers import record_cpu_runtime, record_return_value
 from te.algorithms.utils import check_capacity_constraint, optimize_or_scream, make_model, get_solution_maximum_utilization
 from .controller_backends import get_backend
 from .controller_backends.base import ControllerCommunicationBackendBase, NetworkUpdate
 from . import AsynchronousADMMSolverParams, AsynchronousADMMControllerRPCParams
 from te.algorithms.sub_algorithms.feasible_assignment import get_feasible_flow_assignment
-from te.algorithms.sub_algorithms.admm_consensus_test import outer_admm_consensus_test, inner_admm_consensus_test, norm_in_consensus
+from te.algorithms.sub_algorithms.admm_consensus_test import outer_admm_consensus_test, inner_admm_consensus_test
 from te.algorithms.sub_algorithms.flow_conservation_test import check_flow_conservation
 from te.algorithms.statistics.helpers import record_cpu_runtime, record_return_value
 
 
-class ControllerNode(TrafficEngineeringLP):
-    def __init__(self, graph: nx.DiGraph, traffic: TrafficMatrixBase, solver_params: DistributedADMMSolverParams,
-                 rpc_params: DistributedADMMControllerRPCParams) -> None:
+class ControllerNode(TrafficEngineeringLP):    
+    def __init__(self, graph: nx.DiGraph, traffic: TrafficMatrixBase, solver_params: AsynchronousADMMSolverParams,
+                 rpc_params: AsynchronousADMMControllerRPCParams) -> None:
         super().__init__()
         self._graph = graph
         self._M = get_graph_M_matrix(graph)
-        self._symbolic_M = get_symbolic_graph_M_matrix(graph)
         self._traffic = traffic
         self._solver_params = solver_params
         self._rpc_params = rpc_params
@@ -66,32 +65,48 @@ class ControllerNode(TrafficEngineeringLP):
         self._P_bar_t: Optional[CPUArray] = None
         self._Y_bar_t: Optional[CPUArray] = None
         self._u_t: Optional[CPUArray] = None
+        self._partitioned_Y_bar: Optional[List[CPUArray]] = None
 
         self._backend: Optional[ControllerCommunicationBackendBase] = None
 
         self._objective_trace: List[Tuple[float, float]] = []
         self._objective_gap_trace = []
 
-        # These we call right now, as opposed to doing them under `initialize`
+        assert rpc_params.NumWorkers >= solver_params.Upsilon, \
+            'The controller update set cannot be larger than number of workers!: '\
+            f'{solver_params.Upsilon} > {rpc_params.NumWorkers}'
+        
+        self._is_active = False
+
+        for sig in ('INT', 'TERM'):
+            signal.signal(getattr(signal, 'SIG'+sig), self.int_handler)
+
         set_global_precision(solver_params.Precision)
         set_cpu_float_precision()
     
     def initialize(self):
-        # First, set the initial feasible solutions.
-        # We will do this before spawning the backend, since if we use `gRPC`, 
-        # this function may invoke `fork` which causes `gRPC` to spam warnings.
         self._set_initial_feasible_solution()
-        # Now, create the backend
         self._backend = get_backend(self._rpc_params)
-        # Initialize the algorithm
+        self._backend.Upsilon = self._solver_params.Upsilon
         self._set_NULL_M()
         self._initialize_variables_and_residuals()
-        # Report what we are dealing with
+        self._partitioned_Y_bar = \
+            [cpu_zeros((self._T,)) for _ in range(self._rpc_params.NumWorkers)]
         self._report_problem_size()
-
+        self._is_active = True
+    
     @property
     def alg_name(self) -> str:
-        return 'Distributed Unregulated ADMM'
+        return 'Asynchronous ADMM'
+
+    @property
+    def is_active(self) -> bool:
+        return self._is_active
+    
+    def int_handler(self, _, __):
+        self._is_active = False
+        self._backend.stop()
+        print(as_warning('Interrupted. Will no longer serve update requests or solutions.'))
 
     @property
     def graph(self) -> nx.DiGraph:
@@ -133,11 +148,8 @@ class ControllerNode(TrafficEngineeringLP):
     
     def _set_NULL_M(self):
         M = self._M
-        assert len(M.shape) == 2
-        m, n = M.shape
-        assert m < n
+        _, n = M.shape
         N = cpu_array(get_adjacency_null_space(M))
-        # N = cpu_array(get_sparse_null_space(self._symbolic_M))
         T = N.shape[1]
         self._NULL_M = N
         self._NNT_M = N @ N.T
@@ -169,15 +181,6 @@ class ControllerNode(TrafficEngineeringLP):
         print(as_info(f"Graph Size: {M} nodes | {N} edges"))
         print(as_info(f"Number of commodities: {K}"))
         print(as_info(f"Nullity of commodity assignment matrix: {T}"))
-        print(as_info(log_subsection_separator()))
-        print(as_info("CONTROLLER PROBLEM:\n" +
-              f"\t TOTAL NUMBER OF VARIABLES: {N + 1}\n"
-              f"\t TOTAL NUMBER OF CONSTRAINTS: {N + 1}"))
-        print(as_info(log_subsection_separator()))
-        print(as_info("NODE PROBLEM:\n" +
-              f"\t NUMBER OF INDEPENDENT QPs PER NODE: {M - 1}\n"
-              f"\t NUMBER OF VARIABLES PER QP PER NODE: {T}\n"
-              f"\t NUMBER CONSTRAINTS PER QP PER NODE: {T}"))
         print(as_info(log_subsection_separator()))
 
     def initialize_to(self, assignment: np.ndarray):
@@ -240,15 +243,6 @@ class ControllerNode(TrafficEngineeringLP):
         assert self._model_controller is not None
 
         self._update_controller_objective()
-
-    @record_return_value('PGD-Runtime')
-    @record_cpu_runtime('Network-Update')
-    def _do_network_update(self, epoch: int):
-        if self._solver_params.NumberOfLocalUpdates > 0:
-            max_run, self._Y_bar_t = self._backend.do_network_update(epoch, self._get_F())
-        else:
-            max_run, self._Y_bar_t = self._backend.do_network_update(epoch)
-        return max_run
     
     def _update_P_bar(self):
         assert self._model_controller is not None
@@ -271,17 +265,6 @@ class ControllerNode(TrafficEngineeringLP):
         P_BAR_T = self._P_bar_t
 
         self._u_t = U_T + (Y_BAR_T - P_BAR_T)
-    
-    @record_cpu_runtime('Update-Reconvene')
-    def _reconvene_network_updates(self) -> bool:
-        self._update_P_bar()
-        self._update_u_t()
-        self._backend.reconvene_network_updates(
-            P_bar_t=self._P_bar_t,
-            Y_bar_t=self._Y_bar_t,
-            u_t=self._u_t
-        )
-        return norm_in_consensus(self._P_bar_t, self._Y_bar_t, 5e-4)
     
     @record_cpu_runtime('Update-Zo-Re')
     def _update_Zo_e_and_r_e(self):
@@ -323,34 +306,52 @@ class ControllerNode(TrafficEngineeringLP):
         self._model_controller.reset()
         if with_params:
             self._model_controller.resetParams()
+
+    @record_return_value('PGD-Runtime')
+    def _consume_updates(self, updates: List[Tuple[int, NetworkUpdate]]) -> int:
+        runtimes = []
+        for worker_id, update in updates:
+            runtime, Y_bar = update
+            self._partitioned_Y_bar[worker_id] = Y_bar
+            runtimes.append(runtime)
+        self._Y_bar_t = np.mean(self._partitioned_Y_bar, axis=0)
+        return max(runtimes)
+    
+    def _wait_for_minimum_updates(self) -> bool:
+        gathered_updates = self._backend.get_network_updates()
+        if len(gathered_updates) < self._solver_params.Upsilon:
+            # This only happens if the solution is interrupted
+            print(as_warning('Solution interrupted, will no longer consume updates.'))
+            return False
+        self._consume_updates(gathered_updates)
+        return True
     
     @record_cpu_runtime('Solve')
-    def solve(self, params: Optional[int] = None) -> float:        
+    def solve(self, params = None):
         MODEL_CONTROLLER = self._model_controller
         PARAMS = self._solver_params
         EPOCHS = params if params is not None else PARAMS.NumberOfEpochs
-        SHIFT = 0 if params is None else PARAMS.NumberOfEpochs // 2
         
+        self._backend.start_gatherer()
         try:
             t = time.time()
             for epoch in tqdm.tqdm(range(EPOCHS), bar_format='{l_bar}{bar:36}{r_bar}{bar:-36b}'):
-            # for epoch in range(PARAMS.NumberOfEpochs):
+                if not self._is_active:
+                    break
                 optimize_or_scream(MODEL_CONTROLLER)
-                for i in reversed(range(PARAMS.NumberOfNetworkUpdates)):
-                    self._do_network_update(epoch + SHIFT)
-                    if i > 0 and self._reconvene_network_updates():
-                        break
-
+                if not self._wait_for_minimum_updates():
+                    break
                 self._update_Zo_e_and_r_e()
-                self._reconvene_network_updates()
                 self._update_controller_objective()
-
+                self._backend.update_network_nodes(self._P_bar_t, self._Y_bar_t, self._u_t)
+                
                 self._objective_trace.append((self._utility.X, get_solution_maximum_utilization(self._Xo_e_assigned, self._graph)))
             self._set_X_ek()
             return time.time() - t
         except GurobiError as e:
             print(f'Error code {e.errno}: {e}')
             return -1
+
     
     def check(self, feasibility_tol: Optional[float] = None, feasibility_ratio: Optional[float] = None, report: bool = False):
         NUM_EDGES = self._NUM_EDGES
@@ -402,14 +403,10 @@ class ControllerNode(TrafficEngineeringLP):
         ]
     
     def update_traffic_matrix(self, tm):
-        # First, record the matrix and the new commodities
         self._traffic = tm
         self._commodity_list = traffic_to_commodity(self._traffic)
-        # Get a new feasible solution (if the matrix did not change too much),
-        # then this also will not change too much.
         self._set_initial_feasible_solution()
         self._Zo_e = cpu_array(self._Xo_e_start)
-        # Send it to the backend
         self._backend.update_demands(self._X_ek_start)
     
     def initialize_to(self, solution: EdgeBasedMinimizeMaximumUtilitySolution):
@@ -421,93 +418,3 @@ class ControllerNode(TrafficEngineeringLP):
     def add_solution_elements(self, solution: EdgeBasedMinimizeMaximumUtilitySolution):
         solution.add_solution_element(self._utility, name='utility')
         solution.add_solution_element(self._X_ek, name='assignments')
-
-
-
-class ControllerNode(SynchronousControllerNode):
-    def __init__(self, graph, traffic, solver_params: AsynchronousADMMSolverParams, rpc_params: AsynchronousADMMControllerRPCParams):
-        self._solver_params: AsynchronousADMMSolverParams = solver_params
-        super().__init__(graph, traffic, solver_params, rpc_params)
-        assert rpc_params.NumWorkers >= solver_params.Upsilon, \
-            'The controller update set cannot be larger than number of workers!: '\
-            f'{solver_params.Upsilon} > {rpc_params.NumWorkers}'
-        
-        self._partitioned_Y_bar: Optional[List[CPUArray]] = None
-        self._is_active = False
-
-        for sig in ('INT', 'TERM'):
-            signal.signal(getattr(signal, 'SIG'+sig), self.int_handler)
-        
-    @property
-    def is_active(self) -> bool:
-        return self._is_active
-    
-    def int_handler(self, _, __):
-        self._is_active = False
-        self._backend.stop()
-        print(as_warning('Interrupted. Will no longer serve update requests or solutions.'))
-
-    def initialize(self):
-        self._set_initial_feasible_solution()
-        self._backend: ControllerCommunicationBackendBase = get_backend(self._rpc_params)
-        self._backend.Upsilon = self._solver_params.Upsilon
-        self._set_NULL_M()
-        self._initialize_variables_and_residuals()
-        self._partitioned_Y_bar = \
-            [cpu_zeros((self._T,)) for _ in range(self._rpc_params.NumWorkers)]
-        self._report_problem_size()
-        self._is_active = True
-    
-    @property
-    def alg_name(self) -> str:
-        return 'Asynchronous ADMM'
-
-    def _reconvene_network_updates(self) -> NoReturn:
-        raise Unreachable
-    def _do_network_update(self, epoch) -> NoReturn:
-        raise Unreachable
-    
-    @record_return_value('PGD-Runtime')
-    def _consume_updates(self, updates: List[Tuple[int, NetworkUpdate]]) -> int:
-        runtimes = []
-        for worker_id, update in updates:
-            runtime, Y_bar = update
-            self._partitioned_Y_bar[worker_id] = Y_bar
-            runtimes.append(runtime)
-        self._Y_bar_t = np.mean(self._partitioned_Y_bar, axis=0)
-        return max(runtimes)
-    
-    def _wait_for_minimum_updates(self) -> bool:
-        gathered_updates = self._backend.get_network_updates()
-        if len(gathered_updates) < self._solver_params.Upsilon:
-            # This only happens if the solution is interrupted
-            print(as_warning('Solution interrupted, will no longer consume updates.'))
-            return False
-        self._consume_updates(gathered_updates)
-        return True
-    
-    @record_cpu_runtime('Solve')
-    def solve(self, params = None):
-        MODEL_CONTROLLER = self._model_controller
-        PARAMS = self._solver_params
-        EPOCHS = params if params is not None else PARAMS.NumberOfEpochs
-        
-        self._backend.start_gatherer()
-        try:
-            t = time.time()
-            for epoch in tqdm.tqdm(range(EPOCHS), bar_format='{l_bar}{bar:36}{r_bar}{bar:-36b}'):
-                if not self._is_active:
-                    break
-                optimize_or_scream(MODEL_CONTROLLER)
-                if not self._wait_for_minimum_updates():
-                    break
-                self._update_Zo_e_and_r_e()
-                self._update_controller_objective()
-                self._backend.update_network_nodes(self._P_bar_t, self._Y_bar_t, self._u_t)
-                
-                self._objective_trace.append((self._utility.X, get_solution_maximum_utilization(self._Xo_e_assigned, self._graph)))
-            self._set_X_ek()
-            return time.time() - t
-        except GurobiError as e:
-            print(f'Error code {e.errno}: {e}')
-            return -1

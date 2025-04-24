@@ -1,34 +1,53 @@
+import sys
+import time
 import signal
 import threading
 import contextlib
+import numpy as np
 from typing import List, Tuple, Optional
 from utils.logging import as_warning
-from utils.exceptions import Unreachable
 from te.algorithms.array_utils import set_global_precision
-from te.algorithms.array_utils.cpu_utils import CPUArray, set_cpu_float_precision
-from ..edge_based_distributed_admm.worker import NetworkWorkerNode as SynchronousNetworkWorkerNode
+from te.algorithms.array_utils.cpu_utils import CPUArray, cpu_zeros, cpu_array, set_cpu_float_precision
 from .worker_backends.base import WorkerNodeCommunicationBackendBase
 from .worker_backends.udp_multicast_backend import MulticastBackend, MulticastWorkerBackendParams
-from . import AsynchronousADMMSolverParams
+from . import AsynchronousADMMSolverParams, AsynchronousADMMWorkerRPCParams
 
 
-class NetworkWorkerNode(SynchronousNetworkWorkerNode):
-    def __init__(self, rpc_params, solver_params = None):
+class NetworkWorkerNode:
+    def __init__(self, rpc_params: AsynchronousADMMWorkerRPCParams, 
+                 solver_params: Optional[AsynchronousADMMSolverParams] = None):
+        self.worker_id = rpc_params.WorkerID
+        self._rpc_params = rpc_params
+        self._solver_params = solver_params
+        self._ready: bool = False
+
+        self._K: Optional[int] = None
+        self._T: Optional[int] = None
+        self._NUM_EDGES: Optional[int] = None
+        self._CHUNK_LEN: Optional[int] = None
+        self._NULL_M: Optional[CPUArray] = None
+        self._NNT_M: Optional[CPUArray] = None
+        self._X_ek_start_chunk: Optional[CPUArray] = None
+        self._Y_bar_t_cached: Optional[CPUArray] = None
+        self._P_bar_t_cached: Optional[CPUArray] = None
+        self._u_t_cached: Optional[CPUArray] = None
+        self._Y_tk_chunk: Optional[CPUArray] = None
+        self._S_ek_chunk: Optional[CPUArray] = None
+        self._t_ek_chunk: Optional[CPUArray] = None
+
+        self._backend: Optional[MulticastBackend] = None
+
         self._is_active: bool = False
         self._quit_event: threading.Event = threading.Event()
-        super().__init__(rpc_params, solver_params)
 
         for sig in ('INT', 'TERM'):
             signal.signal(getattr(signal, 'SIG'+sig), self.int_handler)
-    
+
     def int_handler(self, _, __):
         self._is_active = False
         self._quit_event.set()
         self._backend.stop()
         print(as_warning('Interrupted. Will no longer serve update requests or solutions.'))
-    
-    def wait(self):
-        raise Unreachable
     
     def initialize(self):
         self._backend: WorkerNodeCommunicationBackendBase = MulticastBackend(self._rpc_params)
@@ -64,6 +83,63 @@ class NetworkWorkerNode(SynchronousNetworkWorkerNode):
             self._solver_params is not None
         ])
     
+    def set_initial_feasible_solution(self, X: CPUArray):
+        self._X_ek_start_chunk = X
+        self._NUM_EDGES, self._CHUNK_LEN = self._X_ek_start_chunk.shape
+    
+    def set_null_space_basis(self, NULL_M: CPUArray):
+        self._NULL_M = NULL_M
+        assert self._X_ek_start_chunk is not None
+        CHUNK_LEN = self._CHUNK_LEN
+        self._NULL_M = NULL_M
+        self._NNT_M = NULL_M @ NULL_M.T
+        T = self._NULL_M.shape[1]
+        self._T = T
+        self._Y_tk_chunk = cpu_zeros((T, CHUNK_LEN))
+        self._Y_bar_t_cached: Optional[CPUArray] = cpu_zeros((T,))
+        self._P_bar_t_cached: Optional[CPUArray] = cpu_zeros((T,))
+        self._u_t_cached: Optional[CPUArray] = cpu_zeros((T,))
+        assert self._solver_params.QPMethod == 'ADMM'
+        self._S_ek_chunk = np.copy(self._X_ek_start_chunk)
+        self._t_ek_chunk = cpu_zeros(self._X_ek_start_chunk.shape)
+
+    def _get_current_C(self) -> CPUArray:
+        Y_TK = self._Y_tk_chunk
+        Y_BAR = self._Y_bar_t_cached
+        P_BAR = self._P_bar_t_cached
+        U_T = self._u_t_cached
+        
+        return Y_TK - np.expand_dims(Y_BAR - P_BAR + U_T, axis=1)
+
+    def do_inner_loop_admm_update(self) -> Tuple[int, CPUArray]:
+        assert self._solver_params.QPMethod == 'ADMM'
+        GAMMA = self._solver_params.Gamma
+        ADMM_ITERS = self._solver_params.QPIterations
+        NULL_M = self._NULL_M
+        Y_TK = self._Y_tk_chunk
+        X_EK_START_CHUNK = self._X_ek_start_chunk
+        C_TK_CHUNK = self._get_current_C()
+        S_EK_CHUNK = self._S_ek_chunk
+        T_EK_CHUNK = self._t_ek_chunk
+        
+        start = time.perf_counter_ns()
+        for _ in range(ADMM_ITERS):
+            Y_TK = (C_TK_CHUNK - GAMMA * NULL_M.T @ (X_EK_START_CHUNK + T_EK_CHUNK - S_EK_CHUNK)) / (1 + GAMMA)
+            S_EK_CHUNK = np.clip(X_EK_START_CHUNK + NULL_M @ Y_TK + T_EK_CHUNK, a_min=0, a_max=None)
+            T_EK_CHUNK = T_EK_CHUNK + (X_EK_START_CHUNK + NULL_M @ Y_TK - S_EK_CHUNK)
+        self._Y_tk_chunk = Y_TK
+        self._S_ek_chunk = S_EK_CHUNK
+        self._t_ek_chunk = T_EK_CHUNK
+        return time.perf_counter_ns() - start, np.mean(self._Y_tk_chunk, axis=1)
+    
+    def set_active_commodity_count(self, K: int):
+        self._K = K
+
+    def update_cached_values(self, u_t: CPUArray, P_bar_t: CPUArray, Y_bar_t: CPUArray):
+        self._u_t_cached = u_t
+        self._P_bar_t_cached = P_bar_t
+        self._Y_bar_t_cached = Y_bar_t
+
     def solve(self):
         if not self._backend.wait_until_initialized():
             return
@@ -87,6 +163,15 @@ class NetworkWorkerNode(SynchronousNetworkWorkerNode):
         with contextlib.closing(NetworkWorkerNode(rpc_params, solver_params)) as worker:
             worker.initialize()
             worker.solve()
+
+    def report_chunk(self) -> CPUArray:
+        return cpu_array(self._Y_tk_chunk)
+    
+    def report_aggregate(self) -> CPUArray:
+        return np.sum(self._X_ek_start_chunk + self._NULL_M @ self._Y_tk_chunk, axis=1)
+    
+    def close(self):
+        self._backend.close()
 
 
 if __name__ == '__main__':
