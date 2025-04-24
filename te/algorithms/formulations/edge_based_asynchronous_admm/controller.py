@@ -16,18 +16,20 @@ from te.algorithms.array_utils.cpu_utils import (CPUArray, DoublePrecisionCPUArr
                                                  cpu_array, cpu_zeros, cpu_double_array, 
                                                  set_cpu_float_precision)
 from te.algorithms.statistics.helpers import record_cpu_runtime, record_return_value
-from te.algorithms.utils import check_capacity_constraint, optimize_or_scream, make_model, get_solution_maximum_utilization
+from te.algorithms.utils import (check_capacity_constraint, optimize_or_scream, make_model, 
+                                 get_solution_maximum_utilization)
 from .controller_backends import get_backend
 from .controller_backends.base import ControllerCommunicationBackendBase, NetworkUpdate
 from . import AsynchronousADMMSolverParams, AsynchronousADMMControllerRPCParams
 from te.algorithms.sub_algorithms.feasible_assignment import get_feasible_flow_assignment
-from te.algorithms.sub_algorithms.admm_consensus_test import outer_admm_consensus_test, inner_admm_consensus_test
+from te.algorithms.sub_algorithms.admm_consensus_test import (outer_admm_consensus_test, 
+                                                              inner_admm_consensus_test)
 from te.algorithms.sub_algorithms.flow_conservation_test import check_flow_conservation
-from te.algorithms.statistics.helpers import record_cpu_runtime, record_return_value
 
 
 class ControllerNode(TrafficEngineeringLP):    
-    def __init__(self, graph: nx.DiGraph, traffic: TrafficMatrixBase, solver_params: AsynchronousADMMSolverParams,
+    def __init__(self, graph: nx.DiGraph, traffic: TrafficMatrixBase, 
+                 solver_params: AsynchronousADMMSolverParams,
                  rpc_params: AsynchronousADMMControllerRPCParams) -> None:
         super().__init__()
         self._graph = graph
@@ -159,7 +161,8 @@ class ControllerNode(TrafficEngineeringLP):
     def _initialize_variables_and_residuals(self):
         T = self._T
         NUM_EDGES = self._NUM_EDGES
-        self._capacities = cpu_double_array([item[-1] for item in self._graph.edges(data='capacity')])
+        self._capacities = cpu_double_array(
+            [item[-1] for item in self._graph.edges(data='capacity')])
         self._c_norm = np.linalg.norm(self._capacities)
         self._r_e = cpu_zeros((NUM_EDGES,))
         self._u_t = cpu_zeros((T,))
@@ -198,7 +201,8 @@ class ControllerNode(TrafficEngineeringLP):
 
         PARAMS = self._solver_params
         MODEL_CONTROLLER: gurobipy.Model = \
-            make_model('EdgeBasedDistributedTE_Controller', params=PARAMS, env=ENV, BarConvTol=PARAMS.BigGamma)
+            make_model('EdgeBasedDistributedTE_Controller', 
+                       params=PARAMS, env=ENV, BarConvTol=PARAMS.BigGamma)
         
         self._Xo_e = MODEL_CONTROLLER.addVars(NUM_EDGES, lb=0.0, vtype=GRB.CONTINUOUS, name='XO_E')
         self._utility = MODEL_CONTROLLER.addVar(lb=0.0, ub=1.0, vtype=GRB.CONTINUOUS, name='U')
@@ -209,7 +213,8 @@ class ControllerNode(TrafficEngineeringLP):
         return self._Zo_e + self._r_e - self._Xo_e_start
     
     def _set_X_ek(self):
-        self._X_ek = self._backend.get_X_ek(basis=self._NULL_M, initial_feasible_solution=self._X_ek_start)
+        self._X_ek = self._backend.get_X_ek(
+            basis=self._NULL_M, initial_feasible_solution=self._X_ek_start)
     
     def _add_constraints(self):
         assert self._model_controller is not None
@@ -345,7 +350,10 @@ class ControllerNode(TrafficEngineeringLP):
                 self._update_controller_objective()
                 self._backend.update_network_nodes(self._P_bar_t, self._Y_bar_t, self._u_t)
                 
-                self._objective_trace.append((self._utility.X, get_solution_maximum_utilization(self._Xo_e_assigned, self._graph)))
+                self._objective_trace.append((
+                    self._utility.X, 
+                    get_solution_maximum_utilization(self._Xo_e_assigned, self._graph)
+                ))
             self._set_X_ek()
             return time.time() - t
         except GurobiError as e:
@@ -353,7 +361,8 @@ class ControllerNode(TrafficEngineeringLP):
             return -1
 
     
-    def check(self, feasibility_tol: Optional[float] = None, feasibility_ratio: Optional[float] = None, report: bool = False):
+    def check(self, feasibility_tol: Optional[float] = None, 
+              feasibility_ratio: Optional[float] = None, report: bool = False):
         NUM_EDGES = self._NUM_EDGES
 
         # Are outer ADMM pairs in consensus?
@@ -368,7 +377,8 @@ class ControllerNode(TrafficEngineeringLP):
         
         # Now, check flow conservation ...
         X_EK = self._X_ek
-        check_flow_conservation(X_EK, self._graph, self._commodity_list, feasibility_tol, feasibility_ratio, report=report)
+        check_flow_conservation(X_EK, self._graph, self._commodity_list, feasibility_tol, 
+                                feasibility_ratio, report=report)
         check_capacity_constraint(
             X_EK, self._graph, self._commodity_list, 
             feasibility_tol=feasibility_tol, feasibility_ratio=feasibility_ratio
