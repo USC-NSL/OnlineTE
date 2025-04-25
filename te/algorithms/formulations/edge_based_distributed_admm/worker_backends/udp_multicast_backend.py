@@ -30,6 +30,7 @@ class MulticastBackend(WorkerNodeCommunicationBackendBase):
         self._gather_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         self._gather_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         # TODO: Don't hardcode these ...
+        self._gather_socket.settimeout(5.0)
         self._gather_socket.bind(('224.0.0.10', 12000))
         
         self._handler_loop: Optional[threading.Thread] = None
@@ -65,15 +66,11 @@ class MulticastBackend(WorkerNodeCommunicationBackendBase):
         assert self._server is not None and self._listener is not None
         self._handler_loop = threading.Thread(target=self.gather_updates)
         self._server.start()
-        self._handler_loop.start()
         self.is_alive = True
+        self._handler_loop.start()
 
     def stop(self):
         self.is_alive = False
-        try:
-            self._gather_socket.close()
-        except ConnectionError as e:
-            pass
     
     def die(self):
         self.stop()
@@ -93,32 +90,37 @@ class MulticastBackend(WorkerNodeCommunicationBackendBase):
         buffer = b''
         try:
             while self.is_alive:
-                packet, addr = self._gather_socket.recvfrom(10240)
-                buffer += packet
-                update = TLVRPCMessages.get_packet_rpc_message(buffer)
-                if update is not None:
-                    update_type, consumed_length, request = update
-                    if update_type == TLVRPCMessages.DoInnerLoops:
-                        if self.current_xid == None:
-                            self._xid = request.xid
-                        F_e = serialized_message_to_array(get_optional_field(request, 'F_e'))
-                        runtime, means = self.do_inner_loop_update(request.epoch, F_e)
-                        response = distributed_lp_messages.NetworkUpdateResponse(
-                            worker_id=self.worker_id, runtime_ns=runtime, 
-                            means=array_to_serialized_message(means),
-                            xid=request.xid
-                        )
-                        self._gather_socket.sendto(response.SerializeToString(), addr)
-                    elif update_type == TLVRPCMessages.UpdateNetworkNodes:
-                        self.update_cached_values(
-                            serialized_message_to_array(request.u_t),
-                            serialized_message_to_array(request.P_bar_t),
-                            serialized_message_to_array(request.Y_bar_t)
-                        )
-                        self.update_xid()
-                    else:
-                        raise ValueError(f'Unexpected update type: {update_type}')
-                    buffer = buffer[consumed_length:]
+                try:
+                    print('RECEIVING')
+                    packet, addr = self._gather_socket.recvfrom(10240)
+                    print('GOT PACKET')
+                    buffer += packet
+                    update = TLVRPCMessages.get_packet_rpc_message(buffer)
+                    if update is not None:
+                        update_type, consumed_length, request = update
+                        if update_type == TLVRPCMessages.DoInnerLoops:
+                            if self.current_xid == None:
+                                self._xid = request.xid
+                            F_e = serialized_message_to_array(get_optional_field(request, 'F_e'))
+                            runtime, means = self.do_inner_loop_update(request.epoch, F_e)
+                            response = distributed_lp_messages.NetworkUpdateResponse(
+                                worker_id=self.worker_id, runtime_ns=runtime, 
+                                means=array_to_serialized_message(means),
+                                xid=request.xid
+                            )
+                            self._gather_socket.sendto(response.SerializeToString(), addr)
+                        elif update_type == TLVRPCMessages.UpdateNetworkNodes:
+                            self.update_cached_values(
+                                serialized_message_to_array(request.u_t),
+                                serialized_message_to_array(request.P_bar_t),
+                                serialized_message_to_array(request.Y_bar_t)
+                            )
+                            self.update_xid()
+                        else:
+                            raise ValueError(f'Unexpected update type: {update_type}')
+                        buffer = buffer[consumed_length:]
+                except socket.timeout:
+                    pass
         except OSError as e:
             print(f'Error in gatherer loop: {e}')
         finally:
@@ -128,7 +130,7 @@ class MulticastBackend(WorkerNodeCommunicationBackendBase):
     def close(self):
         self.stop()
         if not self.killed:
-            self._server.stop()
+            self._server.stop(1)
 
 
 class NetworkWorkerNodeListener(DistributedADMMSolverServicer):
