@@ -91,9 +91,7 @@ class MulticastBackend(WorkerNodeCommunicationBackendBase):
         try:
             while self.is_alive:
                 try:
-                    print('RECEIVING')
                     packet, addr = self._gather_socket.recvfrom(10240)
-                    print('GOT PACKET')
                     buffer += packet
                     update = TLVRPCMessages.get_packet_rpc_message(buffer)
                     if update is not None:

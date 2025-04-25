@@ -208,20 +208,21 @@ class MulticastBackend(ControllerCommunicationBackendBase):
     def do_network_update(self, epoch: int, F_e: Optional[CPUArray] = None):
         message = distributed_lp_messages.NetworkUpdateRequest(epoch=epoch, xid=self.current_xid, 
                                                                F_e=array_to_serialized_message(F_e))
-        print(f'(UPDATE) Sending to {self.SCATTER_ADDRESS}')
-        self._scatter_socket.sendto(TLVRPCMessages.serialize_do_inner_loop(message), self.SCATTER_ADDRESS)
+        packet = TLVRPCMessages.serialize_do_inner_loop(message)
+        self._scatter_socket.sendto(packet, self.SCATTER_ADDRESS)
         responses = [None for _ in range(self.number_of_nodes)]
-        for _ in range(self.number_of_nodes):
-            while self.is_alive:
-                try:
-                    # TODO: For now, assume the response fits in a single packet, but that may not be the case ...
-                    res = distributed_lp_messages.NetworkUpdateResponse.FromString(
-                        self._scatter_socket.recv(10240))
-                except socket.timeout:
-                    pass
-            if not self.is_alive:
-                raise SolutionInterrupted
-            responses[res.worker_id] = res
+        remaining_workers = self.number_of_nodes
+        while self.is_alive and remaining_workers > 0:
+            try:
+                # TODO: For now, assume the response fits in a single packet, but that may not be the case ...
+                res = distributed_lp_messages.NetworkUpdateResponse.FromString(
+                    self._scatter_socket.recv(10240))
+                responses[res.worker_id] = res
+                remaining_workers -= 1
+            except socket.timeout:
+                pass
+        if not self.is_alive:
+            raise SolutionInterrupted
         runtimes, serialized_y_bar_chunks = zip(*list([(res.runtime_ns, res.means) for res in responses]))
         return max(runtimes), np.mean([serialized_message_to_array(chunk) for chunk in serialized_y_bar_chunks], axis=0)
     
