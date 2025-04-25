@@ -1,8 +1,10 @@
 import time
 import tqdm
+import signal
 import gurobipy
 import numpy as np
 import networkx as nx
+import asyncio.exceptions
 from typing import List, Tuple, Optional
 from gurobipy import GRB, GurobiError
 from te.algorithms.base import TrafficEngineeringLP, SolverParams
@@ -10,7 +12,8 @@ from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
 from topologies.utils import get_edge_indexing, get_graph_M_matrix, get_adjacency_null_space
 from topologies.utils import get_sparse_null_space, get_symbolic_graph_M_matrix
-from utils.logging import as_info, log_subsection_separator
+from utils.exceptions import SolutionInterrupted
+from utils.logging import as_info, as_warning, log_subsection_separator
 from te.algorithms.array_utils import set_global_precision
 from te.algorithms.array_utils.cpu_utils import (CPUArray, DoublePrecisionCPUArray, 
                                                  cpu_array, cpu_zeros, cpu_double_array, 
@@ -73,6 +76,10 @@ class ControllerNode(TrafficEngineeringLP):
         # These we call right now, as opposed to doing them under `initialize`
         set_global_precision(solver_params.Precision)
         set_cpu_float_precision()
+
+        self._die_on_next_int = False
+        signal.signal(signal.SIGINT, self.stop)
+        signal.signal(signal.SIGTERM, self.die)
     
     def initialize(self):
         # First, set the initial feasible solutions.
@@ -86,6 +93,23 @@ class ControllerNode(TrafficEngineeringLP):
         self._initialize_variables_and_residuals()
         # Report what we are dealing with
         self._report_problem_size()
+        # Now, start the backend
+        self._backend.start()
+    
+    def stop(self, _, __):
+        if self._die_on_next_int:
+            signal.raise_signal(signal.SIGTERM)
+        else:
+            print(as_warning('SIGINT: Stopping solver. Invoke again to kill the process.'))
+            if self._backend:
+                self._backend.stop()
+            self._die_on_next_int = True
+            raise SolutionInterrupted
+    
+    def die(self, _, __):
+        print(as_warning('SIGTERM: Killing the solver.'))
+        if self._backend:
+            self._backend.die()
 
     @property
     def alg_name(self) -> str:
@@ -348,6 +372,11 @@ class ControllerNode(TrafficEngineeringLP):
             return time.time() - t
         except GurobiError as e:
             print(f'Error code {e.errno}: {e}')
+            return -1
+        except SolutionInterrupted:
+            self._set_X_ek()
+            return time.time() - t
+        except asyncio.exceptions.CancelledError:
             return -1
     
     def check(self, feasibility_tol: Optional[float] = None, feasibility_ratio: Optional[float] = None, report: bool = False):

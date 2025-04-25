@@ -1,8 +1,10 @@
 import sys
 import time
+import signal
 import contextlib
 import numpy as np
 from typing import Optional, Tuple
+from utils.logging import as_warning
 from te.algorithms.array_utils import set_global_precision
 from te.algorithms.array_utils.cpu_utils import CPUArray, cpu_zeros, cpu_array, set_cpu_float_precision
 from . import DistributedADMMSolverParams, DistributedADMMWorkerRPCParams
@@ -40,7 +42,25 @@ class NetworkWorkerNode:
         self._t_ek_chunk: Optional[CPUArray] = None
 
         self._backend = None
+        
+        self._die_on_next_int = False
+        signal.signal(signal.SIGINT, self.stop)
+        signal.signal(signal.SIGTERM, self.die)
+
+    def stop(self, _, __):
+        if self._die_on_next_int:
+            signal.raise_signal(signal.SIGTERM)
+        else:
+            print(as_warning('SIGINT: Stopping worker. Invoke again to kill the process.'))
+            if self._backend:
+                self._backend.stop()
+            self._die_on_next_int = True
     
+    def die(self, _, __):
+        print(as_warning('SIGTERM: Killing the worker.'))
+        if self._backend:
+            self._backend.die()
+
     def initialize(self):
         if self._rpc_params.Multicast:
             self._backend: WorkerNodeCommunicationBackendBase = MulticastBackend(rpc_params)
@@ -53,6 +73,7 @@ class NetworkWorkerNode:
         self._backend.report_chunk = self.report_chunk
         self._backend.report_aggregate = self.report_aggregate
         self._backend.set_active_commodity_count = self.set_active_commodity_count
+        self._backend.start()
     
     def wait(self):
         self._backend.wait()

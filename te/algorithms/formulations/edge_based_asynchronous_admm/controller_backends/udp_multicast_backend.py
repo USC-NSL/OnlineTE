@@ -1,8 +1,10 @@
 import grpc
+import queue
 import signal
 import socket
 import struct
 import asyncio
+import threading
 import numpy as np
 from dataclasses import dataclass
 from typing import List, ClassVar, Optional, Tuple, Any
@@ -94,7 +96,6 @@ class MulticastBackend(ControllerCommunicationBackendBase):
         self._scatter_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         self._scatter_socket.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, self._rpc_params.TTL)
         self._scatter_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._scatter_socket.setblocking(False)
         self.SCATTER_ADDRESS = (rpc_params.ScatterAddress, rpc_params.ScatterPort)
         self.LISTEN_ADDRESS = (socket.gethostbyname(rpc_params.Hostname), rpc_params.ListenPort)
         self._scatter_socket.bind(self.LISTEN_ADDRESS)
@@ -102,8 +103,8 @@ class MulticastBackend(ControllerCommunicationBackendBase):
         self._event_loop = asyncio.get_event_loop()
 
         self.is_active = True
-        self._update_queue: asyncio.Queue = asyncio.Queue()
-        self._gatherer_loop = None
+        self._update_queue = queue.Queue()
+        self._gatherer_loop: Optional[threading.Thread] = None
     
     @classmethod
     def backend_name(self) -> str:
@@ -124,13 +125,14 @@ class MulticastBackend(ControllerCommunicationBackendBase):
         self.is_active = False
     
     def start_gatherer(self):
-        self._event_loop.create_task(self.gatherer_loop())
+        self._gatherer_loop = threading.Thread(target=self.gatherer_loop)
+        self._gatherer_loop.start()
     
-    async def gatherer_loop(self):
+    def gatherer_loop(self):
         buffer = b''
         while self.is_active:
             try:
-                packet = await self._event_loop.sock_recv(self._scatter_socket, 10240)
+                packet = self._scatter_socket.recv(10240)
                 buffer += packet
                 update = TLVRPCMessages.get_packet_rpc_message(buffer)
                 if update is not None:
@@ -200,27 +202,33 @@ class MulticastBackend(ControllerCommunicationBackendBase):
         return initial_feasible_solution + basis @ np.hstack(list(chunks))
 
     def get_X_ek(self, basis: CPUArray, initial_feasible_solution: CPUArray):
-        return self._event_loop.run_until_complete(self._get_X_ek(basis, initial_feasible_solution))
+        try:
+            return self._event_loop.run_until_complete(self._get_X_ek(basis, initial_feasible_solution))
+        except grpc.aio._call.AioRpcError:
+            return None
     
     def update_network_nodes(self, P_bar_t: CPUArray, Y_bar_t: CPUArray, u_t: CPUArray):
-        message = asynchronous_lp_messages.UpdateMessage(
+        message = asynchronous_lp_messages.ControllerMessage(
             P_bar_t = array_to_serialized_message(P_bar_t),
             Y_bar_t = array_to_serialized_message(Y_bar_t),
             u_t = array_to_serialized_message(u_t)
         )
         self._scatter_socket.sendto(TLVRPCMessages.serialize_controller_update(message), self.SCATTER_ADDRESS)
-    
-    async def _get_network_updates(self) -> List[Tuple[int, NetworkUpdate]]:
+        print(f'Sent updates to the switches at {self.SCATTER_ADDRESS}')
+
+    def get_network_updates(self) -> List[Tuple[int, NetworkUpdate]]:
         gathered_updates = []
         while self.is_active:
-            update = await self._update_queue.get_nowait()
-            gathered_updates.append(update)
-            if len(gathered_updates) >= self.Upsilon:
-                break
+            try:
+                print('Getting updates')
+                update = self._update_queue.get(timeout=self._rpc_params.QueueTimeout)
+                gathered_updates.append(update)
+                if len(gathered_updates) >= self.Upsilon:
+                    break
+            except queue.Empty:
+                print('No update yet ...')
+                pass
         return gathered_updates
-    
-    def get_network_updates(self) -> List[Tuple[int, NetworkUpdate]]:
-        return self._event_loop.run_until_complete(self._get_network_updates())
 
     async def _close_node(self, worker_id: int):
         try:
@@ -233,12 +241,12 @@ class MulticastBackend(ControllerCommunicationBackendBase):
             [asyncio.create_task(self._close_node(i)) for i in range(self.number_of_nodes)],
             timeout=self._rpc_params.SocketTimeout
         )
-        if self._gatherer_loop is not None:
-            await self._gatherer_loop
     
     def close(self):
         self.stop()
         self._event_loop.run_until_complete(self.aclose())
+        if self._gatherer_loop is not None:
+            self._gatherer_loop.join()
         self._scatter_socket.close()
 
     async def _set_active_commodity_count(self, K: int):

@@ -213,8 +213,12 @@ class ControllerNode(TrafficEngineeringLP):
         return self._Zo_e + self._r_e - self._Xo_e_start
     
     def _set_X_ek(self):
-        self._X_ek = self._backend.get_X_ek(
+        result = self._backend.get_X_ek(
             basis=self._NULL_M, initial_feasible_solution=self._X_ek_start)
+        if result is None:
+            print(as_warning('Some worker nodes are not available. Unable to construct solution.'))
+        else:
+            self._X_ek = result
     
     def _add_constraints(self):
         assert self._model_controller is not None

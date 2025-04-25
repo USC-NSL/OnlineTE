@@ -51,6 +51,16 @@ class SynchronousgRPCBackend(ControllerCommunicationBackendBase):
     def number_of_nodes(self) -> int:
         return self._rpc_params.NumWorkers
 
+    def start(self):
+        self.is_alive = True
+    
+    def stop(self):
+        self.is_alive = False
+    
+    def die(self):
+        self._broadcast_thread_pool.shutdown()
+        self.killed = True
+
     def is_node_ready(self, worker_id: int) -> bool:
         try:
             return self._worker_stubs[worker_id].QueryState(Empty()).ready
@@ -58,6 +68,8 @@ class SynchronousgRPCBackend(ControllerCommunicationBackendBase):
             return False
     
     def are_network_nodes_ready(self):
+        if not self.is_alive:
+            return False
         return all(self._broadcast_thread_pool.map(
             self.is_node_ready, range(self.number_of_nodes)
         ))
@@ -135,7 +147,15 @@ class SynchronousgRPCBackend(ControllerCommunicationBackendBase):
             pass
     
     def close(self):
+        if not self.killed:
+            wait([
+                self._broadcast_thread_pool.submit(lambda worker_id: self._close_node(worker_id), i)
+                    for i in range(len(self._worker_stubs))
+            ], timeout=5)
+
+    def set_active_commodity_count(self, K: int):
+        message = distributed_lp_messages.ActiveCommodityCount(TotalNumberOfCommodities=K)
         wait([
-            self._broadcast_thread_pool.submit(lambda worker_id: self._close_node(worker_id), i)
-                for i in range(len(self._worker_stubs))
-        ], timeout=5)
+            self._broadcast_thread_pool.submit(stub.SetActiveCommodityCount, message)
+                for stub in self._worker_stubs
+        ])

@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 from typing import List, Tuple, Dict, Union, Optional, Type
 from collections import defaultdict
+from utils.exceptions import SolutionInterrupted
 from utils.logging import (as_bold, as_fail, as_info, as_success, as_warning, method_to_str, 
                            str_round, log_section_title)
 from te.traffic_models.base import Commodity, TrafficMatrixBase
@@ -65,7 +66,10 @@ def optimize_or_scream(model: gurobipy.Model):
     """Solve a Gurobi model. Throw an error if the model ends up in any non-optimal state"""
     model.optimize()
     if model.Status != gurobipy.GRB.OPTIMAL:
-        raise RuntimeError(as_fail(f"Optimizing model {model.ModelName} returned non-optimal status: {model.Status}"))
+        if model.Status == gurobipy.GRB.INTERRUPTED:
+            raise SolutionInterrupted
+        else:
+            raise RuntimeError(as_fail(f"Optimizing model {model.ModelName} returned non-optimal status: {model.Status}"))
 
 
 def is_satisfied(optim, actual, feasibility_tol: Optional[float], feasibility_ratio: Optional[float]):

@@ -3,6 +3,7 @@ import time
 import signal
 import socket
 import asyncio
+import threading
 from dataclasses import dataclass
 from typing import Optional, Iterator, ClassVar, List, Tuple
 from concurrent.futures import ThreadPoolExecutor
@@ -51,12 +52,14 @@ class MulticastBackend(WorkerNodeCommunicationBackendBase):
         self.SCATTER_ADDRESS = (rpc_params.ScatterAddress, rpc_params.ScatterPort)
         self.CONTROLLER_ADDRESS = (rpc_params.ControllerHost, rpc_params.ControllerPort)
         self._gather_socket.bind(self.SCATTER_ADDRESS)
+        print(f'Bound gatherer to address {self.SCATTER_ADDRESS}')
         self._event_loop = asyncio.get_event_loop()
 
         self._initialize_listener()
         self._update_queue: asyncio.Queue = asyncio.Queue()
-        self._gatherer_loop = self._event_loop.create_task(self.gatherer_loop())
+        self._gatherer_loop = threading.Thread(target=self.gatherer_loop)
         self.is_worker_node_ready = True
+        self._gatherer_loop.start()
     
     @classmethod
     def backend_name(cls) -> str:
@@ -90,7 +93,7 @@ class MulticastBackend(WorkerNodeCommunicationBackendBase):
         if self._server is not None:
             self._server.stop(1)
     
-    async def gatherer_loop(self):
+    def gatherer_loop(self):
         buffer = b''
         while self.is_worker_node_ready:
             try:
@@ -98,6 +101,7 @@ class MulticastBackend(WorkerNodeCommunicationBackendBase):
                 buffer += packet
                 update = TLVRPCMessages.get_packet_rpc_message(buffer)
                 if update is not None:
+                    print('Got an update!')
                     update_type, consumed_length, request = update
                     assert update_type == TLVRPCMessages.ControllerUpdate and \
                            isinstance(request, asynchronous_lp_messages.ControllerMessage)
@@ -107,7 +111,10 @@ class MulticastBackend(WorkerNodeCommunicationBackendBase):
                         serialized_message_to_array(request.Y_bar_t)
                     ))
                     buffer = buffer[consumed_length:]
+                else:
+                    print('Got incomplete update ...')
             except socket.timeout:
+                print('No update yet ...')
                 pass
     
     def gather_updates(self, block = False) -> Optional[List[Tuple[CPUArray, CPUArray, CPUArray]]]:
@@ -121,13 +128,16 @@ class MulticastBackend(WorkerNodeCommunicationBackendBase):
                     try:
                         update = self._event_loop.run_until_complete(
                             asyncio.wait_for(self._update_queue.get(), self._rpc_params.QueueTimeout))
+                        print('Got one controller update, starting solution')
                         return [update]
                     except asyncio.TimeoutError:
                         pass
             else:
+                print('No update available right now, will keep solving until controller comes back')
                 return []
         else:
             # Updates are immediately available
+            print('Controller updates are available ...')
             return [
                 self._update_queue.get_nowait()
                 for _ in range(min(self._update_queue.qsize(), self.WorkerBatchSize))
@@ -142,25 +152,27 @@ class MulticastBackend(WorkerNodeCommunicationBackendBase):
         return False
     
     def send_update_to_controller(self, runtime: int, Y_bar: CPUArray):
-        message = asynchronous_lp_messages.NetworkUpdateResponse(
+        message = asynchronous_lp_messages.SwitchMessage(
             worker_id=self.worker_id, runtime_ns=runtime,
             means=array_to_serialized_message(Y_bar)
         )
         self._gather_socket.sendto(TLVRPCMessages.serialize_network_update(message), self.CONTROLLER_ADDRESS)
 
     async def aclose(self):
-        await self._gatherer_loop
+        # await self._gatherer_loop
+        pass
     
     def close(self):
         self.stop()
-        self._event_loop.run_until_complete(self.aclose())
+        # self._event_loop.run_until_complete(self.aclose())
+        self._gatherer_loop.join()
         self._gather_socket.close()
 
 
 class NetworkWorkerNodeListener(AsynchronousADMMSolverServicer):
     def __init__(self, backend: MulticastBackend):
         super().__init__()
-        self._backend = backend
+        self._backend: WorkerNodeCommunicationBackendBase = backend
         self._id = backend.worker_id
     
     def SetInitialFeasibleSolution(self, request_iterator: Iterator[array_messages.Chunk], context):
@@ -173,9 +185,6 @@ class NetworkWorkerNodeListener(AsynchronousADMMSolverServicer):
     
     def RequestChunk(self, request, context):
         return chunk_big_array(self._backend.report_chunk(), GRPC_ARRAY_STREAM_MAX_LEN)
-    
-    def RequestAggregate(self, request, context):
-        return array_to_serialized_message(self._backend.report_aggregate())
     
     def QueryState(self, request, context):
         return asynchronous_lp_messages.State(ready=self._backend.is_worker_node_ready)

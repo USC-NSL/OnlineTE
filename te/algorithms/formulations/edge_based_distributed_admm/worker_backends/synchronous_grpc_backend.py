@@ -1,5 +1,4 @@
 import grpc
-import signal
 import protos.distributed_lp.distributed_lp_pb2 as distributed_lp_messages
 from typing import Optional, Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -8,6 +7,8 @@ from .. import DistributedADMMSolverParams, DistributedADMMWorkerRPCParams
 from ..utils import (serialized_message_to_array, array_to_serialized_message,
                      rebuild_chunked_array, chunk_big_array, get_optional_field,
                      GRPC_ARRAY_STREAM_MAX_LEN)
+
+import protos.array.array_pb2 as array_messages
 from protos.distributed_lp.distributed_lp_pb2_grpc import DistributedADMMSolverServicer, add_DistributedADMMSolverServicer_to_server
 from google.protobuf.empty_pb2 import Empty
 
@@ -23,13 +24,6 @@ class SynchronousgRPCBackend(WorkerNodeCommunicationBackendBase):
 
         self._initialize_listener()
 
-        for sig in ('TERM', 'INT'):
-            signal.signal(getattr(signal, 'SIG'+sig), self.int_handler)
-        
-        self.start()
-
-        self.close = lambda: self.int_handler(None, None)
-    
     @classmethod
     def backend_name(cls) -> str:
         return 'gRPC-synchronous'
@@ -48,26 +42,28 @@ class SynchronousgRPCBackend(WorkerNodeCommunicationBackendBase):
         add_DistributedADMMSolverServicer_to_server(self._listener, self._server)
         addr = ":".join([IP, str(PORT)])
         self._server.add_insecure_port(addr)
-
-    def int_handler(self, _, __):
-        try:
-            self.stop()
-        except:
-            pass
     
     def start(self):
         assert self._server is not None and self._listener is not None
         self._server.start()
-        self.is_worker_node_ready = True
+        self.is_alive = True
 
     def stop(self):
-        self.is_worker_node_ready = False
+        self.is_alive = False
+    
+    def die(self):
+        self.is_alive = False
         if self._server is not None:
             self._server.stop(1)
-    
+        self.killed = True
+
     def wait(self):
         if self._server is not None:
             self._server.wait_for_termination()
+    
+    def close(self):
+        if not self.killed:
+            self._server.stop(1)
 
 
 class NetworkWorkerNodeListener(DistributedADMMSolverServicer):
@@ -76,11 +72,11 @@ class NetworkWorkerNodeListener(DistributedADMMSolverServicer):
         self._backend = backend
         self._id = backend.worker_id
     
-    def SetInitialFeasibleSolution(self, request_iterator: Iterator[distributed_lp_messages.Chunk], context):
+    def SetInitialFeasibleSolution(self, request_iterator: Iterator[array_messages.Chunk], context):
         self._backend.set_initial_feasible_solution(rebuild_chunked_array(request_iterator))
         return Empty()
 
-    def SetNullSpaceBasis(self, request_iterator: Iterator[distributed_lp_messages.Chunk], context):
+    def SetNullSpaceBasis(self, request_iterator: Iterator[array_messages.Chunk], context):
         self._backend.set_null_space_basis(rebuild_chunked_array(request_iterator))
         return Empty()
     
@@ -106,7 +102,7 @@ class NetworkWorkerNodeListener(DistributedADMMSolverServicer):
         return array_to_serialized_message(self._backend.report_aggregate())
     
     def QueryState(self, request, context):
-        return distributed_lp_messages.State(ready=self._backend.is_worker_node_ready)
+        return distributed_lp_messages.State(ready=self._backend.is_alive)
     
     def SetSolverParameters(self, request: distributed_lp_messages.SolverParameters, context):
         new_params = DistributedADMMSolverParams()

@@ -99,7 +99,6 @@ class NetworkWorkerNode:
         self._Y_bar_t_cached: Optional[CPUArray] = cpu_zeros((T,))
         self._P_bar_t_cached: Optional[CPUArray] = cpu_zeros((T,))
         self._u_t_cached: Optional[CPUArray] = cpu_zeros((T,))
-        assert self._solver_params.QPMethod == 'ADMM'
         self._S_ek_chunk = np.copy(self._X_ek_start_chunk)
         self._t_ek_chunk = cpu_zeros(self._X_ek_start_chunk.shape)
 
@@ -112,7 +111,6 @@ class NetworkWorkerNode:
         return Y_TK - np.expand_dims(Y_BAR - P_BAR + U_T, axis=1)
 
     def do_inner_loop_admm_update(self) -> Tuple[int, CPUArray]:
-        assert self._solver_params.QPMethod == 'ADMM'
         GAMMA = self._solver_params.Gamma
         ADMM_ITERS = self._solver_params.QPIterations
         NULL_M = self._NULL_M
@@ -143,7 +141,6 @@ class NetworkWorkerNode:
     def solve(self):
         if not self._backend.wait_until_initialized():
             return
-        assert self._solver_params.QPMethod == 'ADMM'
         number_of_consecutive_updates = 0
         while self._is_active:
             controller_update_batch = self._backend.gather_updates(number_of_consecutive_updates >= self._solver_params.Sigma)
@@ -151,9 +148,13 @@ class NetworkWorkerNode:
                 if len(controller_update_batch) > 0:
                     number_of_consecutive_updates = 0
                     self.consume_batch_update(controller_update_batch)
+                else:
+                    print('No controller update available right now but '
+                          f'{number_of_consecutive_updates} < {self._solver_params.Sigma}. '
+                          'Will do an iteration anyway')
             else:
                 break
-            runtime, Y_bar = self.do_inner_loop_admm_update(0)
+            runtime, Y_bar = self.do_inner_loop_admm_update()
             self._backend.send_update_to_controller(runtime, Y_bar)
             number_of_consecutive_updates += 1
 

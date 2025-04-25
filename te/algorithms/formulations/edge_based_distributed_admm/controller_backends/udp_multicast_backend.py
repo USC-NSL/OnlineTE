@@ -5,6 +5,7 @@ import asyncio
 import numpy as np
 from typing import List, ClassVar, Optional, Tuple, Any
 from dataclasses import dataclass
+from utils.exceptions import SolutionInterrupted
 from te.algorithms.array_utils.cpu_utils import CPUArray
 from .. import DistributedADMMControllerRPCParams, DistributedADMMSolverParams
 from .base import (ControllerCommunicationBackendBase, controller_communication_backend,
@@ -30,6 +31,7 @@ class MulticastControllerBackendParams(DistributedADMMControllerRPCParams):
     
     def __post_init__(self):
         self.left_column_share = 0.2
+
 
 class TLVRPCMessages:
     DoInnerLoops = 0x00
@@ -90,10 +92,10 @@ class MulticastBackend(ControllerCommunicationBackendBase):
         ]
         self._scatter_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
         self._scatter_socket.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, self._rpc_params.TTL)
+        self._scatter_socket.settimeout(rpc_params.Timeout)
         self.SCATTER_ADDRESS = (rpc_params.ScatterAddress, rpc_params.ScatterPort)
         self._event_loop = asyncio.get_event_loop()
 
-        self.is_active = False
         self._gethered_results = []
         self._gather_done = asyncio.Event()
 
@@ -114,6 +116,22 @@ class MulticastBackend(ControllerCommunicationBackendBase):
     def update_xid(self):
         self._xid = self._xid + 1
 
+    def start(self):
+        self.is_alive = True
+    
+    def stop(self):
+        self.is_alive = False
+    
+    def die(self):
+        self.is_alive = False
+        try:
+            for task in asyncio.all_tasks():
+                task.cancel()
+        except RuntimeError:
+            pass
+        self._scatter_socket.close()
+        self.killed = True
+
     async def is_node_ready(self, worker_id: int) -> bool:
         try:
             res = await self._worker_stubs[worker_id].QueryState(Empty())
@@ -126,6 +144,8 @@ class MulticastBackend(ControllerCommunicationBackendBase):
         return all(results)
     
     def are_network_nodes_ready(self):
+        if not self.is_alive:
+            return False
         return self._event_loop.run_until_complete(self._are_network_nodes_ready())
 
     async def _initialize_worker_nodes(self, solver_params: DistributedADMMSolverParams, basis: CPUArray, 
@@ -184,25 +204,26 @@ class MulticastBackend(ControllerCommunicationBackendBase):
     
     def get_X_ek_sum(self):
         return self._event_loop.run_until_complete(self._get_X_ek_sum())
-
-    async def _do_network_update(self, message: distributed_lp_messages.NetworkUpdateRequest):
-        self._scatter_socket.sendto(TLVRPCMessages.serialize_do_inner_loop(message), self.SCATTER_ADDRESS)
-        responses = [None for _ in range(self.number_of_nodes)]
-        for _ in range(self.number_of_nodes):
-            res = distributed_lp_messages.NetworkUpdateResponse.FromString(
-                await self._event_loop.sock_recv(self._scatter_socket, 10240)
-            )
-            responses[res.worker_id] = res
-        runtimes, serialized_y_bar_chunks = zip(*list([(res.runtime_ns, res.means) for res in responses]))
-        return max(runtimes), np.mean([serialized_message_to_array(chunk) for chunk in serialized_y_bar_chunks], axis=0)
     
     def do_network_update(self, epoch: int, F_e: Optional[CPUArray] = None):
         message = distributed_lp_messages.NetworkUpdateRequest(epoch=epoch, xid=self.current_xid, 
                                                                F_e=array_to_serialized_message(F_e))
-        return self._event_loop.run_until_complete(self._do_network_update(message))
-    
-    def _reconvene_network_updates(self, message: distributed_lp_messages.UpdateMessage):
-        self._scatter_socket.sendto(TLVRPCMessages.serialize_update_network_nodes(message), self.SCATTER_ADDRESS)
+        
+        self._scatter_socket.sendto(TLVRPCMessages.serialize_do_inner_loop(message), self.SCATTER_ADDRESS)
+        responses = [None for _ in range(self.number_of_nodes)]
+        for _ in range(self.number_of_nodes):
+            try:
+                if not self.is_alive:
+                    raise SolutionInterrupted
+                # TODO: For now, assume the response fits in a single packet, but that may not be the case ...
+                res = distributed_lp_messages.NetworkUpdateResponse.FromString(
+                    self._scatter_socket.recv(10240))
+            except socket.timeout:
+                if not self.is_alive:
+                    raise SolutionInterrupted
+            responses[res.worker_id] = res
+        runtimes, serialized_y_bar_chunks = zip(*list([(res.runtime_ns, res.means) for res in responses]))
+        return max(runtimes), np.mean([serialized_message_to_array(chunk) for chunk in serialized_y_bar_chunks], axis=0)
     
     def reconvene_network_updates(self, P_bar_t: CPUArray, Y_bar_t: CPUArray, u_t: CPUArray):
         message = distributed_lp_messages.UpdateMessage(
@@ -211,7 +232,7 @@ class MulticastBackend(ControllerCommunicationBackendBase):
             u_t = array_to_serialized_message(u_t),
             xid = self.current_xid
         )
-        self._reconvene_network_updates(message)
+        self._scatter_socket.sendto(TLVRPCMessages.serialize_update_network_nodes(message), self.SCATTER_ADDRESS)
         self.update_xid()
 
     async def _close_node(self, worker_id: int):
@@ -227,8 +248,9 @@ class MulticastBackend(ControllerCommunicationBackendBase):
         )
     
     def close(self):
-        self._event_loop.run_until_complete(self.aclose())
-        self._scatter_socket.close()
+        if not self.killed:
+            self._event_loop.run_until_complete(self.aclose())
+            self._scatter_socket.close()
 
     async def _set_active_commodity_count(self, K: int):
         message = distributed_lp_messages.ActiveCommodityCount(TotalNumberOfCommodities=K)

@@ -31,22 +31,18 @@ message State {
 
 message SolverParameters {
     int32 NumberOfEpochs = 1;
-    int32 NumberOfNetworkUpdates = 2;
-    int32 NumberOfLocalUpdates = 3;
-    float Rho = 4;
-    float Eta = 5;
-    float Gamma = 6;
-    float Kappa = 7;
-    int32 QPIterations = 8;
-    string QPMethod = 9;
-    int32 NumWorkers = 10;
-    string Precision = 11;
-    float BigGamma = 12;
-    int32 Seed = 13;
-    int32 Upsilon = 14;
-    int32 Sigma = 15;
-    int32 WorkerBatchSize = 16;
-    float ADMMConvTol = 17;
+    float Rho = 2;
+    float Eta = 3;
+    float Gamma = 4;
+    int32 QPIterations = 5;
+    int32 NumWorkers = 6;
+    string Precision = 7;
+    float BigGamma = 8;
+    int32 Seed = 9;
+    int32 Upsilon = 10;
+    int32 Sigma = 11;
+    int32 WorkerBatchSize = 12;
+    float ADMMConvTol = 13;
 }
 
 message ActiveCommodityCount {

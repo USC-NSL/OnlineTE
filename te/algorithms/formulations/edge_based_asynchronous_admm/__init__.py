@@ -1,11 +1,20 @@
+import te.constants
 from dataclasses import dataclass
-from typing import Tuple, ClassVar
-from ..edge_based_distributed_admm import DistributedADMMSolverParams
-from te.algorithms.base import SolverParams
+from typing import Tuple, ClassVar, Literal
+from te.algorithms.base import SolverParams, GurobiSolverParams
+from te.algorithms.array_utils import SINGLE_PRECISION
 
 
 @dataclass
-class AsynchronousADMMSolverParams(DistributedADMMSolverParams):
+class AsynchronousADMMSolverParams(GurobiSolverParams):
+    NumberOfEpochs: int = 100
+    Rho: float = 1.0
+    Eta: float = 8.0
+    Gamma: float = 1.0
+    QPIterations: int = 2
+    BigGamma: float = 1e-7
+    Precision: Literal['double', 'single', 'half'] = SINGLE_PRECISION
+    Seed: int = te.constants.DEFAULT_SEED
     Upsilon: int = 1
     WorkerBatchSize: int = 1
     Sigma: int = 1

@@ -1,3 +1,4 @@
+import signal
 from typing import Dict, Type, Callable, Tuple, Optional
 from abc import ABC, abstractmethod
 from te.algorithms.array_utils.cpu_utils import CPUArray
@@ -5,6 +6,11 @@ from te.algorithms.base import SolverParams
 
 
 class WorkerNodeCommunicationBackendBase(ABC):
+    @abstractmethod
+    def __init__(self):
+        self.is_alive = False
+        self.killed = False
+
     @classmethod
     @abstractmethod
     def backend_name(cls) -> str:
@@ -15,17 +21,53 @@ class WorkerNodeCommunicationBackendBase(ABC):
     def worker_id(self) -> int:
         """ID of the worker attached to this backend"""
     
+    @property
+    def is_alive(self) -> bool:
+        """Is the backend serving/receiving new messages?"""
+        return self._is_alive
+    @is_alive.setter
+    def is_alive(self, alive: bool):
+        self._is_alive = alive
+
+    @property
+    def killed(self) -> bool:
+        """Set to `True` when `die` is called"""
+        return self._killed
+    @killed.setter
+    def killed(self, kill: bool):
+        self._killed = kill
+    
     @abstractmethod
     def start(self):
-        """Start listening on the backend (should be non-blocking)"""
+        """Start the backend. After this command is executed, it should be ready to accept messages"""
     
     @abstractmethod
     def stop(self):
-        """Stop listening on the backend. May or may not cancel inflight RPCs"""
+        """
+        Stop accepting scattered updates.
+        The backend must still accept RPCs, since the controller
+        may want to get some information before it exits.
+        """
     
+    @abstractmethod
+    def die(self):
+        """
+        Completely close the backend, no questions asked.
+        Allowed to cancel inflight RPCs and leave incomplete requests
+        unfinished.
+        Optionally, may be invoked with `SIGTERM`.
+        """
+
     @abstractmethod
     def wait(self):
         """Wait until `stop` is called or the server is terminated"""
+
+    @abstractmethod
+    def close(self):
+        """
+        Close and cleanup all nodes attached to this backend.
+        If `die` was called, its behavior may be changed.
+        """
 
     @property
     def set_initial_feasible_solution(self) -> Callable[[CPUArray], None]:
@@ -90,12 +132,10 @@ class WorkerNodeCommunicationBackendBase(ABC):
     def set_solver_parameters(self, f: Callable[[SolverParams], None]):
         self._set_solver_parameters = f
     
-    @property
-    def close(self) -> Callable[[None], None]:
-        return self._close
-    @close.setter
-    def close(self, f: Callable[[None], None]):
-        self._close = f
+    def register_signal_handler(self):
+        """Delegate signal handling to the backend, otherwise, the controller/worker should do it"""
+        signal.signal(signal.SIGINT, self.stop)
+        signal.signal(signal.SIGTERM, self.die)
 
 
 _BACKENDS: Dict[str, Type[WorkerNodeCommunicationBackendBase]] = dict()

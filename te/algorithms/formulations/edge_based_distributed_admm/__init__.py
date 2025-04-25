@@ -32,6 +32,7 @@ class DistributedADMMWorkerRPCParams(SolverParams):
     NumThreads: int = 1
     WorkerID: int = 0
     Multicast: bool = False
+    Timeout: float = 5
 
     def __post_init__(self):
         self.left_column_share = 0.5

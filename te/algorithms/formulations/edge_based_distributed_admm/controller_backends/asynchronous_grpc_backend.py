@@ -1,5 +1,4 @@
 import grpc
-import signal
 import asyncio
 import numpy as np
 from typing import List, ClassVar, Optional
@@ -41,15 +40,21 @@ class AsynchronousgRPCBackend(ControllerCommunicationBackendBase):
             DistributedADMMSolverStub(ch) for ch in self._worker_channels
         ]
         self._event_loop = asyncio.get_event_loop()
-        self._is_alive = True
-
-        for sig in ('INT', 'TERM'):
-            signal.signal(getattr(signal, f'SIG{sig}'), self.int_handler)
     
-    def int_handler(self, _, __):
-        self._is_alive = False
-        for task in asyncio.all_tasks(self._event_loop):
-            task.cancel()
+    def start(self):
+        self.is_alive = True
+    
+    def stop(self):
+        self.is_alive = False
+    
+    def die(self):
+        self.is_alive = False
+        try:
+            for task in asyncio.all_tasks():
+                task.cancel()
+        except RuntimeError:
+            pass
+        self.killed = True
     
     @classmethod
     def backend_name(self) -> str:
@@ -60,6 +65,8 @@ class AsynchronousgRPCBackend(ControllerCommunicationBackendBase):
         return self._rpc_params.NumWorkers
 
     async def is_node_ready(self, worker_id: int) -> bool:
+        if not self.is_alive:
+            return False
         try:
             res = await self._worker_stubs[worker_id].QueryState(Empty())
             return res.ready
@@ -71,7 +78,7 @@ class AsynchronousgRPCBackend(ControllerCommunicationBackendBase):
         return all(results)
     
     def are_network_nodes_ready(self):
-        if not self._is_alive:
+        if not self.is_alive:
             return None
         return self._event_loop.run_until_complete(self._are_network_nodes_ready())
 
@@ -174,7 +181,8 @@ class AsynchronousgRPCBackend(ControllerCommunicationBackendBase):
         )
     
     def close(self):
-        self._event_loop.run_until_complete(self.aclose())
+        if not self.killed:
+            self._event_loop.run_until_complete(self.aclose())
     
     async def _set_active_commodity_count(self, K: int):
         message = distributed_lp_messages.ActiveCommodityCount(TotalNumberOfCommodities=K)

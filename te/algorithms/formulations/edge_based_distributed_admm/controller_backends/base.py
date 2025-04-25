@@ -1,3 +1,4 @@
+import signal
 from typing import Dict, Type, Tuple, Optional
 from abc import ABC, abstractmethod
 from te.algorithms.array_utils.cpu_utils import CPUArray
@@ -6,6 +7,11 @@ from .. import DistributedADMMControllerRPCParams
 
 
 class ControllerCommunicationBackendBase(ABC):
+    @abstractmethod
+    def __init__(self):
+        self.is_alive = False
+        self.killed = False
+
     @classmethod
     @abstractmethod
     def backend_name(cls) -> str:
@@ -15,6 +21,44 @@ class ControllerCommunicationBackendBase(ABC):
     @abstractmethod
     def number_of_nodes(self) -> int:
         """Number of nodes attached to this backend"""
+    
+    @property
+    def is_alive(self) -> bool:
+        """Is the backend serving/receiving new messages?"""
+        return self._is_alive
+    @is_alive.setter
+    def is_alive(self, alive: bool):
+        self._is_alive = alive
+
+    @property
+    def killed(self) -> bool:
+        """Set to `True` when `die` is called"""
+        return self._killed
+    @killed.setter
+    def killed(self, kill: bool):
+        self._killed = kill
+    
+    @abstractmethod
+    def start(self):
+        """Start the backend. After this command is executed, it should be ready to accept messages"""
+    
+    @abstractmethod
+    def stop(self):
+        """
+        Stop serving new requests. This function MUST be idempotent.
+        It may NOT close connections to the nodes, as the controller may
+        want to do a final back-and-forth in the end.
+        Optionally, it will attach to the `SIGINT` signal handler.
+        """
+    
+    @abstractmethod
+    def die(self):
+        """
+        Completely close the backend, no questions asked.
+        Allowed to cancel inflight RPCs and leave incomplete requests
+        unfinished.
+        Optionally, may be invoked with `SIGTERM`.
+        """
 
     @abstractmethod
     def are_network_nodes_ready(self) -> bool:
@@ -44,13 +88,21 @@ class ControllerCommunicationBackendBase(ABC):
     def reconvene_network_updates(self, P_bar_t: CPUArray, Y_bar_t: CPUArray, u_t: CPUArray):
         """Finalize network updates for a single inner ADMM iteration"""
     
-    # @abstractmethod
+    @abstractmethod
     def set_active_commodity_count(self, K: int):
         """Set total number of active commodities in the network (needed for local updates)"""
     
     @abstractmethod
     def close(self):
-        """Close and cleanup all nodes attached to this backend"""
+        """
+        Close and cleanup all nodes attached to this backend.
+        If `die` was called, its behavior may be changed.
+        """
+    
+    def register_signal_handler(self):
+        """Delegate signal handling to the backend, otherwise, the controller/worker should do it"""
+        signal.signal(signal.SIGINT, self.stop)
+        signal.signal(signal.SIGTERM, self.die)
 
 
 _BACKENDS: Dict[str, Type[ControllerCommunicationBackendBase]] = dict()
