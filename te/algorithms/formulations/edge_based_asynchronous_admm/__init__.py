@@ -1,6 +1,6 @@
 import te.constants
 from dataclasses import dataclass
-from typing import Tuple, ClassVar, Literal
+from typing import Tuple, ClassVar, Literal, Optional
 from te.algorithms.base import SolverParams, GurobiSolverParams
 from te.algorithms.array_utils import SINGLE_PRECISION
 
@@ -26,7 +26,7 @@ class AsynchronousADMMControllerRPCParams(SolverParams):
     AddressList: Tuple[Tuple[str, int]] = (("localhost", 13000),)
     NumWorkers: int = 2
     Backend: ClassVar[str] = ""
-    QueueTimeout: float = 5.0
+    QueueTimeout: float = 1.0
 
     def __post_init__(self):
         self.left_column_share = 0.2
@@ -39,7 +39,8 @@ class AsynchronousADMMWorkerRPCParams(SolverParams):
     NumThreads: int = 1
     WorkerID: int = 0
     Backend: ClassVar[str] = ""
-    QueueTimeout: float = 5.0
+    QueueTimeout: float = 1.0
+    QuitTimeout: Optional[float] = 30.0
     
     def __post_init__(self):
         self.left_column_share = 0.5

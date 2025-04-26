@@ -1,3 +1,4 @@
+import signal
 from abc import abstractmethod, ABC
 from typing import Type, Dict, Callable, List, Tuple, Optional
 from te.algorithms.array_utils.cpu_utils import CPUArray
@@ -6,6 +7,11 @@ from .. import AsynchronousADMMWorkerRPCParams
 
 
 class WorkerNodeCommunicationBackendBase(ABC):
+    @abstractmethod
+    def __init__(self):
+        self.is_alive = False
+        self.killed = False
+    
     @classmethod
     @abstractmethod
     def backend_name(cls) -> str:
@@ -32,9 +38,44 @@ class WorkerNodeCommunicationBackendBase(ABC):
     def WorkerBatchSize(self, size: int):
         self._WorkerBatchSize = size
     
+    @property
+    def is_alive(self) -> bool:
+        return self._is_alive
+    @is_alive.setter
+    def is_alive(self, alive: bool):
+        self._is_alive = alive
+
+    @property
+    def killed(self) -> bool:
+        return self._killed
+    @killed.setter
+    def killed(self, kill: bool):
+        self._killed = kill
+    
+    @abstractmethod
+    def start(self):
+        pass
+    
     @abstractmethod
     def stop(self):
-        """Stop collecting updates (MUST be idempotent)"""
+        pass
+    
+    @abstractmethod
+    def die(self):
+        pass
+
+    @abstractmethod
+    def wait_for_close(self) -> bool:
+        """
+        This method is called when the worker ends the solution procedure and just waits for the
+        controller to give the go on quitting (this is done by calling the `Close` RPC).
+        Optionally, it may have a timeout, afterwhich the worker will quit anyway.
+        On timeout, returns `True`, else `False`.
+        """
+
+    def register_signal_handler(self):
+        signal.signal(signal.SIGINT, self.stop)
+        signal.signal(signal.SIGTERM, self.die)
 
     @abstractmethod
     def wait_until_initialized(self) -> bool:

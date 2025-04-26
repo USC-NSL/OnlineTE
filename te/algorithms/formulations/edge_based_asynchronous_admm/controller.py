@@ -79,9 +79,9 @@ class ControllerNode(TrafficEngineeringLP):
             f'{solver_params.Upsilon} > {rpc_params.NumWorkers}'
         
         self._is_active = False
-
-        for sig in ('INT', 'TERM'):
-            signal.signal(getattr(signal, 'SIG'+sig), self.int_handler)
+        self._die_on_next_int = False
+        signal.signal(signal.SIGINT, self.stop)
+        signal.signal(signal.SIGTERM, self.die)
 
         set_global_precision(solver_params.Precision)
         set_cpu_float_precision()
@@ -95,6 +95,7 @@ class ControllerNode(TrafficEngineeringLP):
         self._partitioned_Y_bar = \
             [cpu_zeros((self._T,)) for _ in range(self._rpc_params.NumWorkers)]
         self._report_problem_size()
+        self._backend.start()
         self._is_active = True
     
     @property
@@ -105,11 +106,6 @@ class ControllerNode(TrafficEngineeringLP):
     def is_active(self) -> bool:
         return self._is_active
     
-    def int_handler(self, _, __):
-        self._is_active = False
-        self._backend.stop()
-        print(as_warning('Interrupted. Will no longer serve update requests or solutions.'))
-
     @property
     def graph(self) -> nx.DiGraph:
         return self._graph
@@ -142,6 +138,22 @@ class ControllerNode(TrafficEngineeringLP):
     def assignments(self) -> np.ndarray:
         assert self._X_ek is not None
         return self._X_ek
+
+    def stop(self, _, __):
+        if self._die_on_next_int:
+            signal.raise_signal(signal.SIGTERM)
+        else:
+            print(as_warning('SIGINT: Stopping worker. Invoke again to kill the process.'))
+            if self._backend:
+                self._backend.stop()
+            self._is_active = False
+            self._die_on_next_int = True
+    
+    def die(self, _, __):
+        print(as_warning('SIGTERM: Killing the worker.'))
+        if self._backend:
+            self._backend.die()
+        self._is_active = False
 
     @record_cpu_runtime('Feasible-Assignment')
     def _set_initial_feasible_solution(self):
@@ -324,6 +336,8 @@ class ControllerNode(TrafficEngineeringLP):
             self._partitioned_Y_bar[worker_id] = Y_bar
             runtimes.append(runtime)
         self._Y_bar_t = np.mean(self._partitioned_Y_bar, axis=0)
+        self._update_P_bar()
+        self._update_u_t()
         return max(runtimes)
     
     def _wait_for_minimum_updates(self) -> bool:
@@ -341,10 +355,10 @@ class ControllerNode(TrafficEngineeringLP):
         PARAMS = self._solver_params
         EPOCHS = params if params is not None else PARAMS.NumberOfEpochs
         
-        self._backend.start_gatherer()
         try:
             t = time.time()
-            for epoch in tqdm.tqdm(range(EPOCHS), bar_format='{l_bar}{bar:36}{r_bar}{bar:-36b}'):
+            for _ in tqdm.tqdm(range(EPOCHS), bar_format='{l_bar}{bar:36}{r_bar}{bar:-36b}'):
+            # for epoch in range(EPOCHS):
                 if not self._is_active:
                     break
                 optimize_or_scream(MODEL_CONTROLLER)

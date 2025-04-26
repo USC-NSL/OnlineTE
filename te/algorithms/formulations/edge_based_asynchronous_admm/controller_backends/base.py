@@ -1,3 +1,4 @@
+import signal
 from typing import Dict, Type, Tuple, List
 from abc import ABC, abstractmethod
 from te.algorithms.array_utils.cpu_utils import CPUArray
@@ -10,6 +11,11 @@ NetworkUpdate = Tuple[int, CPUArray]
 
 
 class ControllerCommunicationBackendBase(ABC):
+    @abstractmethod
+    def __init__(self):
+        self.is_alive = False
+        self.killed = False
+    
     @classmethod
     @abstractmethod
     def backend_name(cls) -> str:
@@ -28,10 +34,36 @@ class ControllerCommunicationBackendBase(ABC):
     def Upsilon(self, upsilon: int):
         self._upsilon = upsilon
     
+    @property
+    def is_alive(self) -> bool:
+        return self._is_alive
+    @is_alive.setter
+    def is_alive(self, alive: bool):
+        self._is_alive = alive
+
+    @property
+    def killed(self) -> bool:
+        return self._killed
+    @killed.setter
+    def killed(self, kill: bool):
+        self._killed = kill
+    
+    @abstractmethod
+    def start(self):
+        pass
+    
     @abstractmethod
     def stop(self):
-        """Stop the backend from processing new requests (MUST be idempotent)"""
+        pass
     
+    @abstractmethod
+    def die(self):
+        pass
+
+    def register_signal_handler(self):
+        signal.signal(signal.SIGINT, self.stop)
+        signal.signal(signal.SIGTERM, self.die)
+
     @abstractmethod
     def update_network_nodes(self, P_bar_t: CPUArray, Y_bar_t: CPUArray, u_t: CPUArray):
         """Broadcast an update message to the network nodes"""

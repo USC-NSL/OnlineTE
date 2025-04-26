@@ -1,11 +1,10 @@
 import grpc
-import queue
-import signal
 import socket
 import struct
 import asyncio
 import threading
 import numpy as np
+from collections import deque
 from dataclasses import dataclass
 from typing import List, ClassVar, Optional, Tuple, Any
 from te.algorithms.array_utils.cpu_utils import CPUArray
@@ -28,7 +27,7 @@ class MulticastControllerBackendParams(AsynchronousADMMControllerRPCParams):
     ScatterAddress: str = '224.0.0.10'
     TTL: int = 2
     ScatterPort: int = 12000
-    SocketTimeout: float = 5
+    SocketTimeout: float = 1.0
     Hostname: str = socket.gethostname()
     ListenPort: int = 11000
     
@@ -102,8 +101,8 @@ class MulticastBackend(ControllerCommunicationBackendBase):
         self._scatter_socket.settimeout(rpc_params.SocketTimeout)
         self._event_loop = asyncio.get_event_loop()
 
-        self.is_active = True
-        self._update_queue = queue.Queue()
+        self._update_sem = threading.Semaphore(value=0)
+        self._update_queue = deque()
         self._gatherer_loop: Optional[threading.Thread] = None
     
     @classmethod
@@ -114,39 +113,66 @@ class MulticastBackend(ControllerCommunicationBackendBase):
     def number_of_nodes(self) -> int:
         return self._rpc_params.NumWorkers
     
-    def int_handler(self, _, __):
-        self.stop()
-
-    def register_signal_handler(self):
-        for sig in ('TERM', 'INT'):
-            signal.signal(getattr(signal, 'SIG'+sig), self.int_handler)
+    def start(self):
+        self._gatherer_loop = threading.Thread(target=self.gatherer_loop)
+        self.is_alive = True
+        self._gatherer_loop.start()
+    
+    def stop(self):
+        self.is_alive = False
+    
+    def die(self):
+        self.is_alive = False
+        try:
+            for task in asyncio.all_tasks():
+                task.cancel()
+        except RuntimeError:
+            pass
+        self.killed = True
 
     def stop(self):
-        self.is_active = False
-    
-    def start_gatherer(self):
-        self._gatherer_loop = threading.Thread(target=self.gatherer_loop)
-        self._gatherer_loop.start()
+        self.is_alive = False
     
     def gatherer_loop(self):
         buffer = b''
-        while self.is_active:
-            try:
-                packet = self._scatter_socket.recv(10240)
-                buffer += packet
-                update = TLVRPCMessages.get_packet_rpc_message(buffer)
-                if update is not None:
-                    update_type, consumed_length, request = update
-                    assert update_type == TLVRPCMessages.NetworkUpdate and \
-                           isinstance(request, asynchronous_lp_messages.SwitchMessage)
-                    self._update_queue.put_nowait((request.worker_id, (request.runtime_ns, serialized_message_to_array(request.means))))
-                    buffer = buffer[consumed_length:]
-            except socket.timeout:
-                pass
+        try:
+            while self.is_alive:
+                try:
+                    packet = self._scatter_socket.recv(10240)
+                    buffer += packet
+                    update = TLVRPCMessages.get_packet_rpc_message(buffer)
+                    if update is not None:
+                        update_type, consumed_length, request = update
+                        assert update_type == TLVRPCMessages.NetworkUpdate and \
+                            isinstance(request, asynchronous_lp_messages.SwitchMessage)
+                        self._update_queue.append((
+                            request.worker_id, 
+                            (request.runtime_ns, serialized_message_to_array(request.means))
+                        ))
+                        self._update_sem.release()
+                        buffer = buffer[consumed_length:]
+                except socket.timeout:
+                    pass
+        except OSError as e:
+            print(f'Error in gatherer loop: {e}')
+        finally:
+            if self._scatter_socket:
+                self._scatter_socket.close()
+                self._scatter_socket = None
+
+    def get_network_updates(self) -> List[Tuple[int, NetworkUpdate]]:
+        gathered_updates = []
+        while self.is_alive:
+            if not self._update_sem.acquire(timeout=self._rpc_params.QueueTimeout):
+                continue
+            gathered_updates.append(self._update_queue.popleft())
+            if len(gathered_updates) >= self.Upsilon:
+                break
+        return gathered_updates
 
     async def is_node_ready(self, worker_id: int) -> bool:
         try:
-            res = await self._worker_stubs[worker_id].QueryState(Empty())
+            res: asynchronous_lp_messages.State = await self._worker_stubs[worker_id].QueryState(Empty())
             return res.ready
         except grpc.aio._call.AioRpcError:
             return False
@@ -214,21 +240,6 @@ class MulticastBackend(ControllerCommunicationBackendBase):
             u_t = array_to_serialized_message(u_t)
         )
         self._scatter_socket.sendto(TLVRPCMessages.serialize_controller_update(message), self.SCATTER_ADDRESS)
-        print(f'Sent updates to the switches at {self.SCATTER_ADDRESS}')
-
-    def get_network_updates(self) -> List[Tuple[int, NetworkUpdate]]:
-        gathered_updates = []
-        while self.is_active:
-            try:
-                print('Getting updates')
-                update = self._update_queue.get(timeout=self._rpc_params.QueueTimeout)
-                gathered_updates.append(update)
-                if len(gathered_updates) >= self.Upsilon:
-                    break
-            except queue.Empty:
-                print('No update yet ...')
-                pass
-        return gathered_updates
 
     async def _close_node(self, worker_id: int):
         try:
@@ -247,7 +258,8 @@ class MulticastBackend(ControllerCommunicationBackendBase):
         self._event_loop.run_until_complete(self.aclose())
         if self._gatherer_loop is not None:
             self._gatherer_loop.join()
-        self._scatter_socket.close()
+        if self._scatter_socket is not None:
+            self._scatter_socket.close()
 
     async def _set_active_commodity_count(self, K: int):
         message = asynchronous_lp_messages.ActiveCommodityCount(TotalNumberOfCommodities=K)

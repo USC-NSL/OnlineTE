@@ -1,11 +1,10 @@
 import sys
 import time
 import signal
-import threading
 import contextlib
 import numpy as np
 from typing import List, Tuple, Optional
-from utils.logging import as_warning
+from utils.logging import as_warning, as_info
 from te.algorithms.array_utils import set_global_precision
 from te.algorithms.array_utils.cpu_utils import CPUArray, cpu_zeros, cpu_array, set_cpu_float_precision
 from .worker_backends.base import WorkerNodeCommunicationBackendBase
@@ -38,16 +37,23 @@ class NetworkWorkerNode:
         self._backend: Optional[MulticastBackend] = None
 
         self._is_active: bool = False
-        self._quit_event: threading.Event = threading.Event()
+        self._die_on_next_int = False
+        signal.signal(signal.SIGINT, self.stop)
+        signal.signal(signal.SIGTERM, self.die)
 
-        for sig in ('INT', 'TERM'):
-            signal.signal(getattr(signal, 'SIG'+sig), self.int_handler)
-
-    def int_handler(self, _, __):
-        self._is_active = False
-        self._quit_event.set()
-        self._backend.stop()
-        print(as_warning('Interrupted. Will no longer serve update requests or solutions.'))
+    def stop(self, _, __):
+        if self._die_on_next_int:
+            signal.raise_signal(signal.SIGTERM)
+        else:
+            print(as_warning('SIGINT: Stopping worker. Invoke again to kill the process.'))
+            if self._backend:
+                self._backend.stop()
+            self._die_on_next_int = True
+    
+    def die(self, _, __):
+        print(as_warning('SIGTERM: Killing the worker.'))
+        if self._backend:
+            self._backend.die()
     
     def initialize(self):
         self._backend: WorkerNodeCommunicationBackendBase = MulticastBackend(self._rpc_params)
@@ -57,8 +63,8 @@ class NetworkWorkerNode:
         self._backend.report_chunk = self.report_chunk
         self._backend.set_active_commodity_count = self.set_active_commodity_count
         self._backend.is_initialized = self.is_initialized
+        self._backend.start()
         self._is_active = True
-        self._quit_event.clear()
 
     def set_solver_parameters(self, new_params: AsynchronousADMMSolverParams):
         self._solver_params = new_params
@@ -129,7 +135,7 @@ class NetworkWorkerNode:
         self._S_ek_chunk = S_EK_CHUNK
         self._t_ek_chunk = T_EK_CHUNK
         return time.perf_counter_ns() - start, np.mean(self._Y_tk_chunk, axis=1)
-    
+
     def set_active_commodity_count(self, K: int):
         self._K = K
 
@@ -148,10 +154,6 @@ class NetworkWorkerNode:
                 if len(controller_update_batch) > 0:
                     number_of_consecutive_updates = 0
                     self.consume_batch_update(controller_update_batch)
-                else:
-                    print('No controller update available right now but '
-                          f'{number_of_consecutive_updates} < {self._solver_params.Sigma}. '
-                          'Will do an iteration anyway')
             else:
                 break
             runtime, Y_bar = self.do_inner_loop_admm_update()
@@ -164,6 +166,13 @@ class NetworkWorkerNode:
         with contextlib.closing(NetworkWorkerNode(rpc_params, solver_params)) as worker:
             worker.initialize()
             worker.solve()
+            if worker._is_active:
+                if worker._backend.killed:
+                    print(as_warning('Aborting'))
+                else:
+                    print(as_info('Solution process ended. Will wait for the controller to close.'))
+                    if worker._backend.wait_for_close():
+                        print(as_warning('Will not wait for the controller anymore. Quitting ...'))
 
     def report_chunk(self) -> CPUArray:
         return cpu_array(self._Y_tk_chunk)

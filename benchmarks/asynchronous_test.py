@@ -209,7 +209,8 @@ if __name__ == '__main__':
                                                 help='Multicast packet TTL (should be at least 2)')
 
     host_params_group = parser.add_argument_group('Remote Host Parameters')
-    host_params_group.add_argument('--hosts', nargs='*', default=[], help='List of remote hosts to connect to')
+    host_params_group.add_argument('--chost', default=CONTROLLER_RPC_PARAMS.Hostname, help='Controller hostname')
+    host_params_group.add_argument('--shosts', nargs='*', default=[], help='List of remote hosts to connect to')
     
     # TODO: Param for queue timeout, socket timeout
     
@@ -248,16 +249,16 @@ if __name__ == '__main__':
             save_solution=args.save_sol, report=args.report_unsat
         )
     else:
-        if len(args.hosts) > 0:
-            assert len(args.hosts) == args.num_workers
-            hosts = [(host, args.gport_base + worker_id) for worker_id, host in enumerate(args.hosts)]
+        if len(args.shosts) > 0:
+            assert len(args.shosts) == args.num_workers
+            hosts = [(host, args.gport_base + worker_id) for worker_id, host in enumerate(args.shosts)]
         else:
             hosts = [(f'n{worker_id}', args.gport_base + worker_id) 
                         for worker_id in range(args.num_workers)]
         CONTROLLER_RPC_PARAMS = MulticastControllerBackendParams(
-            AddressList=tuple([(LOCAL_HOST, args.gport_base + worker_id) for worker_id in range(args.num_workers)]),
+            AddressList=tuple(hosts),
             NumWorkers=args.num_workers, ScatterAddress=args.group, ScatterPort=args.mport,
-            Hostname=LOCAL_HOST, ListenPort=args.cport, TTL=args.ttl
+            Hostname=args.chost, ListenPort=args.cport, TTL=args.ttl
         )
         remote_asynchronous_admm_test(args.topo, args.seed, args.scale_factor, 
                                       save_solution=args.save_sol, report=args.report_unsat)
