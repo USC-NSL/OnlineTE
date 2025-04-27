@@ -103,11 +103,12 @@ class MulticastBackend(WorkerNodeCommunicationBackendBase):
                         update_type, consumed_length, request = update
                         assert update_type == TLVRPCMessages.ControllerUpdate and \
                             isinstance(request, asynchronous_lp_messages.ControllerMessage)
-                        self._update_queue.append((
-                            serialized_message_to_array(request.u_t),
-                            serialized_message_to_array(request.P_bar_t),
-                            serialized_message_to_array(request.Y_bar_t)
-                        ))
+                        if self.worker_id in request.Workers:
+                            self._update_queue.append((
+                                serialized_message_to_array(request.u_t),
+                                serialized_message_to_array(request.P_bar_t),
+                                serialized_message_to_array(request.Y_bar_t)
+                            ))
                         self._update_sem.release()
                         buffer = buffer[consumed_length:]
                 except socket.timeout:

@@ -17,6 +17,7 @@ message ControllerMessage {
     SerializedNumpyArrayMessage P_bar_t = 1;
     SerializedNumpyArrayMessage u_t = 2;
     SerializedNumpyArrayMessage Y_bar_t = 3;
+    repeated int32 Workers = 4;
 }
 
 message SwitchMessage {

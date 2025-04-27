@@ -104,6 +104,8 @@ class MulticastBackend(ControllerCommunicationBackendBase):
         self._update_sem = threading.Semaphore(value=0)
         self._update_queue = deque()
         self._gatherer_loop: Optional[threading.Thread] = None
+
+        self._gathered_workers: Optional[List[int]] = None
     
     @classmethod
     def backend_name(self) -> str:
@@ -162,11 +164,16 @@ class MulticastBackend(ControllerCommunicationBackendBase):
 
     def get_network_updates(self) -> List[Tuple[int, NetworkUpdate]]:
         gathered_updates = []
+        workers = []
         while self.is_alive:
             if not self._update_sem.acquire(timeout=self._rpc_params.QueueTimeout):
                 continue
-            gathered_updates.append(self._update_queue.popleft())
+            worker, update = self._update_queue.popleft()
+            gathered_updates.append((worker, update))
+            workers.append(worker)
             if len(gathered_updates) >= self.Upsilon:
+                assert self._gathered_workers is None
+                self._gathered_workers = workers
                 break
         return gathered_updates
 
@@ -234,11 +241,14 @@ class MulticastBackend(ControllerCommunicationBackendBase):
             return None
     
     def update_network_nodes(self, P_bar_t: CPUArray, Y_bar_t: CPUArray, u_t: CPUArray):
+        assert self._gathered_workers is not None
         message = asynchronous_lp_messages.ControllerMessage(
             P_bar_t = array_to_serialized_message(P_bar_t),
             Y_bar_t = array_to_serialized_message(Y_bar_t),
-            u_t = array_to_serialized_message(u_t)
+            u_t = array_to_serialized_message(u_t),
+            Workers = self._gathered_workers
         )
+        self._gathered_workers = None
         self._scatter_socket.sendto(TLVRPCMessages.serialize_controller_update(message), self.SCATTER_ADDRESS)
 
     async def _close_node(self, worker_id: int):
