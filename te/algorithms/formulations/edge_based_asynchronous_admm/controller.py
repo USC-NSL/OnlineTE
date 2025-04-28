@@ -17,7 +17,7 @@ from te.algorithms.array_utils.cpu_utils import (CPUArray, DoublePrecisionCPUArr
                                                  set_cpu_float_precision)
 from te.algorithms.statistics.helpers import record_cpu_runtime, record_return_value
 from te.algorithms.utils import (check_capacity_constraint, optimize_or_scream, make_model, 
-                                 get_solution_maximum_utilization)
+                                 get_solution_maximum_utilization, tupledict_to_array)
 from .controller_backends import get_backend
 from .controller_backends.base import ControllerCommunicationBackendBase, NetworkUpdate
 from . import AsynchronousADMMSolverParams, AsynchronousADMMControllerRPCParams
@@ -58,9 +58,9 @@ class ControllerNode(TrafficEngineeringLP):
         self._X_ek: Optional[CPUArray] = None
         self._X_ek_start: Optional[CPUArray] = None
         self._Xo_e_start: Optional[CPUArray] = None
-        self._Xo_e_assigned: Optional[CPUArray] = None
-        self._Xo_e: Optional[gurobipy.tupledict] = None
+        self._Zo_e_var: Optional[gurobipy.tupledict] = None
         self._Zo_e: Optional[CPUArray] = None
+        self._total_flow: Optional[CPUArray] = None
         self._utility: Optional[gurobipy.Var] = None
         self._r_e: Optional[CPUArray] = None
 
@@ -182,6 +182,7 @@ class ControllerNode(TrafficEngineeringLP):
         self._P_bar_t = cpu_zeros((T,))
         self._Y_bar_t = cpu_zeros((T,))
         self._X_ek = cpu_array(self._X_ek_start)
+        self._total_flow = cpu_array(self._Xo_e_start)
     
     def are_network_nodes_ready(self) -> bool:
         return self._backend.are_network_nodes_ready()
@@ -216,13 +217,13 @@ class ControllerNode(TrafficEngineeringLP):
             make_model('EdgeBasedDistributedTE_Controller', 
                        params=PARAMS, env=ENV, BarConvTol=PARAMS.BigGamma)
         
-        self._Xo_e = MODEL_CONTROLLER.addVars(NUM_EDGES, lb=0.0, vtype=GRB.CONTINUOUS, name='XO_E')
+        self._Zo_e_var = MODEL_CONTROLLER.addVars(NUM_EDGES, lb=0.0, vtype=GRB.CONTINUOUS, name='ZO_E')
         self._utility = MODEL_CONTROLLER.addVar(lb=0.0, ub=1.0, vtype=GRB.CONTINUOUS, name='U')
 
         self._model_controller = MODEL_CONTROLLER
     
     def _get_F(self) -> np.ndarray:
-        return self._Zo_e + self._r_e - self._Xo_e_start
+        return self._Zo_e - self._Xo_e_start - self._r_e
     
     def _set_X_ek(self):
         result = self._backend.get_X_ek(
@@ -236,19 +237,19 @@ class ControllerNode(TrafficEngineeringLP):
         assert self._model_controller is not None
 
         GRAPH = self._graph
-        XO_E = self._Xo_e
+        ZO_E = self._Zo_e_var
         UTILITY = self._utility
         MODEL_CONTROLLER = self._model_controller
 
         for i, (_, _, c_e) in enumerate(GRAPH.edges(data='capacity')):
-            MODEL_CONTROLLER.addConstr(XO_E[i] / c_e <= UTILITY)
+            MODEL_CONTROLLER.addConstr(ZO_E[i] / c_e <= UTILITY)
     
     @record_cpu_runtime('Controller-Update')
     def _update_controller_objective(self):
         NUM_EDGES = self._NUM_EDGES
         UTILITY = self._utility
-        XO_E = self._Xo_e
-        ZO_E = self._Zo_e
+        TOTAL_FLOW = self._total_flow
+        ZO_E = self._Zo_e_var
         R_E = self._r_e
         RHO = self._solver_params.Rho
         MODEL_CONTROLLER = self._model_controller
@@ -256,7 +257,7 @@ class ControllerNode(TrafficEngineeringLP):
         OBJECTIVE_CONTROLLER = gurobipy.QuadExpr()
         OBJECTIVE_CONTROLLER.addTerms(self._c_norm * np.sqrt(NUM_EDGES), UTILITY)
         for e in range(NUM_EDGES):
-            OBJECTIVE_CONTROLLER += (RHO/2) * (XO_E[e] - ZO_E[e] + R_E[e]) ** 2
+            OBJECTIVE_CONTROLLER += (RHO/2) * (TOTAL_FLOW[e] - ZO_E[e] + R_E[e]) ** 2
         MODEL_CONTROLLER.setObjective(OBJECTIVE_CONTROLLER, GRB.MINIMIZE)
         self._objective_controller = OBJECTIVE_CONTROLLER
     
@@ -264,6 +265,11 @@ class ControllerNode(TrafficEngineeringLP):
         assert self._model_controller is not None
 
         self._update_controller_objective()
+    
+    def _update_total_flow(self):
+        assert self._model_controller is not None
+
+        self._total_flow = self._Xo_e_start + len(self._commodity_list) * self._NULL_M @ self._Y_bar_t
     
     def _update_P_bar(self):
         assert self._model_controller is not None
@@ -287,20 +293,16 @@ class ControllerNode(TrafficEngineeringLP):
 
         self._u_t = U_T + (Y_BAR_T - P_BAR_T)
     
-    @record_cpu_runtime('Update-Zo-Re')
-    def _update_Zo_e_and_r_e(self):
+    @record_cpu_runtime('Controller-Optim')
+    def _optimize_controller(self):
         assert self._model_controller is not None
 
-        NUM_EDGES = self._NUM_EDGES
         R_E = self._r_e
-        XO_E = self._Xo_e
-        XO_E_ = cpu_array([XO_E[e].X for e in range(NUM_EDGES)])
-        X_KE_SUM_E = self._Xo_e_start + len(self._commodity_list) * self._NULL_M @ self._Y_bar_t
-
-        Zo_e = (XO_E_ + X_KE_SUM_E) / 2
-        self._Zo_e = Zo_e
-        self._r_e = R_E + (XO_E_ - X_KE_SUM_E) / 2
-        self._Xo_e_assigned = X_KE_SUM_E
+        TOTAL_FLOW = self._total_flow
+        optimize_or_scream(self._model_controller)
+        ZO_E = tupledict_to_array(self._Zo_e_var)
+        self._Zo_e = ZO_E
+        self._r_e = R_E + (TOTAL_FLOW - ZO_E)
 
     def close(self):
         self._backend.close()
@@ -336,10 +338,13 @@ class ControllerNode(TrafficEngineeringLP):
             self._partitioned_Y_bar[worker_id] = Y_bar
             runtimes.append(runtime)
         self._Y_bar_t = np.mean(self._partitioned_Y_bar, axis=0)
+        self._update_total_flow()
         self._update_P_bar()
         self._update_u_t()
+        self._update_controller_objective()
         return max(runtimes)
     
+    @record_cpu_runtime('Controller-Update')
     def _wait_for_minimum_updates(self) -> bool:
         gathered_updates = self._backend.get_network_updates()
         if len(gathered_updates) < self._solver_params.Upsilon:
@@ -351,7 +356,6 @@ class ControllerNode(TrafficEngineeringLP):
     
     @record_cpu_runtime('Solve')
     def solve(self, params = None):
-        MODEL_CONTROLLER = self._model_controller
         PARAMS = self._solver_params
         EPOCHS = params if params is not None else PARAMS.NumberOfEpochs
         
@@ -359,18 +363,14 @@ class ControllerNode(TrafficEngineeringLP):
             t = time.time()
             for _ in tqdm.tqdm(range(EPOCHS), bar_format='{l_bar}{bar:36}{r_bar}{bar:-36b}'):
             # for epoch in range(EPOCHS):
-                if not self._is_active:
+                if not (self._is_active and self._wait_for_minimum_updates()):
                     break
-                optimize_or_scream(MODEL_CONTROLLER)
-                if not self._wait_for_minimum_updates():
-                    break
-                self._update_Zo_e_and_r_e()
-                self._update_controller_objective()
+                self._optimize_controller()
                 self._backend.update_network_nodes(self._P_bar_t, self._Y_bar_t, self._u_t)
                 
                 self._objective_trace.append((
                     self._utility.X, 
-                    get_solution_maximum_utilization(self._Xo_e_assigned, self._graph)
+                    get_solution_maximum_utilization(self._total_flow, self._graph)
                 ))
             self._set_X_ek()
             return time.time() - t
@@ -378,15 +378,14 @@ class ControllerNode(TrafficEngineeringLP):
             print(f'Error code {e.errno}: {e}')
             return -1
 
-    
     def check(self, feasibility_tol: Optional[float] = None, 
               feasibility_ratio: Optional[float] = None, report: bool = False):
         NUM_EDGES = self._NUM_EDGES
 
         # Are outer ADMM pairs in consensus?
-        XO_E = np.array([self._Xo_e[e].X for e in range(NUM_EDGES)])
+        TOTAL_FLOW = self._total_flow
         ZO_E = self._Zo_e
-        outer_admm_consensus_test(XO_E, ZO_E, feasibility_tol, feasibility_ratio, report)
+        outer_admm_consensus_test(TOTAL_FLOW, ZO_E, feasibility_tol, feasibility_ratio, report)
         
         # Are inner ADMM pairs in consensus?
         Y_BAR_T = self._Y_bar_t

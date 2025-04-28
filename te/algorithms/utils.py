@@ -18,6 +18,7 @@ from utils.exceptions import SolutionInterrupted
 from utils.logging import (as_bold, as_fail, as_info, as_success, as_warning, method_to_str, 
                            str_round, log_section_title)
 from te.traffic_models.base import Commodity, TrafficMatrixBase
+from te.algorithms.array_utils.cpu_utils import cpu_array, CPUArray
 from te.algorithms.base import TrafficEngineeringLP, SolverParams, GurobiSolverParams
 from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution, EdgeBasedMinimizeMaximumUtilitySolutionParams
 from te.algorithms.statistics.helpers import record_cpu_runtime
@@ -59,6 +60,11 @@ def make_model(name: str, params: SolverParams, env: Optional[gurobipy.Env], ver
         print(as_warning(f'Simplex and Barrier have different convergence tolerances. Make sure this is actualy intended to be!!'))
 
     return model
+
+
+def tupledict_to_array(tpd: gurobipy.tupledict) -> CPUArray:
+    """Convert a Gurobi tupledict to a `CPUArray`"""
+    return cpu_array([tpd[i].X for i in range(len(tpd.keys()))])
 
 
 @record_cpu_runtime('Gurobi-Solve')
