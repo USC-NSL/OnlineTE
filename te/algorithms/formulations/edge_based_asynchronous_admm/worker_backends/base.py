@@ -91,7 +91,7 @@ class WorkerNodeCommunicationBackendBase(ABC):
         """
     
     @abstractmethod
-    def send_update_to_controller(self, runtime: int, Y_bar: CPUArray):
+    def send_update_to_controller(self, runtime: int, Y_bar: CPUArray, total_flow: Optional[CPUArray] = None):
         """Send an update to the controller"""
 
     @property
@@ -100,6 +100,13 @@ class WorkerNodeCommunicationBackendBase(ABC):
     @set_initial_feasible_solution.setter
     def set_initial_feasible_solution(self, f: Callable[[CPUArray], None]):
         self._set_initial_feasible_solution = f
+
+    @property
+    def set_mask(self) -> Callable[[CPUArray], None]:
+        return self._set_mask
+    @set_mask.setter
+    def set_mask(self, f: Callable[[CPUArray], None]):
+        self._set_mask = f
 
     @property
     def set_null_space_basis(self) -> Callable[[CPUArray], None]:

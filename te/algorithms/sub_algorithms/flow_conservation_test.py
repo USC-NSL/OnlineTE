@@ -4,7 +4,7 @@ import networkx as nx
 from itertools import groupby
 from collections import Counter
 from joblib import Parallel, delayed
-from typing import Optional, List, Tuple, NewType
+from typing import Optional, List, Tuple, Callable, NewType
 from collections import defaultdict
 from te.traffic_models.base import Commodity
 from te.algorithms.array_utils.cpu_utils import cpu_mmap, cpu_dump
@@ -86,7 +86,7 @@ def get_violation_severity(violation: Violation) -> ViolationSeverity:
         Relative error here is enough. If it starts to build up, then
         we will catch it when looking at the source/destination nodes.
         """
-        if is_satisfied(actual, demand, feasibility_ratio=SEVERE_VIOLATION_REL_TOL):
+        if is_satisfied(actual, demand, feasibility_ratio=SEVERE_VIOLATION_REL_TOL, feasibility_tol=None):
             return LEVEL_MILD
         return LEVEL_SEVERE
     else:
@@ -179,26 +179,40 @@ def _check_centralized_flow_conservation(
                     violations.append((VIOLATION_INFLOW, k+shift, v, fin, DEMAND))
             else:
                 if not is_satisfied(fout, fin, feasibility_tol, feasibility_ratio):
-                    violations.append((VIOLATION_INFLOW, k+shift, v, fin, fout))
+                    violations.append((VIOLATION_TRANSIT, k+shift, v, fin, fout))
     return violations
 
 
-def report_violations(violations: List[Violation]):
+def _print_violation_details(violations: List[Violation], formatter: Callable[[str], str]):
     for violation_type, k, v, actual, should_be in violations:
         actual_str = str_round(actual, 4)
         should_be_str = str_round(should_be, 4)
         if violation_type == VIOLATION_OUTFLOW:
-            print(as_fail(f"Commodity {k}: Node {v} --> Demand outflow does not hold at source: {actual_str} vs {should_be_str}"))
+            print(formatter(f"Commodity {k}: Node {v} --> Demand outflow does not hold at source: {actual_str} vs {should_be_str}"))
         elif violation_type == VIOLATION_LOOP:
-            print(as_fail(f"Commodity {k}: Node {v} --> Source receives its own demand! {actual_str}"))
+            print(formatter(f"Commodity {k}: Node {v} --> Source receives its own demand! {actual_str}"))
         elif violation_type == VIOLATION_LEAK:
-            print(as_fail(f"Commodity {k}: Node {v} --> Destination is leaking demand! {actual_str}"))
+            print(formatter(f"Commodity {k}: Node {v} --> Destination is leaking demand! {actual_str}"))
         elif violation_type == VIOLATION_INFLOW:
-            print(as_fail(f"Commodity {k}: Node {v} --> Demand inflow does not hold at destination: {actual_str} vs {should_be_str}"))
+            print(formatter(f"Commodity {k}: Node {v} --> Demand inflow does not hold at destination: {actual_str} vs {should_be_str}"))
         elif violation_type == VIOLATION_TRANSIT:
-            print(as_fail(f"Commodity {k}: Node {v} --> Transit demand conservation does not hold: {actual_str} --> {should_be_str}"))
+            print(formatter(f"Commodity {k}: Node {v} --> Transit demand conservation does not hold: {actual_str} --> {should_be_str}"))
         else:
             raise ValueError(f'Unknown violation type: {violation_type}')
+
+
+def report_violations(violations: List[Violation]):
+    level_key = lambda v: get_violation_severity(v)
+    levels = {level: [] for level in (LEVEL_NEGLIGIBLE, LEVEL_MILD, LEVEL_SEVERE)}
+    for level, violations in groupby(sorted(violations, key=level_key), key=level_key):
+        levels[level] = list(violations)
+    neg = levels[LEVEL_NEGLIGIBLE]
+    mid = levels[LEVEL_MILD]
+    sev = levels[LEVEL_SEVERE]
+
+    _print_violation_details(neg, as_info)
+    _print_violation_details(mid, as_warning)
+    _print_violation_details(sev, as_fail)
 
 
 def check_flow_conservation(

@@ -27,6 +27,7 @@ class NetworkWorkerNode:
         self._NULL_M: Optional[CPUArray] = None
         self._NNT_M: Optional[CPUArray] = None
         self._X_ek_start_chunk: Optional[CPUArray] = None
+        self._in_out_mask_ek_chunk: Optional[CPUArray] = None
         self._Y_bar_t_cached: Optional[CPUArray] = None
         self._P_bar_t_cached: Optional[CPUArray] = None
         self._u_t_cached: Optional[CPUArray] = None
@@ -58,6 +59,7 @@ class NetworkWorkerNode:
     def initialize(self):
         self._backend: WorkerNodeCommunicationBackendBase = MulticastBackend(self._rpc_params)
         self._backend.set_initial_feasible_solution = self.set_initial_feasible_solution
+        self._backend.set_mask = self.set_mask
         self._backend.set_null_space_basis = self.set_null_space_basis
         self._backend.set_solver_parameters = self.set_solver_parameters
         self._backend.report_chunk = self.report_chunk
@@ -93,6 +95,10 @@ class NetworkWorkerNode:
         self._X_ek_start_chunk = X
         self._NUM_EDGES, self._CHUNK_LEN = self._X_ek_start_chunk.shape
     
+    def set_mask(self, mask: CPUArray):
+        print(as_info('Running with an input-output mask.'))
+        self._in_out_mask_ek_chunk = mask
+    
     def set_null_space_basis(self, NULL_M: CPUArray):
         self._NULL_M = NULL_M
         assert self._X_ek_start_chunk is not None
@@ -116,7 +122,7 @@ class NetworkWorkerNode:
         
         return Y_TK - np.expand_dims(Y_BAR - P_BAR + U_T, axis=1)
 
-    def do_inner_loop_admm_update(self) -> Tuple[int, CPUArray]:
+    def do_inner_loop_admm_update(self) -> Tuple[int, CPUArray, CPUArray]:
         GAMMA = self._solver_params.Gamma
         ADMM_ITERS = self._solver_params.QPIterations
         NULL_M = self._NULL_M
@@ -125,16 +131,18 @@ class NetworkWorkerNode:
         C_TK_CHUNK = self._get_current_C()
         S_EK_CHUNK = self._S_ek_chunk
         T_EK_CHUNK = self._t_ek_chunk
-        
+
         start = time.perf_counter_ns()
         for _ in range(ADMM_ITERS):
             Y_TK = (C_TK_CHUNK - GAMMA * NULL_M.T @ (X_EK_START_CHUNK + T_EK_CHUNK - S_EK_CHUNK)) / (1 + GAMMA)
             S_EK_CHUNK = np.clip(X_EK_START_CHUNK + NULL_M @ Y_TK + T_EK_CHUNK, a_min=0, a_max=None)
+            if self._in_out_mask_ek_chunk is not None:
+                S_EK_CHUNK *= self._in_out_mask_ek_chunk
             T_EK_CHUNK = T_EK_CHUNK + (X_EK_START_CHUNK + NULL_M @ Y_TK - S_EK_CHUNK)
         self._Y_tk_chunk = Y_TK
         self._S_ek_chunk = S_EK_CHUNK
         self._t_ek_chunk = T_EK_CHUNK
-        return time.perf_counter_ns() - start, np.mean(self._Y_tk_chunk, axis=1)
+        return time.perf_counter_ns() - start, np.mean(self._Y_tk_chunk, axis=1), np.sum(self._S_ek_chunk, axis=1)
 
     def set_active_commodity_count(self, K: int):
         self._K = K
@@ -156,8 +164,8 @@ class NetworkWorkerNode:
                     self.consume_batch_update(controller_update_batch)
             else:
                 break
-            runtime, Y_bar = self.do_inner_loop_admm_update()
-            self._backend.send_update_to_controller(runtime, Y_bar)
+            runtime, Y_bar, total_flow = self.do_inner_loop_admm_update()
+            self._backend.send_update_to_controller(runtime, Y_bar, total_flow)
             number_of_consecutive_updates += 1
 
     @staticmethod
@@ -175,7 +183,8 @@ class NetworkWorkerNode:
                         print(as_warning('Will not wait for the controller anymore. Quitting ...'))
 
     def report_chunk(self) -> CPUArray:
-        return cpu_array(self._Y_tk_chunk)
+        # return cpu_array(self._Y_tk_chunk)
+        return cpu_array(self._S_ek_chunk)
     
     def report_aggregate(self) -> CPUArray:
         return np.sum(self._X_ek_start_chunk + self._NULL_M @ self._Y_tk_chunk, axis=1)

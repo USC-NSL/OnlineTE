@@ -1,13 +1,13 @@
 import signal
-from typing import Dict, Type, Tuple, List
+from typing import Dict, Type, Tuple, List, Optional
 from abc import ABC, abstractmethod
 from te.algorithms.array_utils.cpu_utils import CPUArray
 from te.algorithms.base import SolverParams
 from .. import AsynchronousADMMControllerRPCParams
 
 
-NetworkUpdate = Tuple[int, CPUArray]
-"""A `NetworkUpdate` type is a tuple of execution time and `Y_bar`"""
+NetworkUpdate = Tuple[int, CPUArray, CPUArray]
+"""A `NetworkUpdate` type is a tuple of execution time, `Y_bar` and total flow"""
 
 
 class ControllerCommunicationBackendBase(ABC):
@@ -77,8 +77,9 @@ class ControllerCommunicationBackendBase(ABC):
         """Check if all network nodes are ready"""
 
     @abstractmethod
-    def initialize_worker_nodes(self, solver_params: SolverParams, basis: CPUArray, initial_feasible_solution: CPUArray):
-        """Initialize worker nodes with solver parameters and initial feasible solution (X_ek_0)"""
+    def initialize_worker_nodes(self, solver_params: SolverParams, basis: CPUArray, initial_feasible_solution: CPUArray,
+                                mask: Optional[CPUArray] = None):
+        """Initialize worker nodes with solver parameters and initial feasible solution (X_ek_0) and optional mask"""
 
     @abstractmethod
     def update_demands(self, updated_feasible_solution: CPUArray):

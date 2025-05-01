@@ -109,7 +109,7 @@ class MulticastBackend(WorkerNodeCommunicationBackendBase):
                                 serialized_message_to_array(request.P_bar_t),
                                 serialized_message_to_array(request.Y_bar_t)
                             ))
-                        self._update_sem.release()
+                            self._update_sem.release()
                         buffer = buffer[consumed_length:]
                 except socket.timeout:
                     pass
@@ -145,10 +145,11 @@ class MulticastBackend(WorkerNodeCommunicationBackendBase):
                 return True
         return False
     
-    def send_update_to_controller(self, runtime: int, Y_bar: CPUArray):
+    def send_update_to_controller(self, runtime: int, Y_bar: CPUArray, total_flow: Optional[CPUArray] = None):
         message = asynchronous_lp_messages.SwitchMessage(
             worker_id=self.worker_id, runtime_ns=runtime,
-            means=array_to_serialized_message(Y_bar)
+            means=array_to_serialized_message(Y_bar),
+            total_flow=array_to_serialized_message(total_flow)
         )
         self._gather_socket.sendto(TLVRPCMessages.serialize_network_update(message), self.CONTROLLER_ADDRESS)
     
@@ -174,6 +175,10 @@ class NetworkWorkerNodeListener(AsynchronousADMMSolverServicer):
     
     def SetInitialFeasibleSolution(self, request_iterator: Iterator[array_messages.Chunk], context):
         self._backend.set_initial_feasible_solution(rebuild_chunked_array(request_iterator))
+        return Empty()
+
+    def SetMask(self, request_iterator: Iterator[array_messages.Chunk], context):
+        self._backend.set_mask(rebuild_chunked_array(request_iterator))
         return Empty()
 
     def SetNullSpaceBasis(self, request_iterator: Iterator[array_messages.Chunk], context):

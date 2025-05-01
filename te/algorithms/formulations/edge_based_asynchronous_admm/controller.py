@@ -4,7 +4,7 @@ import signal
 import gurobipy
 import numpy as np
 import networkx as nx
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Dict
 from gurobipy import GRB, GurobiError
 from utils.logging import as_warning, as_info, log_subsection_separator
 from te.algorithms.base import TrafficEngineeringLP, SolverParams
@@ -22,6 +22,7 @@ from .controller_backends import get_backend
 from .controller_backends.base import ControllerCommunicationBackendBase, NetworkUpdate
 from . import AsynchronousADMMSolverParams, AsynchronousADMMControllerRPCParams
 from te.algorithms.sub_algorithms.feasible_assignment import get_feasible_flow_assignment
+from te.algorithms.sub_algorithms.projection_mask import get_in_out_mask
 from te.algorithms.sub_algorithms.admm_consensus_test import (outer_admm_consensus_test, 
                                                               inner_admm_consensus_test)
 from te.algorithms.sub_algorithms.flow_conservation_test import check_flow_conservation
@@ -57,6 +58,7 @@ class ControllerNode(TrafficEngineeringLP):
 
         self._X_ek: Optional[CPUArray] = None
         self._X_ek_start: Optional[CPUArray] = None
+        self._in_out_mask_ek: Optional[CPUArray] = None
         self._Xo_e_start: Optional[CPUArray] = None
         self._Zo_e_var: Optional[gurobipy.tupledict] = None
         self._Zo_e: Optional[CPUArray] = None
@@ -68,6 +70,9 @@ class ControllerNode(TrafficEngineeringLP):
         self._Y_bar_t: Optional[CPUArray] = None
         self._u_t: Optional[CPUArray] = None
         self._partitioned_Y_bar: Optional[List[CPUArray]] = None
+        self._partitioned_total_flow: Optional[List[CPUArray]] = None
+
+        self._number_of_columns: Dict[int, int] = dict()
 
         self._backend: Optional[ControllerCommunicationBackendBase] = None
 
@@ -88,12 +93,24 @@ class ControllerNode(TrafficEngineeringLP):
     
     def initialize(self):
         self._set_initial_feasible_solution()
+        self._set_in_out_mask()
         self._backend = get_backend(self._rpc_params)
         self._backend.Upsilon = self._solver_params.Upsilon
         self._set_NULL_M()
         self._initialize_variables_and_residuals()
         self._partitioned_Y_bar = \
             [cpu_zeros((self._T,)) for _ in range(self._rpc_params.NumWorkers)]
+        self._partitioned_total_flow = \
+            [cpu_zeros((self._NUM_EDGES,)) for _ in range(self._rpc_params.NumWorkers)]
+        K = len(self.commodity_list)
+        R = K % self._rpc_params.NumWorkers
+        L = K // self._rpc_params.NumWorkers
+        for i in range(self._rpc_params.NumWorkers):
+            if i < R:
+                self._number_of_columns[i] = L + 1
+            else:
+                self._number_of_columns[i] = L
+        assert sum(self._number_of_columns.values()) == K
         self._report_problem_size()
         self._backend.start()
         self._is_active = True
@@ -159,6 +176,10 @@ class ControllerNode(TrafficEngineeringLP):
     def _set_initial_feasible_solution(self):
         self._X_ek_start = get_feasible_flow_assignment(self._graph, self._commodity_list)
         self._Xo_e_start = np.sum(self._X_ek_start, axis=1)
+
+    @record_cpu_runtime('In-Out-Mask')
+    def _set_in_out_mask(self):
+        self._in_out_mask_ek = get_in_out_mask(self._graph, self._commodity_list)
     
     def _set_NULL_M(self):
         M = self._M
@@ -266,10 +287,10 @@ class ControllerNode(TrafficEngineeringLP):
 
         self._update_controller_objective()
     
-    def _update_total_flow(self):
-        assert self._model_controller is not None
+    # def _update_total_flow(self):
+    #     assert self._model_controller is not None
 
-        self._total_flow = self._Xo_e_start + len(self._commodity_list) * self._NULL_M @ self._Y_bar_t
+    #     self._total_flow = self._Xo_e_start + len(self._commodity_list) * self._NULL_M @ self._Y_bar_t
     
     def _update_P_bar(self):
         assert self._model_controller is not None
@@ -317,11 +338,12 @@ class ControllerNode(TrafficEngineeringLP):
         self._make_variables()
         self._add_constraints()
         self._add_objective()
-        print(f"Built model in {str(np.round(time.time() - t_start, 2))} seconds.")
+        print(as_info(f"Built model in {str(np.round(time.time() - t_start, 2))} seconds."))
         self._backend.initialize_worker_nodes(
             self._solver_params,
             self._NULL_M, 
-            self._X_ek_start
+            self._X_ek_start,
+            self._in_out_mask_ek
         )
         self._backend.set_active_commodity_count(len(self._commodity_list))
     
@@ -331,27 +353,30 @@ class ControllerNode(TrafficEngineeringLP):
             self._model_controller.resetParams()
 
     @record_return_value('PGD-Runtime')
-    def _consume_updates(self, updates: List[Tuple[int, NetworkUpdate]]) -> int:
+    def _consume_updates(self, updates: List[Tuple[int, NetworkUpdate]], incorprate = False) -> int:
         runtimes = []
         for worker_id, update in updates:
-            runtime, Y_bar = update
+            runtime, Y_bar, total_flow = update
             self._partitioned_Y_bar[worker_id] = Y_bar
+            self._partitioned_total_flow[worker_id] = total_flow
             runtimes.append(runtime)
         self._Y_bar_t = np.mean(self._partitioned_Y_bar, axis=0)
-        self._update_total_flow()
+        self._total_flow = np.sum(self._partitioned_total_flow, axis=0)
+        # self._update_total_flow()
         self._update_P_bar()
         self._update_u_t()
-        self._update_controller_objective()
+        if incorprate:
+            self._update_controller_objective()
         return max(runtimes)
     
     @record_cpu_runtime('Controller-Update')
-    def _wait_for_minimum_updates(self) -> bool:
+    def _wait_for_minimum_updates(self, incorprate = False) -> bool:
         gathered_updates = self._backend.get_network_updates()
         if len(gathered_updates) < self._solver_params.Upsilon:
             # This only happens if the solution is interrupted
             print(as_warning('Solution interrupted, will no longer consume updates.'))
             return False
-        self._consume_updates(gathered_updates)
+        self._consume_updates(gathered_updates, incorprate)
         return True
     
     @record_cpu_runtime('Solve')
@@ -363,11 +388,22 @@ class ControllerNode(TrafficEngineeringLP):
             t = time.time()
             for _ in tqdm.tqdm(range(EPOCHS), bar_format='{l_bar}{bar:36}{r_bar}{bar:-36b}'):
             # for epoch in range(EPOCHS):
-                if not (self._is_active and self._wait_for_minimum_updates()):
+                end_alg = False
+                for i in reversed(range(4)):
+                    if i == 0:
+                        end_alg = not (self._is_active and self._wait_for_minimum_updates(incorprate=True))
+                        if end_alg:
+                            break
+                        self._optimize_controller()
+                    else:
+                        end_alg = not (self._is_active and self._wait_for_minimum_updates(incorprate=False))
+                        if end_alg:
+                            break
+                    self._backend.update_network_nodes(self._P_bar_t, self._Y_bar_t, self._u_t)
+                if end_alg:
                     break
-                self._optimize_controller()
-                self._backend.update_network_nodes(self._P_bar_t, self._Y_bar_t, self._u_t)
-                
+                # if not (self._is_active and self._wait_for_minimum_updates()):
+                #     break
                 self._objective_trace.append((
                     self._utility.X, 
                     get_solution_maximum_utilization(self._total_flow, self._graph)
@@ -380,8 +416,6 @@ class ControllerNode(TrafficEngineeringLP):
 
     def check(self, feasibility_tol: Optional[float] = None, 
               feasibility_ratio: Optional[float] = None, report: bool = False):
-        NUM_EDGES = self._NUM_EDGES
-
         # Are outer ADMM pairs in consensus?
         TOTAL_FLOW = self._total_flow
         ZO_E = self._Zo_e

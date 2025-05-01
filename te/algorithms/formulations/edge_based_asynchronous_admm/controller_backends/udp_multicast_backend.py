@@ -149,7 +149,11 @@ class MulticastBackend(ControllerCommunicationBackendBase):
                             isinstance(request, asynchronous_lp_messages.SwitchMessage)
                         self._update_queue.append((
                             request.worker_id, 
-                            (request.runtime_ns, serialized_message_to_array(request.means))
+                            (
+                                request.runtime_ns, 
+                                serialized_message_to_array(request.means),
+                                serialized_message_to_array(request.total_flow)
+                            )
                         ))
                         self._update_sem.release()
                         buffer = buffer[consumed_length:]
@@ -195,10 +199,11 @@ class MulticastBackend(ControllerCommunicationBackendBase):
         return self._event_loop.run_until_complete(self._are_network_nodes_ready())
 
     async def _initialize_worker_nodes(self, solver_params: AsynchronousADMMSolverParams, basis: CPUArray, 
-                                       initial_feasible_solution: CPUArray):
+                                       initial_feasible_solution: CPUArray, mask: Optional[CPUArray]):
         NUM_WORKERS = self.number_of_nodes
         NULL_M = basis
         X_EK_START_CHUNKS = np.array_split(initial_feasible_solution, NUM_WORKERS, axis=1)
+        MASK_CHUNKS = None if mask is None else np.array_split(mask, NUM_WORKERS, axis=1)
         WORKERS = self._worker_stubs
 
         params = asynchronous_lp_messages.SolverParameters(**solver_params.child_fields)
@@ -207,14 +212,19 @@ class MulticastBackend(ControllerCommunicationBackendBase):
             stub.SetInitialFeasibleSolution(chunk_big_array(X_EK_START_CHUNKS[i], GRPC_ARRAY_STREAM_MAX_LEN))
             for i, stub in enumerate(WORKERS)
         ])
+        if MASK_CHUNKS:
+            await asyncio.gather(*[
+                stub.SetMask(chunk_big_array(MASK_CHUNKS[i], GRPC_ARRAY_STREAM_MAX_LEN))
+                for i, stub in enumerate(WORKERS)
+            ])
         await asyncio.gather(*[
             stub.SetNullSpaceBasis(chunk_big_array(NULL_M, GRPC_ARRAY_STREAM_MAX_LEN))
             for stub in WORKERS
         ])
     
     def initialize_worker_nodes(self, solver_params: AsynchronousADMMSolverParams, basis: CPUArray, 
-                                initial_feasible_solution: CPUArray):
-        self._event_loop.run_until_complete(self._initialize_worker_nodes(solver_params, basis, initial_feasible_solution))
+                                initial_feasible_solution: CPUArray, mask: Optional[CPUArray] = None):
+        self._event_loop.run_until_complete(self._initialize_worker_nodes(solver_params, basis, initial_feasible_solution, mask))
 
     async def _update_demands(self, updated_feasible_solution: CPUArray):
         X_EK_START_CHUNKS = np.array_split(updated_feasible_solution, self.number_of_nodes, axis=1)
@@ -232,7 +242,8 @@ class MulticastBackend(ControllerCommunicationBackendBase):
             async_rebuild_chunked_array(stub.RequestChunk(Empty()))
             for stub in self._worker_stubs
         ])
-        return initial_feasible_solution + basis @ np.hstack(list(chunks))
+        # return initial_feasible_solution + basis @ np.hstack(list(chunks))
+        return np.hstack(list(chunks))
 
     def get_X_ek(self, basis: CPUArray, initial_feasible_solution: CPUArray):
         try:

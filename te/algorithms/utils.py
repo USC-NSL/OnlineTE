@@ -255,7 +255,7 @@ def get_solution_confusion_matrix(lp: TrafficEngineeringLP, feasibility_tol: Opt
     unsats = len(unsatisfied_demands)
     cm = np.zeros(shape=(topology_size, topology_size))
 
-    if report:
+    if report and len(unsatisfied_demands) > 0:
         print(as_fail(" "*12 + "{:^10}    {:^20}".format("DESIRED", "ALLOCATED")))
         print(as_fail("-"*46))
 
@@ -389,7 +389,7 @@ def check_capacity_constraint(
             if report:
                 cap_str = str_round(c_e, 4)
                 demand_str = str_round(demand, 4)
-                print(f"Link {s} --> {d} Is Congested: {demand_str} > {cap_str}")
+                print(as_fail(f"Link {s} --> {d} Is Congested: {demand_str} > {cap_str}"))
             c += 1
     
     congesteds = c / N

@@ -5,6 +5,7 @@ import "array.proto";
 
 service AsynchronousADMMSolver {
     rpc SetInitialFeasibleSolution(stream Chunk) returns (google.protobuf.Empty) {}
+    rpc SetMask(stream Chunk) returns (google.protobuf.Empty) {}
     rpc SetNullSpaceBasis(stream Chunk) returns (google.protobuf.Empty) {}
     rpc RequestChunk(google.protobuf.Empty) returns (stream Chunk) {}
     rpc QueryState(google.protobuf.Empty) returns (State) {}
@@ -24,6 +25,7 @@ message SwitchMessage {
     int32 worker_id = 1;
     int32 runtime_ns = 2;
     SerializedNumpyArrayMessage means = 3;
+    SerializedNumpyArrayMessage total_flow = 4;
 }
 
 message State {
