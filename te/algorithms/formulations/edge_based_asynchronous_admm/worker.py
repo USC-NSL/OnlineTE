@@ -3,13 +3,13 @@ import time
 import signal
 import contextlib
 import numpy as np
-from typing import List, Tuple, Optional
+from typing import List, Optional
 from utils.logging import as_warning, as_info
 from te.algorithms.array_utils import set_global_precision
 from te.algorithms.array_utils.cpu_utils import CPUArray, cpu_zeros, cpu_array, set_cpu_float_precision
 from .worker_backends.base import WorkerNodeCommunicationBackendBase
 from .worker_backends.udp_multicast_backend import MulticastBackend, MulticastWorkerBackendParams
-from . import AsynchronousADMMSolverParams, AsynchronousADMMWorkerRPCParams
+from . import AsynchronousADMMSolverParams, AsynchronousADMMWorkerRPCParams, ControllerUpdate, NetworkUpdate
 
 
 class NetworkWorkerNode:
@@ -26,14 +26,18 @@ class NetworkWorkerNode:
         self._CHUNK_LEN: Optional[int] = None
         self._NULL_M: Optional[CPUArray] = None
         self._NNT_M: Optional[CPUArray] = None
-        self._X_ek_start_chunk: Optional[CPUArray] = None
-        self._in_out_mask_ek_chunk: Optional[CPUArray] = None
-        self._Y_bar_t_cached: Optional[CPUArray] = None
-        self._P_bar_t_cached: Optional[CPUArray] = None
-        self._u_t_cached: Optional[CPUArray] = None
-        self._Y_tk_chunk: Optional[CPUArray] = None
-        self._S_ek_chunk: Optional[CPUArray] = None
-        self._t_ek_chunk: Optional[CPUArray] = None
+
+        self._X_ek_start_w: Optional[CPUArray] = None
+        # TODO: Get a lighter representation of this, it's too big!
+        self._in_out_mask_ek_w: Optional[CPUArray] = None
+
+        self._P_bar_t: Optional[CPUArray] = None
+        self._P_bar_t_old: Optional[CPUArray] = None
+        self._u_t_w: Optional[CPUArray] = None
+        self._Y_tk_w: Optional[CPUArray] = None
+        self._P_tk_w: Optional[CPUArray] = None
+        self._S_ek_w: Optional[CPUArray] = None
+        self._t_ek_w: Optional[CPUArray] = None
 
         self._backend: Optional[MulticastBackend] = None
 
@@ -41,6 +45,10 @@ class NetworkWorkerNode:
         self._die_on_next_int = False
         signal.signal(signal.SIGINT, self.stop)
         signal.signal(signal.SIGTERM, self.die)
+
+    def start(self):
+        self._backend.start()
+        self._is_active = True
 
     def stop(self, _, __):
         if self._die_on_next_int:
@@ -65,8 +73,7 @@ class NetworkWorkerNode:
         self._backend.report_chunk = self.report_chunk
         self._backend.set_active_commodity_count = self.set_active_commodity_count
         self._backend.is_initialized = self.is_initialized
-        self._backend.start()
-        self._is_active = True
+        self.start()
 
     def set_solver_parameters(self, new_params: AsynchronousADMMSolverParams):
         self._solver_params = new_params
@@ -75,25 +82,31 @@ class NetworkWorkerNode:
         set_global_precision(precision=new_params.Precision)
         set_cpu_float_precision()
 
-    def consume_batch_update(self, batch: List[Tuple[CPUArray, CPUArray, CPUArray]]):
-        """
-        We need to think about this.
-        Currently, the best thing that we might be able to do is to just pick the
-        most recent update.
-        """
-        self._u_t_cached, self._P_bar_t_cached, self._Y_bar_t_cached = batch[-1]
+    def consume_batch_update(self, batch: List[ControllerUpdate]):
+        # TODO: Think about what to do when this assertion is not true ...
+        assert len(batch) == 1
+        update = batch[0]
+        self._P_bar_t_old = np.copy(self._P_bar_t)
+        self._P_bar_t = update.P_bar_t
+        if update.Y_bar_sample is None:
+            return
+        shift = (self._K / update.sample_size) * (
+            self._P_bar_t - self._P_bar_t_old
+        ) - (update.Y_bar_sample - update.P_bar_sample + update.u_bar_sample)
+        self._P_tk_w = self._Y_tk_w + np.expand_dims(self._u_t_w + shift, axis=1)
+        self._u_t_w = -shift
     
     def is_initialized(self) -> bool:
         return all([
             self._NNT_M is not None,
             self._NULL_M is not None,
-            self._X_ek_start_chunk is not None,
+            self._X_ek_start_w is not None,
             self._solver_params is not None
         ])
     
     def set_initial_feasible_solution(self, X: CPUArray):
-        self._X_ek_start_chunk = X
-        self._NUM_EDGES, self._CHUNK_LEN = self._X_ek_start_chunk.shape
+        self._X_ek_start_w = X
+        self._NUM_EDGES, self._CHUNK_LEN = self._X_ek_start_w.shape
     
     def set_mask(self, mask: CPUArray):
         print(as_info('Running with an input-output mask.'))
@@ -101,48 +114,57 @@ class NetworkWorkerNode:
     
     def set_null_space_basis(self, NULL_M: CPUArray):
         self._NULL_M = NULL_M
-        assert self._X_ek_start_chunk is not None
+        assert self._X_ek_start_w is not None
         CHUNK_LEN = self._CHUNK_LEN
         self._NULL_M = NULL_M
         self._NNT_M = NULL_M @ NULL_M.T
         T = self._NULL_M.shape[1]
         self._T = T
-        self._Y_tk_chunk = cpu_zeros((T, CHUNK_LEN))
-        self._Y_bar_t_cached: Optional[CPUArray] = cpu_zeros((T,))
-        self._P_bar_t_cached: Optional[CPUArray] = cpu_zeros((T,))
-        self._u_t_cached: Optional[CPUArray] = cpu_zeros((T,))
-        self._S_ek_chunk = np.copy(self._X_ek_start_chunk)
-        self._t_ek_chunk = cpu_zeros(self._X_ek_start_chunk.shape)
+
+        self._P_bar_t = cpu_zeros((T,))
+        self._P_bar_t_old = cpu_zeros((T,))
+        self._u_t_w = cpu_zeros((T,))
+        self._Y_tk_w = cpu_zeros((T, CHUNK_LEN))
+        self._P_tk_w = cpu_zeros((T, CHUNK_LEN))
+        self._S_ek_w = np.copy(self._X_ek_start_w)
+        self._t_ek_w = cpu_zeros(self._X_ek_start_w.shape)
 
     def _get_current_C(self) -> CPUArray:
-        Y_TK = self._Y_tk_chunk
-        Y_BAR = self._Y_bar_t_cached
-        P_BAR = self._P_bar_t_cached
-        U_T = self._u_t_cached
+        P_TK = self._P_tk_w
+        U_T = self._u_t_w
         
-        return Y_TK - np.expand_dims(Y_BAR - P_BAR + U_T, axis=1)
+        return P_TK - np.expand_dims(U_T, axis=1)
 
-    def do_inner_loop_admm_update(self) -> Tuple[int, CPUArray, CPUArray]:
-        GAMMA = self._solver_params.Gamma
-        ADMM_ITERS = self._solver_params.QPIterations
+    def do_inner_loop_admm_update(self) -> NetworkUpdate:
+        QP_STEP = self._solver_params.QPStep
+        QP_ITERS = self._solver_params.QPIterations
         NULL_M = self._NULL_M
-        Y_TK = self._Y_tk_chunk
-        X_EK_START_CHUNK = self._X_ek_start_chunk
-        C_TK_CHUNK = self._get_current_C()
-        S_EK_CHUNK = self._S_ek_chunk
-        T_EK_CHUNK = self._t_ek_chunk
+        Y_TK_W = self._Y_tk_w
+        X_EK_START_W = self._X_ek_start_w
+        C_TK_W = self._get_current_C()
+        S_EK_W = self._S_ek_w
+        T_EK_W = self._t_ek_w
 
         start = time.perf_counter_ns()
-        for _ in range(ADMM_ITERS):
-            Y_TK = (C_TK_CHUNK - GAMMA * NULL_M.T @ (X_EK_START_CHUNK + T_EK_CHUNK - S_EK_CHUNK)) / (1 + GAMMA)
-            S_EK_CHUNK = np.clip(X_EK_START_CHUNK + NULL_M @ Y_TK + T_EK_CHUNK, a_min=0, a_max=None)
-            if self._in_out_mask_ek_chunk is not None:
-                S_EK_CHUNK *= self._in_out_mask_ek_chunk
-            T_EK_CHUNK = T_EK_CHUNK + (X_EK_START_CHUNK + NULL_M @ Y_TK - S_EK_CHUNK)
-        self._Y_tk_chunk = Y_TK
-        self._S_ek_chunk = S_EK_CHUNK
-        self._t_ek_chunk = T_EK_CHUNK
-        return time.perf_counter_ns() - start, np.mean(self._Y_tk_chunk, axis=1), np.sum(self._S_ek_chunk, axis=1)
+        for _ in range(QP_ITERS):
+            Y_TK_W = (C_TK_W - QP_STEP * NULL_M.T @ (X_EK_START_W + T_EK_W - S_EK_W)) / (1 + QP_STEP)
+            S_EK_W = np.clip(X_EK_START_W + NULL_M @ Y_TK_W + T_EK_W, a_min=0, a_max=None)
+            if self._in_out_mask_ek_w is not None:
+                S_EK_W *= self._in_out_mask_ek_w
+            T_EK_W = T_EK_W + (X_EK_START_W + NULL_M @ Y_TK_W - S_EK_W)
+        
+        self._Y_tk_w = Y_TK_W
+        self._S_ek_w = S_EK_W
+        self._t_ek_w = T_EK_W
+        runtime = time.perf_counter_ns() - start
+        
+        return NetworkUpdate(
+            worker_id=self.worker_id, runtime=runtime,
+            Y_bar_w=np.mean(self._Y_tk_w, axis=1),
+            P_bar_w=np.mean(self._P_tk_w, axis=1),
+            u_w=self._u_t_w,
+            Xo_w=np.sum(self._S_ek_w, axis=1)
+        )
 
     def set_active_commodity_count(self, K: int):
         self._K = K
@@ -164,8 +186,8 @@ class NetworkWorkerNode:
                     self.consume_batch_update(controller_update_batch)
             else:
                 break
-            runtime, Y_bar, total_flow = self.do_inner_loop_admm_update()
-            self._backend.send_update_to_controller(runtime, Y_bar, total_flow)
+            update = self.do_inner_loop_admm_update()
+            self._backend.send_update_to_controller(update)
             number_of_consecutive_updates += 1
 
     @staticmethod
@@ -183,11 +205,7 @@ class NetworkWorkerNode:
                         print(as_warning('Will not wait for the controller anymore. Quitting ...'))
 
     def report_chunk(self) -> CPUArray:
-        # return cpu_array(self._Y_tk_chunk)
-        return cpu_array(self._S_ek_chunk)
-    
-    def report_aggregate(self) -> CPUArray:
-        return np.sum(self._X_ek_start_chunk + self._NULL_M @ self._Y_tk_chunk, axis=1)
+        return cpu_array(self._S_ek_w)
     
     def close(self):
         self._backend.close()

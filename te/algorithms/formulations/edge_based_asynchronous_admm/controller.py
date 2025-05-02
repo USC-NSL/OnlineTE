@@ -19,8 +19,9 @@ from te.algorithms.statistics.helpers import record_cpu_runtime, record_return_v
 from te.algorithms.utils import (check_capacity_constraint, optimize_or_scream, make_model, 
                                  get_solution_maximum_utilization, tupledict_to_array)
 from .controller_backends import get_backend
-from .controller_backends.base import ControllerCommunicationBackendBase, NetworkUpdate
-from . import AsynchronousADMMSolverParams, AsynchronousADMMControllerRPCParams
+from .controller_backends.base import ControllerCommunicationBackendBase
+from . import (AsynchronousADMMSolverParams, AsynchronousADMMControllerRPCParams, 
+               NetworkUpdate, ControllerUpdate)
 from te.algorithms.sub_algorithms.feasible_assignment import get_feasible_flow_assignment
 from te.algorithms.sub_algorithms.projection_mask import get_in_out_mask
 from te.algorithms.sub_algorithms.admm_consensus_test import (outer_admm_consensus_test, 
@@ -60,19 +61,19 @@ class ControllerNode(TrafficEngineeringLP):
         self._X_ek_start: Optional[CPUArray] = None
         self._in_out_mask_ek: Optional[CPUArray] = None
         self._Xo_e_start: Optional[CPUArray] = None
+        # self._Xo_e: Optional[CPUArray] = None
         self._Zo_e_var: Optional[gurobipy.tupledict] = None
         self._Zo_e: Optional[CPUArray] = None
-        self._total_flow: Optional[CPUArray] = None
         self._utility: Optional[gurobipy.Var] = None
         self._r_e: Optional[CPUArray] = None
 
-        self._P_bar_t: Optional[CPUArray] = None
-        self._Y_bar_t: Optional[CPUArray] = None
-        self._u_t: Optional[CPUArray] = None
-        self._partitioned_Y_bar: Optional[List[CPUArray]] = None
-        self._partitioned_total_flow: Optional[List[CPUArray]] = None
+        # TODO: Cache `P_bar_w` and `u_w` on the controller for fault tolerance ...
 
-        self._number_of_columns: Dict[int, int] = dict()
+        self._P_bar_t: Optional[CPUArray] = None
+        self._Xo_e_w: Optional[List[CPUArray]] = None
+
+        self._partitions: Dict[int, Tuple[int, int]] = dict()
+        self._partition_sizes: Dict[int, int] = dict()
 
         self._backend: Optional[ControllerCommunicationBackendBase] = None
 
@@ -90,31 +91,7 @@ class ControllerNode(TrafficEngineeringLP):
 
         set_global_precision(solver_params.Precision)
         set_cpu_float_precision()
-    
-    def initialize(self):
-        self._set_initial_feasible_solution()
-        self._set_in_out_mask()
-        self._backend = get_backend(self._rpc_params)
-        self._backend.Upsilon = self._solver_params.Upsilon
-        self._set_NULL_M()
-        self._initialize_variables_and_residuals()
-        self._partitioned_Y_bar = \
-            [cpu_zeros((self._T,)) for _ in range(self._rpc_params.NumWorkers)]
-        self._partitioned_total_flow = \
-            [cpu_zeros((self._NUM_EDGES,)) for _ in range(self._rpc_params.NumWorkers)]
-        K = len(self.commodity_list)
-        R = K % self._rpc_params.NumWorkers
-        L = K // self._rpc_params.NumWorkers
-        for i in range(self._rpc_params.NumWorkers):
-            if i < R:
-                self._number_of_columns[i] = L + 1
-            else:
-                self._number_of_columns[i] = L
-        assert sum(self._number_of_columns.values()) == K
-        self._report_problem_size()
-        self._backend.start()
-        self._is_active = True
-    
+
     @property
     def alg_name(self) -> str:
         return 'Asynchronous ADMM'
@@ -155,22 +132,36 @@ class ControllerNode(TrafficEngineeringLP):
     def assignments(self) -> np.ndarray:
         assert self._X_ek is not None
         return self._X_ek
-
-    def stop(self, _, __):
-        if self._die_on_next_int:
-            signal.raise_signal(signal.SIGTERM)
-        else:
-            print(as_warning('SIGINT: Stopping worker. Invoke again to kill the process.'))
-            if self._backend:
-                self._backend.stop()
-            self._is_active = False
-            self._die_on_next_int = True
     
-    def die(self, _, __):
-        print(as_warning('SIGTERM: Killing the worker.'))
-        if self._backend:
-            self._backend.die()
-        self._is_active = False
+    def initialize(self):
+        self._set_initial_feasible_solution()
+        self._set_in_out_mask()
+        self._create_backend()
+        self._set_NULL_M()
+        self._partition_commodities()
+        self._initialize_variables()
+        self._report_problem_size()
+        self.start()
+    
+    def _partition_commodities(self):
+        K = len(self.commodity_list)
+        R = K % self._rpc_params.NumWorkers
+        L = K // self._rpc_params.NumWorkers
+        index = 0
+        for i in range(self._rpc_params.NumWorkers):
+            if i < R:
+                self._partition_sizes[i] = L + 1
+                self._partitions[i] = (index, index + L + 1)
+                index += (L + 1)
+            else:
+                self._partition_sizes[i] = L
+                self._partitions[i] = (index, index + L)
+                index += L
+        assert index == K
+    
+    def _create_backend(self):
+        self._backend = get_backend(self._rpc_params)
+        self._backend.Upsilon = self._solver_params.Upsilon
 
     @record_cpu_runtime('Feasible-Assignment')
     def _set_initial_feasible_solution(self):
@@ -191,22 +182,23 @@ class ControllerNode(TrafficEngineeringLP):
         self._T = T
         self._NUM_EDGES = n
     
-    def _initialize_variables_and_residuals(self):
+    def _initialize_variables(self):
         T = self._T
         NUM_EDGES = self._NUM_EDGES
+        PARTITIONS = self._partitions
         self._capacities = cpu_double_array(
             [item[-1] for item in self._graph.edges(data='capacity')])
         self._c_norm = np.linalg.norm(self._capacities)
-        self._r_e = cpu_zeros((NUM_EDGES,))
-        self._u_t = cpu_zeros((T,))
-        self._Zo_e = cpu_array(self._Xo_e_start)
-        self._P_bar_t = cpu_zeros((T,))
-        self._Y_bar_t = cpu_zeros((T,))
         self._X_ek = cpu_array(self._X_ek_start)
-        self._total_flow = cpu_array(self._Xo_e_start)
-    
-    def are_network_nodes_ready(self) -> bool:
-        return self._backend.are_network_nodes_ready()
+        self._Zo_e = cpu_array(self._Xo_e_start)
+        XO_E_W = []
+        for w in range(self._rpc_params.NumWorkers):
+            start, end = PARTITIONS[w]
+            XO_E_W.append(np.sum(self._X_ek[:, start:end], axis=1))
+        self._Xo_e_w = XO_E_W
+        self._Xo_e = np.sum(XO_E_W, axis=0)
+        self._r_e = cpu_zeros((NUM_EDGES,))
+        self._P_bar_t = cpu_zeros((T,))
     
     def _report_problem_size(self):
         M = len(self._graph.nodes)
@@ -219,6 +211,29 @@ class ControllerNode(TrafficEngineeringLP):
         print(as_info(f"Number of commodities: {K}"))
         print(as_info(f"Nullity of commodity assignment matrix: {T}"))
         print(as_info(log_subsection_separator()))
+
+    def start(self):
+        self._backend.start()
+        self._is_active = True
+
+    def stop(self, _, __):
+        if self._die_on_next_int:
+            signal.raise_signal(signal.SIGTERM)
+        else:
+            print(as_warning('SIGINT: Stopping worker. Invoke again to kill the process.'))
+            if self._backend:
+                self._backend.stop()
+            self._is_active = False
+            self._die_on_next_int = True
+    
+    def die(self, _, __):
+        print(as_warning('SIGTERM: Killing the worker.'))
+        if self._backend:
+            self._backend.die()
+        self._is_active = False
+
+    def are_network_nodes_ready(self) -> bool:
+        return self._backend.are_network_nodes_ready()
 
     def initialize_to(self, assignment: np.ndarray):
         raise NotImplementedError
@@ -269,7 +284,7 @@ class ControllerNode(TrafficEngineeringLP):
     def _update_controller_objective(self):
         NUM_EDGES = self._NUM_EDGES
         UTILITY = self._utility
-        TOTAL_FLOW = self._total_flow
+        XO_E = self._Xo_e
         ZO_E = self._Zo_e_var
         R_E = self._r_e
         RHO = self._solver_params.Rho
@@ -278,7 +293,7 @@ class ControllerNode(TrafficEngineeringLP):
         OBJECTIVE_CONTROLLER = gurobipy.QuadExpr()
         OBJECTIVE_CONTROLLER.addTerms(self._c_norm * np.sqrt(NUM_EDGES), UTILITY)
         for e in range(NUM_EDGES):
-            OBJECTIVE_CONTROLLER += (RHO/2) * (TOTAL_FLOW[e] - ZO_E[e] + R_E[e]) ** 2
+            OBJECTIVE_CONTROLLER += (RHO/2) * (XO_E[e] - ZO_E[e] + R_E[e]) ** 2
         MODEL_CONTROLLER.setObjective(OBJECTIVE_CONTROLLER, GRB.MINIMIZE)
         self._objective_controller = OBJECTIVE_CONTROLLER
     
@@ -287,43 +302,31 @@ class ControllerNode(TrafficEngineeringLP):
 
         self._update_controller_objective()
     
-    # def _update_total_flow(self):
-    #     assert self._model_controller is not None
-
-    #     self._total_flow = self._Xo_e_start + len(self._commodity_list) * self._NULL_M @ self._Y_bar_t
-    
-    def _update_P_bar(self):
+    def _update_P_bar(self, sample_Y_bar: CPUArray, sample_P_bar: CPUArray, 
+                      sample_u_bar: CPUArray, sample_size: int):
         assert self._model_controller is not None
 
         K = len(self._commodity_list)
         ETA = self._solver_params.Eta
         RHO = self._solver_params.Rho
-        U_T = self._u_t
-        Y_BAR_T = self._Y_bar_t
         F_E = self._get_F()
         NULL_M = self._NULL_M
-        P_BAR_T = (NULL_M.T @ F_E + (ETA/RHO) * (U_T + Y_BAR_T)) / (K + (ETA/RHO))
-        self._P_bar_t = P_BAR_T
-    
-    def _update_u_t(self):
-        assert self._model_controller is not None
-
-        U_T = self._u_t
-        Y_BAR_T = self._Y_bar_t
         P_BAR_T = self._P_bar_t
-
-        self._u_t = U_T + (Y_BAR_T - P_BAR_T)
+        self._P_bar_t = (NULL_M.T @ F_E + (ETA/RHO) * (
+            P_BAR_T + (sample_size / K) * (sample_Y_bar - sample_P_bar + sample_u_bar)
+        )) / (K + (ETA/RHO))
+        print(f'New P-BAR: {np.linalg.norm(self._P_bar_t)}')
     
     @record_cpu_runtime('Controller-Optim')
     def _optimize_controller(self):
         assert self._model_controller is not None
 
-        R_E = self._r_e
-        TOTAL_FLOW = self._total_flow
+        self._Xo_e = np.sum(self._Xo_e_w, axis=0)
+        self._update_controller_objective()
         optimize_or_scream(self._model_controller)
         ZO_E = tupledict_to_array(self._Zo_e_var)
         self._Zo_e = ZO_E
-        self._r_e = R_E + (TOTAL_FLOW - ZO_E)
+        self._r_e = self._r_e + (self._Xo_e - ZO_E)
 
     def close(self):
         self._backend.close()
@@ -334,7 +337,7 @@ class ControllerNode(TrafficEngineeringLP):
     
     def make_lp(self):
         t_start = time.time()
-        print("Starting to create the model")
+        print(as_info("Starting to create the model"))
         self._make_variables()
         self._add_constraints()
         self._add_objective()
@@ -343,8 +346,7 @@ class ControllerNode(TrafficEngineeringLP):
             self._solver_params,
             self._NULL_M, 
             self._X_ek_start,
-            self._in_out_mask_ek
-        )
+            self._in_out_mask_ek)
         self._backend.set_active_commodity_count(len(self._commodity_list))
     
     def reset(self, with_params: False):
@@ -352,31 +354,47 @@ class ControllerNode(TrafficEngineeringLP):
         if with_params:
             self._model_controller.resetParams()
 
-    @record_return_value('PGD-Runtime')
-    def _consume_updates(self, updates: List[Tuple[int, NetworkUpdate]], incorprate = False) -> int:
+    @record_return_value('Inner-Loop-Runtime')
+    def _consume_updates(self, updates: List[NetworkUpdate]) -> int:
         runtimes = []
-        for worker_id, update in updates:
-            runtime, Y_bar, total_flow = update
-            self._partitioned_Y_bar[worker_id] = Y_bar
-            self._partitioned_total_flow[worker_id] = total_flow
-            runtimes.append(runtime)
-        self._Y_bar_t = np.mean(self._partitioned_Y_bar, axis=0)
-        self._total_flow = np.sum(self._partitioned_total_flow, axis=0)
-        # self._update_total_flow()
-        self._update_P_bar()
-        self._update_u_t()
-        if incorprate:
-            self._update_controller_objective()
+        workers = []
+        Y_bar_ls = []
+        P_bar_ls = []
+        u_ls = []
+        sample_size = 0
+        
+        for update in updates:
+            worker_id = update.worker_id
+            runtimes.append(update.runtime)
+            workers.append(worker_id)
+            Y_bar_ls.append(update.Y_bar_w)
+            P_bar_ls.append(update.P_bar_w)
+            u_ls.append(update.u_w)
+            self._Xo_e_w[worker_id] = update.Xo_w
+            sample_size += self._partition_sizes[worker_id]
+        print(f'Got updates from {workers}')
+        sample_Y_bar=np.mean(Y_bar_ls, axis=0)
+        sample_P_bar=np.mean(P_bar_ls, axis=0)
+        sample_u_bar=np.mean(u_ls, axis=0)
+        self._update_P_bar(
+            sample_Y_bar=sample_Y_bar, sample_P_bar=sample_P_bar,
+            sample_u_bar=sample_u_bar, sample_size=sample_size)
+        
+        self._backend.update_network_nodes(ControllerUpdate(
+            workers=workers, P_bar_t=self._P_bar_t,
+            P_bar_sample=sample_P_bar, Y_bar_sample=sample_Y_bar,
+            u_bar_sample=sample_u_bar, sample_size=sample_size
+        ))
         return max(runtimes)
     
-    @record_cpu_runtime('Controller-Update')
-    def _wait_for_minimum_updates(self, incorprate = False) -> bool:
+    @record_cpu_runtime('Reconvene-Updates')
+    def _wait_for_minimum_updates(self) -> bool:
         gathered_updates = self._backend.get_network_updates()
         if len(gathered_updates) < self._solver_params.Upsilon:
             # This only happens if the solution is interrupted
             print(as_warning('Solution interrupted, will no longer consume updates.'))
             return False
-        self._consume_updates(gathered_updates, incorprate)
+        self._consume_updates(gathered_updates)
         return True
     
     @record_cpu_runtime('Solve')
@@ -386,27 +404,21 @@ class ControllerNode(TrafficEngineeringLP):
         
         try:
             t = time.time()
-            for _ in tqdm.tqdm(range(EPOCHS), bar_format='{l_bar}{bar:36}{r_bar}{bar:-36b}'):
-            # for epoch in range(EPOCHS):
-                end_alg = False
-                for i in reversed(range(4)):
-                    if i == 0:
-                        end_alg = not (self._is_active and self._wait_for_minimum_updates(incorprate=True))
-                        if end_alg:
-                            break
-                        self._optimize_controller()
-                    else:
-                        end_alg = not (self._is_active and self._wait_for_minimum_updates(incorprate=False))
-                        if end_alg:
-                            break
-                    self._backend.update_network_nodes(self._P_bar_t, self._Y_bar_t, self._u_t)
+            end_alg = False
+            # for _ in tqdm.tqdm(range(EPOCHS), bar_format='{l_bar}{bar:36}{r_bar}{bar:-36b}'):
+            for epoch in range(EPOCHS):
+                # First, let the network converge to the current total flow value
+                for i in range(PARAMS.InnerIterations):
+                    if not (self._is_active and self._wait_for_minimum_updates()):
+                        end_alg = True
+                        break
                 if end_alg:
                     break
-                # if not (self._is_active and self._wait_for_minimum_updates()):
-                #     break
+                # Now, optimize for the next total flow value
+                self._optimize_controller()
                 self._objective_trace.append((
                     self._utility.X, 
-                    get_solution_maximum_utilization(self._total_flow, self._graph)
+                    get_solution_maximum_utilization(self._Xo_e, self._graph)
                 ))
             self._set_X_ek()
             return time.time() - t
@@ -417,14 +429,15 @@ class ControllerNode(TrafficEngineeringLP):
     def check(self, feasibility_tol: Optional[float] = None, 
               feasibility_ratio: Optional[float] = None, report: bool = False):
         # Are outer ADMM pairs in consensus?
-        TOTAL_FLOW = self._total_flow
+        XO_E = self._Xo_e
         ZO_E = self._Zo_e
-        outer_admm_consensus_test(TOTAL_FLOW, ZO_E, feasibility_tol, feasibility_ratio, report)
+        outer_admm_consensus_test(XO_E, ZO_E, feasibility_tol, feasibility_ratio, report)
         
+        # TODO: Get Y_BAR from switches for this test ...
         # Are inner ADMM pairs in consensus?
-        Y_BAR_T = self._Y_bar_t
-        P_BAR_T = self._P_bar_t
-        inner_admm_consensus_test(Y_BAR_T, P_BAR_T, feasibility_tol, feasibility_ratio, report)
+        # Y_BAR_T = self._Y_bar_t
+        # P_BAR_T = self._P_bar_t
+        # inner_admm_consensus_test(Y_BAR_T, P_BAR_T, feasibility_tol, feasibility_ratio, report)
         
         # Now, check flow conservation ...
         X_EK = self._X_ek
@@ -464,11 +477,12 @@ class ControllerNode(TrafficEngineeringLP):
         ]
     
     def update_traffic_matrix(self, tm):
-        self._traffic = tm
-        self._commodity_list = traffic_to_commodity(self._traffic)
-        self._set_initial_feasible_solution()
-        self._Zo_e = cpu_array(self._Xo_e_start)
-        self._backend.update_demands(self._X_ek_start)
+        # self._traffic = tm
+        # self._commodity_list = traffic_to_commodity(self._traffic)
+        # self._set_initial_feasible_solution()
+        # self._Zo_e = cpu_array(self._Xo_e_start)
+        # self._backend.update_demands(self._X_ek_start)
+        raise NotImplementedError
     
     def initialize_to(self, solution: EdgeBasedMinimizeMaximumUtilitySolution):
         raise NotImplementedError

@@ -1,9 +1,9 @@
 import signal
 from abc import abstractmethod, ABC
-from typing import Type, Dict, Callable, List, Tuple, Optional
+from typing import Type, Dict, Callable, List, Optional
 from te.algorithms.array_utils.cpu_utils import CPUArray
 from te.algorithms.base import SolverParams
-from .. import AsynchronousADMMWorkerRPCParams
+from .. import AsynchronousADMMWorkerRPCParams, ControllerUpdate, NetworkUpdate
 
 
 class WorkerNodeCommunicationBackendBase(ABC):
@@ -82,7 +82,7 @@ class WorkerNodeCommunicationBackendBase(ABC):
         """Wait until we can start with the algorithm or are interrupted"""
 
     @abstractmethod
-    def gather_updates(self, block = False) -> Optional[List[Tuple[CPUArray, CPUArray, CPUArray]]]:
+    def gather_updates(self, block = False) -> Optional[List[ControllerUpdate]]:
         """
         If immediately available, gathter up to `WorkerBatchSize` updates from the queue.
         If no update is available and `block` is False, return an empty list.
@@ -91,7 +91,7 @@ class WorkerNodeCommunicationBackendBase(ABC):
         """
     
     @abstractmethod
-    def send_update_to_controller(self, runtime: int, Y_bar: CPUArray, total_flow: Optional[CPUArray] = None):
+    def send_update_to_controller(self, update: NetworkUpdate):
         """Send an update to the controller"""
 
     @property

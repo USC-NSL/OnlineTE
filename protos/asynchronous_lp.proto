@@ -15,17 +15,21 @@ service AsynchronousADMMSolver {
 }
 
 message ControllerMessage {
-    SerializedNumpyArrayMessage P_bar_t = 1;
-    SerializedNumpyArrayMessage u_t = 2;
-    SerializedNumpyArrayMessage Y_bar_t = 3;
-    repeated int32 Workers = 4;
+    SerializedNumpyArrayMessage Y_t_sample_mean = 1;
+    SerializedNumpyArrayMessage P_t_sample_mean = 2;
+    SerializedNumpyArrayMessage u_t_sample_mean = 3;
+    SerializedNumpyArrayMessage P_bar_t = 4;
+    int32 sample_size = 5;
+    repeated int32 Workers = 6;
 }
 
 message SwitchMessage {
     int32 worker_id = 1;
     int32 runtime_ns = 2;
-    SerializedNumpyArrayMessage means = 3;
-    SerializedNumpyArrayMessage total_flow = 4;
+    SerializedNumpyArrayMessage Y_bar_w = 3;
+    SerializedNumpyArrayMessage P_bar_w = 4;
+    SerializedNumpyArrayMessage u_w = 5;
+    SerializedNumpyArrayMessage Xo_w = 6;
 }
 
 message State {
@@ -36,7 +40,7 @@ message SolverParameters {
     int32 NumberOfEpochs = 1;
     float Rho = 2;
     float Eta = 3;
-    float Gamma = 4;
+    float QPStep = 4;
     int32 QPIterations = 5;
     int32 NumWorkers = 6;
     string Precision = 7;
@@ -46,6 +50,7 @@ message SolverParameters {
     int32 Sigma = 11;
     int32 WorkerBatchSize = 12;
     float ADMMConvTol = 13;
+    int32 InnerIterations = 14;
 }
 
 message ActiveCommodityCount {

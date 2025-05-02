@@ -20,7 +20,7 @@ from topologies.utils import get_uniform_tm_problem_with_capacity_heuristic
 RNG_SEED = 12345
 
 FEASIBILITY_TOL = None
-FEASIBILITY_RATIO = 5e-2
+FEASIBILITY_RATIO = 1e-2
 
 SMALL_TOPOLOGY = 'Claranet'
 SMALL_MEDIUM_TOPOLOGY = 'Forthnet'
@@ -168,9 +168,11 @@ if __name__ == '__main__':
     solver_params_group = parser.add_argument_group('Solver Parameters', description='ADMM solver parameters')
     solver_params_group.add_argument('--epochs', type=int, default=SOLVER_PARAMS.NumberOfEpochs, 
                                      help='Number of epochs')
+    solver_params_group.add_argument('--inner-iters', type=int, default=SOLVER_PARAMS.InnerIterations, 
+                                     help='Number of inner sub-problem iterations')
     solver_params_group.add_argument('--qp-iters', type=int, default=SOLVER_PARAMS.QPIterations, 
                                      help='Number of iterations to solve the node QP for each local update')
-    solver_params_group.add_argument('--qp-step', type=float, default=SOLVER_PARAMS.Gamma, 
+    solver_params_group.add_argument('--qp-step', type=float, default=SOLVER_PARAMS.QPStep, 
                                      help='Step size for solving the node QP')
     solver_params_group.add_argument('--admm-outer', type=float, default=SOLVER_PARAMS.Rho, 
                                      help='Outer ADMM step size')
@@ -218,8 +220,9 @@ if __name__ == '__main__':
 
     SOLVER_PARAMS = AsynchronousADMMSolverParams(
         NumberOfEpochs=args.epochs,
+        InnerIterations=args.inner_iters,
         QPIterations=args.qp_iters,
-        Gamma=args.qp_step,
+        QPStep=args.qp_step,
         Eta=args.admm_inner,
         Rho=args.admm_outer,
         Seed=args.seed,

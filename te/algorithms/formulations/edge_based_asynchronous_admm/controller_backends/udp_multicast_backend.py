@@ -1,6 +1,5 @@
 import grpc
 import socket
-import struct
 import asyncio
 import threading
 import numpy as np
@@ -8,9 +7,10 @@ from collections import deque
 from dataclasses import dataclass
 from typing import List, ClassVar, Optional, Tuple, Any
 from te.algorithms.array_utils.cpu_utils import CPUArray
-from .. import AsynchronousADMMControllerRPCParams, AsynchronousADMMSolverParams
+from .. import (AsynchronousADMMControllerRPCParams, AsynchronousADMMSolverParams, ControllerUpdate, 
+                NetworkUpdate, TLVRPCMessages)
 from .base import (controller_communication_backend, controller_communication_backend_params, 
-                   ControllerCommunicationBackendBase, NetworkUpdate)
+                   ControllerCommunicationBackendBase)
 from ...edge_based_distributed_admm.utils import (serialized_message_to_array, array_to_serialized_message,
                                                   chunk_big_array, async_rebuild_chunked_array,
                                                   GRPC_ARRAY_STREAM_MAX_LEN)
@@ -33,50 +33,6 @@ class MulticastControllerBackendParams(AsynchronousADMMControllerRPCParams):
     
     def __post_init__(self):
         self.left_column_share = 0.2
-
-
-class TLVRPCMessages:
-    ControllerUpdate = 0x00
-    NetworkUpdate = 0x01
-    
-    HEADER_FORMAT = "!HI"
-    HEADER_LENGTH = struct.calcsize(HEADER_FORMAT)
-
-    @classmethod
-    def get_packet_header(cls, packet: bytes) -> Optional[bytes]:
-        if len(packet) >= cls.HEADER_LENGTH:
-            return packet[:cls.HEADER_LENGTH]
-    
-    @classmethod
-    def get_packet_rpc_message(cls, packet: bytes) -> Optional[Tuple[int, int, Any]]:
-        """
-        Assuming `packet` has at least one finished packet, return the RPC message
-        type, the length of the packet and its protobuff representation.
-        """
-        header = cls.get_packet_header(packet)
-        if header is not None:
-            message_type, message_len = struct.unpack_from(cls.HEADER_FORMAT, header)
-            if len(packet) >= message_len:
-                message_serialized = packet[cls.HEADER_LENGTH:message_len]
-                if message_type == cls.NetworkUpdate:
-                    message = asynchronous_lp_messages.SwitchMessage.FromString(message_serialized)
-                elif message_type == cls.ControllerUpdate:
-                    message = asynchronous_lp_messages.ControllerMessage.FromString(message_serialized)
-                else:
-                    raise ValueError(f'Unexpected update message type: {message_type}')
-                return (message_type, message_len, message)
-
-    @classmethod
-    def serialize_controller_update(cls, message: asynchronous_lp_messages.ControllerMessage) -> bytes:
-        body = message.SerializeToString()
-        header = struct.pack(cls.HEADER_FORMAT, cls.ControllerUpdate, len(body) + cls.HEADER_LENGTH)
-        return header + body
-    
-    @classmethod
-    def serialize_network_update(cls, message: asynchronous_lp_messages.SwitchMessage) -> bytes:
-        body = message.SerializeToString()
-        header = struct.pack(cls.HEADER_FORMAT, cls.NetworkUpdate, len(body) + cls.HEADER_LENGTH)
-        return header + body
 
 
 @controller_communication_backend
@@ -105,8 +61,6 @@ class MulticastBackend(ControllerCommunicationBackendBase):
         self._update_queue = deque()
         self._gatherer_loop: Optional[threading.Thread] = None
 
-        self._gathered_workers: Optional[List[int]] = None
-    
     @classmethod
     def backend_name(self) -> str:
         return MulticastControllerBackendParams.Backend
@@ -145,15 +99,14 @@ class MulticastBackend(ControllerCommunicationBackendBase):
                     update = TLVRPCMessages.get_packet_rpc_message(buffer)
                     if update is not None:
                         update_type, consumed_length, request = update
-                        assert update_type == TLVRPCMessages.NetworkUpdate and \
+                        assert update_type == TLVRPCMessages.NetworkUpdateType and \
                             isinstance(request, asynchronous_lp_messages.SwitchMessage)
-                        self._update_queue.append((
-                            request.worker_id, 
-                            (
-                                request.runtime_ns, 
-                                serialized_message_to_array(request.means),
-                                serialized_message_to_array(request.total_flow)
-                            )
+                        self._update_queue.append(NetworkUpdate(
+                            worker_id=request.worker_id, runtime=request.runtime_ns,
+                            Y_bar_w=serialized_message_to_array(request.Y_bar_w),
+                            P_bar_w=serialized_message_to_array(request.P_bar_w),
+                            u_w=serialized_message_to_array(request.u_w),
+                            Xo_w=serialized_message_to_array(request.Xo_w)
                         ))
                         self._update_sem.release()
                         buffer = buffer[consumed_length:]
@@ -166,18 +119,13 @@ class MulticastBackend(ControllerCommunicationBackendBase):
                 self._scatter_socket.close()
                 self._scatter_socket = None
 
-    def get_network_updates(self) -> List[Tuple[int, NetworkUpdate]]:
+    def get_network_updates(self) -> List[NetworkUpdate]:
         gathered_updates = []
-        workers = []
         while self.is_alive:
             if not self._update_sem.acquire(timeout=self._rpc_params.QueueTimeout):
                 continue
-            worker, update = self._update_queue.popleft()
-            gathered_updates.append((worker, update))
-            workers.append(worker)
+            gathered_updates.append(self._update_queue.popleft())
             if len(gathered_updates) >= self.Upsilon:
-                assert self._gathered_workers is None
-                self._gathered_workers = workers
                 break
         return gathered_updates
 
@@ -251,15 +199,15 @@ class MulticastBackend(ControllerCommunicationBackendBase):
         except grpc.aio._call.AioRpcError:
             return None
     
-    def update_network_nodes(self, P_bar_t: CPUArray, Y_bar_t: CPUArray, u_t: CPUArray):
-        assert self._gathered_workers is not None
+    def update_network_nodes(self, update: ControllerUpdate):
         message = asynchronous_lp_messages.ControllerMessage(
-            P_bar_t = array_to_serialized_message(P_bar_t),
-            Y_bar_t = array_to_serialized_message(Y_bar_t),
-            u_t = array_to_serialized_message(u_t),
-            Workers = self._gathered_workers
+            Y_t_sample_mean=array_to_serialized_message(update.Y_bar_sample),
+            P_t_sample_mean=array_to_serialized_message(update.P_bar_sample),
+            u_t_sample_mean=array_to_serialized_message(update.u_bar_sample),
+            P_bar_t=array_to_serialized_message(update.P_bar_t),
+            sample_size=update.sample_size,
+            Workers=update.workers
         )
-        self._gathered_workers = None
         self._scatter_socket.sendto(TLVRPCMessages.serialize_controller_update(message), self.SCATTER_ADDRESS)
 
     async def _close_node(self, worker_id: int):

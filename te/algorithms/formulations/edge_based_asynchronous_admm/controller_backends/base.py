@@ -1,13 +1,10 @@
 import signal
-from typing import Dict, Type, Tuple, List, Optional
+from dataclasses import dataclass
+from typing import Dict, Type, List, Optional
 from abc import ABC, abstractmethod
 from te.algorithms.array_utils.cpu_utils import CPUArray
 from te.algorithms.base import SolverParams
-from .. import AsynchronousADMMControllerRPCParams
-
-
-NetworkUpdate = Tuple[int, CPUArray, CPUArray]
-"""A `NetworkUpdate` type is a tuple of execution time, `Y_bar` and total flow"""
+from .. import AsynchronousADMMControllerRPCParams, NetworkUpdate, ControllerUpdate
 
 
 class ControllerCommunicationBackendBase(ABC):
@@ -65,11 +62,11 @@ class ControllerCommunicationBackendBase(ABC):
         signal.signal(signal.SIGTERM, self.die)
 
     @abstractmethod
-    def update_network_nodes(self, P_bar_t: CPUArray, Y_bar_t: CPUArray, u_t: CPUArray):
+    def update_network_nodes(self, update: ControllerUpdate):
         """Broadcast an update message to the network nodes"""
     
     @abstractmethod
-    def get_network_updates(self) -> List[Tuple[int, NetworkUpdate]]:
+    def get_network_updates(self) -> List[NetworkUpdate]:
         """Get a list of updateable switch number to consumable network updates"""
 
     @abstractmethod

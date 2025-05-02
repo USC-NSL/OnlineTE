@@ -5,19 +5,19 @@ import asyncio
 import threading
 from collections import deque
 from dataclasses import dataclass
-from typing import Optional, Iterator, ClassVar, List, Tuple
+from typing import Optional, Iterator, ClassVar, List
 from concurrent.futures import ThreadPoolExecutor
-from te.algorithms.array_utils.cpu_utils import CPUArray
 from .base import WorkerNodeCommunicationBackendBase, worker_node_communication_backend, worker_communication_backend_params
-from .. import AsynchronousADMMSolverParams, AsynchronousADMMWorkerRPCParams
+from .. import (AsynchronousADMMSolverParams, AsynchronousADMMWorkerRPCParams, NetworkUpdate, 
+                ControllerUpdate, TLVRPCMessages)
 from ...edge_based_distributed_admm.utils import (serialized_message_to_array, array_to_serialized_message,
                                                   rebuild_chunked_array, chunk_big_array,
                                                   GRPC_ARRAY_STREAM_MAX_LEN)
-from ..controller_backends.udp_multicast_backend import TLVRPCMessages
 
 import protos.array.array_pb2 as array_messages
 import protos.asynchronous_lp.asynchronous_lp_pb2 as asynchronous_lp_messages
-from protos.asynchronous_lp.asynchronous_lp_pb2_grpc import AsynchronousADMMSolverServicer, add_AsynchronousADMMSolverServicer_to_server
+from protos.asynchronous_lp.asynchronous_lp_pb2_grpc import (AsynchronousADMMSolverServicer, 
+                                                             add_AsynchronousADMMSolverServicer_to_server)
 from google.protobuf.empty_pb2 import Empty
 
 
@@ -101,15 +101,27 @@ class MulticastBackend(WorkerNodeCommunicationBackendBase):
                     update = TLVRPCMessages.get_packet_rpc_message(buffer)
                     if update is not None:
                         update_type, consumed_length, request = update
-                        assert update_type == TLVRPCMessages.ControllerUpdate and \
+                        assert update_type == TLVRPCMessages.ControllerUpdateType and \
                             isinstance(request, asynchronous_lp_messages.ControllerMessage)
                         if self.worker_id in request.Workers:
-                            self._update_queue.append((
-                                serialized_message_to_array(request.u_t),
-                                serialized_message_to_array(request.P_bar_t),
-                                serialized_message_to_array(request.Y_bar_t)
+                            self._update_queue.append(ControllerUpdate(
+                                workers=request.Workers,
+                                P_bar_t=serialized_message_to_array(request.P_bar_t),
+                                P_bar_sample=serialized_message_to_array(request.P_t_sample_mean),
+                                Y_bar_sample=serialized_message_to_array(request.Y_t_sample_mean),
+                                u_bar_sample=serialized_message_to_array(request.u_t_sample_mean),
+                                sample_size=request.sample_size
                             ))
-                            self._update_sem.release()
+                        else:
+                            self._update_queue.append(ControllerUpdate(
+                                workers=request.Workers,
+                                P_bar_t=serialized_message_to_array(request.P_bar_t),
+                                P_bar_sample=None,
+                                Y_bar_sample=None,
+                                u_bar_sample=None,
+                                sample_size=request.sample_size
+                            ))
+                        self._update_sem.release()
                         buffer = buffer[consumed_length:]
                 except socket.timeout:
                     pass
@@ -120,7 +132,7 @@ class MulticastBackend(WorkerNodeCommunicationBackendBase):
                 self._gather_socket.close()
                 self._gather_socket = None
     
-    def gather_updates(self, block = False) -> Optional[List[Tuple[CPUArray, CPUArray, CPUArray]]]:
+    def gather_updates(self, block = False) -> Optional[List[ControllerUpdate]]:
         if not self.is_alive:
             return
         updates = []
@@ -145,11 +157,13 @@ class MulticastBackend(WorkerNodeCommunicationBackendBase):
                 return True
         return False
     
-    def send_update_to_controller(self, runtime: int, Y_bar: CPUArray, total_flow: Optional[CPUArray] = None):
+    def send_update_to_controller(self, update: NetworkUpdate):
         message = asynchronous_lp_messages.SwitchMessage(
-            worker_id=self.worker_id, runtime_ns=runtime,
-            means=array_to_serialized_message(Y_bar),
-            total_flow=array_to_serialized_message(total_flow)
+            worker_id=update.worker_id, runtime_ns=update.runtime,
+            Y_bar_w=array_to_serialized_message(update.Y_bar_w),
+            P_bar_w=array_to_serialized_message(update.P_bar_w),
+            u_w=array_to_serialized_message(update.u_w),
+            Xo_w=array_to_serialized_message(update.Xo_w)
         )
         self._gather_socket.sendto(TLVRPCMessages.serialize_network_update(message), self.CONTROLLER_ADDRESS)
     
@@ -171,7 +185,7 @@ class NetworkWorkerNodeListener(AsynchronousADMMSolverServicer):
     def __init__(self, backend: MulticastBackend):
         super().__init__()
         self._backend: WorkerNodeCommunicationBackendBase = backend
-        self._id = backend.worker_id
+        self._id = self._backend.worker_id
     
     def SetInitialFeasibleSolution(self, request_iterator: Iterator[array_messages.Chunk], context):
         self._backend.set_initial_feasible_solution(rebuild_chunked_array(request_iterator))
