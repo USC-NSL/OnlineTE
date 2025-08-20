@@ -1,7 +1,18 @@
+"""
+Quickly set up a `hosts` file for Ansible on the XDC node in SPHERE so that it can interact
+with the materialization.
+We assume that in a topology containing `N+1` nodes, each node is named `n0` up to `nN` and
+the controller node is named `controller`.
+
+The value for `CONTROLLER_PARAMETER_LIST` may need to be updated depending on the algorithm.
+"""
+
+
 import os
 THIS_DIR = os.path.dirname(os.path.realpath(__file__))
 import sys
 import argparse
+# TODO: Make this whole thing a utility script so we can get rid of this line
 sys.path.append(os.path.join(THIS_DIR, '../..'))
 from te.algorithms.formulations.edge_based_distributed_admm import DistributedADMMSolverParams
 from utils.logging import as_warning
@@ -18,8 +29,10 @@ solver_params = DistributedADMMSolverParams()
 
 CONTROLLER_PARAMETER_LIST = {
     "epochs": double_quoted(solver_params.NumberOfEpochs),
-    "updates": double_quoted(solver_params.NumberOfNetworkUpdates),
-    "pgd_iters": double_quoted(solver_params.PGDIterations),
+    "net_updates": double_quoted(solver_params.NumberOfNetworkUpdates),
+    "local_updates": double_quoted(solver_params.NumberOfLocalUpdates),
+    "qp_iters": double_quoted(solver_params.QPIterations),
+    "qp_method": double_quoted(solver_params.QPMethod),
     "pgd_step": double_quoted(solver_params.Gamma),
     "pgd_reduction": double_quoted(solver_params.Kappa),
     "admm_outer": double_quoted(solver_params.Rho),

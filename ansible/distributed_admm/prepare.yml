@@ -1,5 +1,5 @@
 ---
-# Prepare controller/worker nodes from scratch.
+# Prepare controller/worker nodes from scratch (i.e. assume no packages are installed)
 - name: Configure APT dependencies
   hosts: controller_group:workers_group
   become: true

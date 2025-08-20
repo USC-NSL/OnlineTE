@@ -2,6 +2,7 @@
 # Spawn workers and a controller node for a distributed test
 - name: Set Multicast ENV
   hosts: workers_group
+  gather_facts: false
   become: true
   vars:
     runtime_env:

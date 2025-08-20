@@ -1,5 +1,7 @@
 #!/bin/bash
+# Called by the service script to set up the TE worker listener (i.e. switches)
 
+# TODO: Fix this path when you can be bothered ...
 cd /home/aghavidel/DistributedTE
 
 if [[ -z "${WORKER_ID}" ]]; then

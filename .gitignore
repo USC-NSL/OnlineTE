@@ -14,3 +14,9 @@ bin/
 include/
 share/
 lib64
+
+# No IPython for now
+*.ipynb
+
+# Ansible hosts need to be regenerated
+hosts
