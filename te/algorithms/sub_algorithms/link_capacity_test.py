@@ -1,9 +1,9 @@
 import gurobipy
 import numpy as np
-import te.constants
 import networkx as nx
 from typing import List, Union, Optional, Set, Tuple
 from utils.logging import as_fail, as_info, str_round
+from te.algorithms.base import TrafficEngineeringLPEvaluationParams
 from te.traffic_models.base import Commodity
 
 
@@ -16,11 +16,12 @@ def is_congested(capacity, demand, feasibility_tol: Optional[float]):
 
 def check_capacity_constraint(
         flows: Union[gurobipy.tupledict, np.ndarray], graph: nx.DiGraph, commodities: List[Commodity], 
-        feasibility_tol: Optional[float] = None, report: bool = False
+        eval_params: TrafficEngineeringLPEvaluationParams
     ) -> Tuple[float, Set[int]]:
     """Check if solution honors link capacity constraints"""
+    feasibility_tol = eval_params.FeasibilityTolerance
     if feasibility_tol is None:
-        feasibility_tol = te.constants.FLOAT_RES
+        feasibility_tol = eval_params.FloatResolution
     print(as_info(f"Checking capacity constraints with absolute tolerance of {feasibility_tol}"))
 
     K = len(commodities)
@@ -39,7 +40,7 @@ def check_capacity_constraint(
     for e, (s, d, c_e) in enumerate(graph.edges(data='capacity')):
         demand = X_O_E[e]
         if is_congested(c_e, demand, feasibility_tol=feasibility_tol):
-            if report:
+            if eval_params.PrintReports:
                 cap_str = str_round(c_e, 4)
                 demand_str = str_round(demand, 4)
                 print(as_fail(f"Link {s} --> {d} Is Congested: {demand_str} > {cap_str}"))

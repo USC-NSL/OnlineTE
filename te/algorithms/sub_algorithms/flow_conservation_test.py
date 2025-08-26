@@ -10,6 +10,7 @@ from typing import Optional, List, Tuple, NewType, Set
 from collections import defaultdict
 from te.traffic_models.base import Commodity
 from te.algorithms.array_utils.cpu_utils import cpu_mmap, cpu_dump
+from te.algorithms.base import TrafficEngineeringLPEvaluationParams
 from te.algorithms.utils import str_round
 from utils.logging import as_fail, as_warning, as_info, as_success
 from te.algorithms.sub_algorithms.utils import (get_slice_starts_and_exclusive_ends, get_number_of_required_workers,
@@ -236,9 +237,8 @@ def report_violations(violations: List[Violation]):
 
 def check_flow_conservation(
         flows: np.ndarray, graph: nx.DiGraph, 
-        commodities: List[Commodity], feasibility_tol: Optional[float],
-        feasibility_ratio: Optional[float] = None,
-        report: bool = False
+        commodities: List[Commodity], 
+        eval_params: TrafficEngineeringLPEvaluationParams
     ) -> Tuple[float, Set[int]]:
     """
     (PARALLEL VERSION)
@@ -248,11 +248,6 @@ def check_flow_conservation(
         - A demand sourced from a node, never flows back into that node   (      no loops     )
     Returns the ratio of unsatisfied demands as well as the particular commodity indices
     """
-    assert (feasibility_ratio is None) ^ (feasibility_tol is None), "Exactly one of `feasibility_tol` or `feasibility_ratio` must be given"
-    if feasibility_ratio is not None:
-        print(as_info(f"Checking flow assignment with relative tolerance of {feasibility_ratio}"))
-    else:
-        print(as_info(f"Checking flow assignment with absolute tolerance of {feasibility_tol}"))
     N = len(graph.edges())
     K = len(commodities)
     slices = get_slice_starts_and_exclusive_ends(K, MAX_NUMBER_OF_WORKERS, MAX_NUMBER_OF_COMMODITIES_PER_CORE)
@@ -261,7 +256,10 @@ def check_flow_conservation(
     unsatisfied_commodities: Set[int] = set()
 
     if K <= MAX_NUMBER_OF_COMMODITIES_PER_CORE:
-        violations, unsatisfied_commodities = _check_centralized_flow_conservation(0, flows, graph, commodities, feasibility_tol, feasibility_ratio)
+        violations, unsatisfied_commodities = _check_centralized_flow_conservation(
+            0, flows, graph, commodities, 
+            feasibility_tol=eval_params.FeasibilityTolerance,
+            feasibility_ratio=eval_params.FeasibilityRatio)
     else:
         with contextlib.closing(TempHelper(TEMP_FOLDER_NAME)) as tp:
             # MEMMAP the array to allow for concurrent writing
@@ -272,7 +270,8 @@ def check_flow_conservation(
             print(as_info(f'Spawning {nprocs} workers to check flow conservation'))
             violations_it = Parallel(n_jobs=nprocs, return_as='generator')\
                 (delayed(_check_centralized_flow_conservation)\
-                    (begin, X_KE[:, begin:end], graph, commodities[begin:end], feasibility_tol, feasibility_ratio)
+                    (begin, X_KE[:, begin:end], graph, commodities[begin:end],
+                     eval_params.FeasibilityTolerance, eval_params.FeasibilityRatio)
                     for begin, end in slices)
             violations = []
             for item in violations_it:
@@ -282,7 +281,7 @@ def check_flow_conservation(
                 print(as_success("No flow assignment violations were found."))
             else:
                 print(as_warning("Flow assignment violations exist."))
-                if report:
+                if eval_params.PrintReports:
                     report_violations(violations)
                 else:
                     show_violation_severity(violations, K, graph.number_of_nodes())

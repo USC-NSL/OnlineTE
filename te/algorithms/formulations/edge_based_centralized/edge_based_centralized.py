@@ -5,12 +5,14 @@ import networkx as nx
 from typing import List, Tuple, Optional
 from collections import defaultdict
 from gurobipy import GRB, GurobiError
-from te.algorithms.base import TrafficEngineeringLP, SolverParams, GurobiSolverParams, TrafficEngineeringLPSolution, TrafficEngineeringLPCheckResult
+from te.algorithms.base import (TrafficEngineeringLP, SolverParams, GurobiSolverParams, TrafficEngineeringLPSolution, 
+                                TrafficEngineeringLPCheckResult, TrafficEngineeringLPEvaluationParams)
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
 from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
 from te.algorithms.sub_algorithms.link_capacity_test import check_capacity_constraint
 from te.algorithms.sub_algorithms.flow_conservation_test import check_flow_conservation
 from te.algorithms.utils import make_model
+from utils.logging import as_info, as_fail
 
 
 class CentralizedEdgeBasedLP(TrafficEngineeringLP):
@@ -23,8 +25,7 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
         self._model: gurobipy.Model = None
         self._flows: gurobipy.tupledict = None
         self._utility: gurobipy.Var = None
-        # self._objective: gurobipy.LinExpr = None
-        self._objective: gurobipy.QuadExpr = None
+        self._objective: gurobipy.LinExpr = None
         self._commodity_list: List[Commodity] = traffic_to_commodity(self._traffic)
         self._demand_constraints: List[Tuple[gurobipy.Constr, gurobipy.Constr]] = None
         self._capacity_constraints: gurobipy.tupledict = None
@@ -78,8 +79,8 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
         N = len(self._graph.edges)
         K = len(self._commodity_list)
 
-        print(f"Graph Size: {M} nodes | {N} edges")
-        print(f"Number of commodities: {K}")
+        print(as_info(f"Graph Size: {M} nodes | {N} edges"))
+        print(as_info(f"Number of commodities: {K}"))
 
     def initialize_to(self, solution: EdgeBasedMinimizeMaximumUtilitySolution):
         assert self._model is not None and self._flows is not None
@@ -116,7 +117,7 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
         self._model = MODEL
 
         # This implicitly encodes the condition for `X_{ke} >= 0`
-        print("Adding commodity assignment variables")
+        print(as_info("Adding commodity assignment variables"))
         self._flows = MODEL.addVars(N, K, lb=0.0, vtype=GRB.CONTINUOUS, name='X')
         # Link utilization upper bound, may not be important based on what we need
         self._utility = MODEL.addVar(lb=0.0, ub=1.0, vtype=GRB.CONTINUOUS, name='U')
@@ -133,9 +134,9 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
         COMMODITIES = self._commodity_list
 
         # Capacity constraint
-        print("Adding capacity constraints")
+        print(as_info("Adding capacity constraints"))
         capacity_constraints: List[gurobipy.Constr] = []
-        pbar = tqdm.tqdm(total=NUM_EDGES)
+        pbar = tqdm.tqdm(total=NUM_EDGES, bar_format='{l_bar}{bar:36}{r_bar}{bar:-36b}')
         for e, (_, _, c_e) in enumerate(GRAPH.edges.data('capacity')):
             total_flow = gurobipy.LinExpr()
             for k in range(K):
@@ -169,8 +170,8 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
         """
 
         demand_constraints = []
-        print("Adding demand/flow-conservation constraints")
-        pbar = tqdm.tqdm(total=K)
+        print(as_info("Adding demand/flow-conservation constraints"))
+        pbar = tqdm.tqdm(total=K, bar_format='{l_bar}{bar:36}{r_bar}{bar:-36b}')
         for k, commodity in enumerate(COMMODITIES):
             SOURCE = commodity.source
             DESTINATION = commodity.destination
@@ -186,25 +187,6 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
                 if edge[1] == SOURCE:
                     MODEL.addConstr(FLOWS[(e, k)] == 0)
             
-            # source_constraint = None
-            # destination_constraint = None
-
-            # for v in GRAPH.nodes():
-            #     if v == SOURCE:
-            #         # Demand constraint from source
-            #         source_constraint = MODEL.addConstr(flow_out[v] == DEMAND)
-            #         MODEL.addConstr(flow_in[v] == 0)
-            #     elif v == DESTINATION:
-            #         # Demand constraint in destination
-            #         destination_constraint = MODEL.addConstr(flow_in[v] == DEMAND)
-            #         MODEL.addConstr(flow_out[v] == 0)
-            #     else:
-            #         # Flow conservation in transit
-            #         MODEL.addConstr(flow_out[v] == flow_in[v])
-            
-            # assert source_constraint is not None and destination_constraint is not None
-            # demand_constraints.append((source_constraint, destination_constraint))
-            # pbar.update()
             for v in GRAPH.nodes():
                 if v == SOURCE:
                     # Demand constraint from source
@@ -224,26 +206,9 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
                 self._objective is None
         
         MODEL = self._model
-        GRAPH = self._graph
-        FLOWS = self._flows
-        UTILITY = self._utility
-        COMMODITIES = self._commodity_list
-
 
         # For now, let's minimize maximum link utilization
-        # self._objective = self._utility
-        OBJ = gurobipy.QuadExpr()
-        OBJ.addTerms(1, UTILITY)
-        # for k, commodity in enumerate(COMMODITIES):
-        #     SOURCE = commodity.source
-        #     DESTINATION = commodity.destination
-        #     for e, edge in enumerate(GRAPH.edges()):
-        #         if edge[1] == SOURCE:
-        #             OBJ.addTerms(100, FLOWS[(e, k)], FLOWS[(e, k)])
-        #         if edge[0] == DESTINATION:
-        #             OBJ.addTerms(100, FLOWS[(e, k)], FLOWS[(e, k)])
-        self._objective = OBJ
-
+        self._objective = self._utility
         MODEL.setObjective(self._objective, GRB.MINIMIZE)
     
     def close(self):
@@ -273,20 +238,17 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
                 return self._model.Runtime
             return -1
         except GurobiError as e:
-            print(f'Error code {e.errno}: {e}')
+            print(as_fail(f'Error code {e.errno}: {e}'))
             return -1
 
-    def check(self, feasibility_tol: Optional[float] = None, feasibility_ratio: Optional[float] = None, 
-              report: bool = False):
-        assert (feasibility_tol is None) ^ (feasibility_ratio is None)
-        PARAMS: GurobiSolverParams = self._solver_params
+    def check(self, eval_params: TrafficEngineeringLPEvaluationParams):
         unsat_ratio, unsat_commodities = check_flow_conservation(
             self._X_ek, self._graph, self._commodity_list,
-            PARAMS.FeasibilityTol, report=report
+            eval_params
         )
         congested_ratio, congested_links = check_capacity_constraint(
             self._X_ek, self._graph, self._commodity_list,
-            feasibility_tol=feasibility_tol, report=report
+            eval_params
         )
         self._check_result = TrafficEngineeringLPCheckResult(
             unsat_ratio=unsat_ratio,

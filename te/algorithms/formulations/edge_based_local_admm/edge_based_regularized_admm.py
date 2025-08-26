@@ -4,11 +4,13 @@ import gurobipy
 import numpy as np
 import networkx as nx
 import te.constants
+from collections import defaultdict
 from multiprocessing import Pool
 from typing import List, Tuple, Optional
 from dataclasses import dataclass
 from gurobipy import GRB, GurobiError
-from te.algorithms.base import TrafficEngineeringLP, GurobiSolverParams, SolverParams
+from te.algorithms.base import (TrafficEngineeringLP, GurobiSolverParams, SolverParams, TrafficEngineeringLPEvaluationParams, 
+                                TrafficEngineeringLPCheckResult, TrafficEngineeringLPObjectiveTrace)
 from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
 from te.algorithms.sub_algorithms.pgd import (do_iterative_plain_pgd, do_iterative_pgd_with_exact_line_search,
@@ -16,8 +18,7 @@ from te.algorithms.sub_algorithms.pgd import (do_iterative_plain_pgd, do_iterati
 from te.algorithms.sub_algorithms.link_capacity_test import check_capacity_constraint
 from te.algorithms.sub_algorithms.flow_conservation_test import check_flow_conservation
 from te.algorithms.sub_algorithms.admm_consensus_test import outer_admm_consensus_test, inner_admm_consensus_test
-from topologies.utils import (get_edge_indexing, get_graph_M_matrix, 
-                              get_adjacency_null_space, get_feasible_flow_assignment)
+from topologies.utils import get_graph_M_matrix, get_adjacency_null_space, get_feasible_flow_assignment
 from te.algorithms.utils import (optimize_or_scream, make_model, 
                                  get_solution_maximum_utilization, careful_norm, 
                                  careful_norm_squared)
@@ -81,7 +82,6 @@ class RegularizedADMMLP(TrafficEngineeringLP):
         self._rng = np.random.default_rng(seed=solver_params.Seed)
         self._commodity_list = traffic_to_commodity(self._traffic)
 
-        self._edge_indexing = get_edge_indexing(graph)
         self._NULL_M: np.ndarray = None
         self._NNT_M: np.ndarray = None
         
@@ -109,6 +109,7 @@ class RegularizedADMMLP(TrafficEngineeringLP):
         self._controller_non_negativity_constraints: List[gurobipy.Constr] = None
         # This need not be managed by Gurobi
         self._X_ek_start: Optional[np.ndarray] = None
+        self._Xo_e_assigned: Optional[np.ndarray] = None
         self._X_e_start: Optional[np.ndarray] = None
         self._X_ek: Optional[np.ndarray] = None
         # Global value. A `T x K` matrix
@@ -138,9 +139,11 @@ class RegularizedADMMLP(TrafficEngineeringLP):
         self._rho_coeff_trace: List[float] = []
         self._eta_coeff_trace: List[float] = []
         # The trace of the objective function as the algorithm progresses
-        self._objective_trace = []
+        self._objective_trace = TrafficEngineeringLPObjectiveTrace(['Perceived Utility', 'Actual Utility'])
         # Estimate of the duality gap as the algorithm progresses
         self._objective_gap_trace = []
+
+        self._check_result: Optional[TrafficEngineeringLPCheckResult] = None
 
         self.proc_pool = Pool(processes=self._solver_params.NumWorkers)
 
@@ -182,7 +185,7 @@ class RegularizedADMMLP(TrafficEngineeringLP):
         return self._utility.X
     
     @property
-    def objective_trace(self) -> Optional[List[float]]:
+    def objective_trace(self) -> Optional[TrafficEngineeringLPObjectiveTrace]:
         return self._objective_trace
 
     @property
@@ -193,6 +196,12 @@ class RegularizedADMMLP(TrafficEngineeringLP):
     def assignments(self) -> np.ndarray:
         assert self._X_ek is not None
         return self._X_ek
+
+    @property
+    def check_result(self) -> TrafficEngineeringLPCheckResult:
+        if self._check_result is None:
+            raise ValueError
+        return self._check_result
     
     @property
     def current_rho(self) -> float:
@@ -285,10 +294,10 @@ class RegularizedADMMLP(TrafficEngineeringLP):
     
     def _set_X_ek(self):
         self._X_ek = np.clip(self._X_ek_start + self._NULL_M @ self._Y_tk, a_min=0, a_max=None)
+        self._Xo_e_assigned = np.sum(self._X_ek, axis=1)
     
     def _get_X_k_sum(self) -> np.ndarray:
-        assert self._X_ek is not None
-        return np.sum(self._X_ek, axis=1)
+        return self._Xo_e_assigned
     
     def _add_constraints(self):
         assert self._model_controller is not None
@@ -610,7 +619,7 @@ class RegularizedADMMLP(TrafficEngineeringLP):
         epoch = 0
         max_iters = PARAMS.NumberOfEpochs
         try:
-            for _ in tqdm.tqdm(range(PARAMS.NumberOfEpochs)):
+            for _ in tqdm.tqdm(range(PARAMS.NumberOfEpochs), bar_format='{l_bar}{bar:36}{r_bar}{bar:-36b}'):
             # while True:
                 t_network = 0
 
@@ -648,7 +657,7 @@ class RegularizedADMMLP(TrafficEngineeringLP):
                 self._update_controller_objective()
 
                 # Houskeeping
-                self._objective_trace.append(self._utility.X)
+                self._objective_trace.append(self._utility.X, get_solution_maximum_utilization(self._Xo_e_assigned, self._graph))
                 total_runtime += MODEL_CONTROLLER.Runtime + t_network
                 # Check primal-dual objective gap
                 # if ((epoch > 0) and (self._check_objective_gap())):
@@ -661,53 +670,58 @@ class RegularizedADMMLP(TrafficEngineeringLP):
             print(f'Error code {e.errno}: {e}')
             return -1
     
-    def check(self, feasibility_tol: Optional[float] = None, feasibility_ratio: Optional[float] = None, report: bool = False):
+    def check(self, eval_params: TrafficEngineeringLPEvaluationParams):
         # Are outer ADMM pairs in consensus?
         T = self._T
         YO_T = np.array([self._Yo_t[t].X for t in range(T)])
         ZO_T = self._Zo_t
-        outer_admm_consensus_test(YO_T, ZO_T, feasibility_tol, feasibility_ratio, report=report)
+        outer_admm_consensus_test(YO_T, ZO_T, eval_params)
         
         # Are inner ADMM pairs in consensus?
         Y_BAR_T = self._Y_bar_t
         P_BAR_T = self._P_bar_t
-        inner_admm_consensus_test(Y_BAR_T, P_BAR_T, feasibility_tol, feasibility_ratio, report=report)
+        inner_admm_consensus_test(Y_BAR_T, P_BAR_T, eval_params)
         
-        # Now, check flow conservation ...
-        X_EK = self._X_ek
-        check_flow_conservation(X_EK, self._graph, self._commodity_list, feasibility_tol, feasibility_ratio, report=report)
-        check_capacity_constraint(
-            X_EK, self._graph, self._commodity_list, 
-            feasibility_tol=feasibility_tol, feasibility_ratio=feasibility_ratio
+        # Now, check the rest
+        unsat_ratio, unsat_commodities = check_flow_conservation(
+            self._X_ek, self._graph, self._commodity_list,
+            eval_params
+        )
+        congested_ratio, congested_links = check_capacity_constraint(
+            self._X_ek, self._graph, self._commodity_list,
+            eval_params
+        )
+        self._check_result = TrafficEngineeringLPCheckResult(
+            unsat_ratio=unsat_ratio,
+            congested_ratio=congested_ratio,
+            unsat_commodities=unsat_commodities,
+            congested_links=congested_links
         )
 
     def get_solution_commodity_list(self) -> List[Tuple[Commodity, Commodity]]:
-        COMMODITIES = self._commodity_list
-        X_EK = self._X_ek
-        GRAPH = self._graph
-        INDICES = self._edge_indexing
+        assert self._X_ek is not None
 
-        return [
-            (
-                Commodity(
-                    source=commodity.source,
-                    destination=commodity.destination,
-                    demand=sum([
-                        X_EK[INDICES[(v, commodity.destination)], i] \
-                            for v in GRAPH.predecessors(commodity.destination)
-                    ])
-                ),
-                Commodity(
-                    source=commodity.source,
-                    destination=commodity.destination,
-                    demand=sum([
-                        X_EK[INDICES[(commodity.source, v)], i] \
-                            for v in GRAPH.successors(commodity.source)
-                    ])
-                )
+        COMMODITIES = self._commodity_list
+        GRAPH = self._graph
+        X = self._X_ek
+
+        ls = []
+        for k, commodity in enumerate(COMMODITIES):
+            flow_out = defaultdict(list)
+            flow_in = defaultdict(list)
+            for e, edge in enumerate(GRAPH.edges()):
+                flow_out[edge[0]].append(X[e, k])
+                flow_in[edge[1]].append(X[e, k])
+            commodity_sent = Commodity(
+                source=commodity.source, destination=commodity.destination,
+                demand=sum(flow_out[commodity.source])
             )
-            for i, commodity in enumerate(COMMODITIES)
-        ]
+            commodity_received = Commodity(
+                source=commodity.source, destination=commodity.destination,
+                demand=sum(flow_in[commodity.destination])
+            )
+            ls.append((commodity_sent, commodity_received))
+        return ls
     
     def update_traffic_matrix(self, tm):
         self._traffic = tm

@@ -4,6 +4,7 @@ import numpy as np
 import networkx as nx
 import te.constants
 import dataclasses
+import matplotlib.pyplot as plt
 from multiprocessing import cpu_count
 from typing import List, Optional, Tuple, Dict, Union, Any, Set
 from abc import ABC, abstractmethod
@@ -182,6 +183,32 @@ class GurobiSolverParams(SolverParams):
 
 
 @dataclass
+class TrafficEngineeringLPEvaluationParams(SolverParams):
+    TopologyName: str
+    Seed: int
+    ScaleFactor: float = 10.0
+    FloatResolution: float = te.constants.FLOAT_RES
+    FeasibilityTolerance: Optional[float] = None
+    FeasibilityRatio: Optional[float] = None
+    PrintReports: bool = False
+    ShowPLT: bool = False
+    SavePLT: bool = True
+    SaveSol: bool = False
+    TraceOutputPath: Optional[str] = 'res.txt'
+    PLTOutputPath: Optional[str] = 'res.png'
+
+    def __post_init__(self):
+        # UPDATE: We will prevent both tolerances being given, it makes reasoning about things difficult ...
+        assert (self.FeasibilityRatio is None) ^ (self.FeasibilityTolerance is None), "Exactly one of `FeasibilityTolerance` or `FeasibilityRatio` MUST be given"
+        self.left_column_share = 0.5
+    
+    def __call__(self, **kwargs):
+        copy = dataclasses.replace(self)
+        for k, v in kwargs.items:
+            setattr(copy, k, v)
+
+
+@dataclass
 class TrafficEngineeringLPCheckResult:
     unsat_ratio: float
     congested_ratio: float
@@ -199,6 +226,38 @@ class TrafficEngineeringLPCheckResult:
         else:
             out.append(as_fail("{:.1f}% OF LINKS ARE CONGESTED".format(self.congested_ratio*100)))
         return '\n'.join(out)
+
+
+class TrafficEngineeringLPObjectiveTrace:
+    def __init__(self, names: List[str]):
+        self._names = names
+        self._trace: List[Tuple[float]] = []
+        self._n_dict = {name: i for i, name in enumerate(names)}
+    
+    @property
+    def names(self) -> List[str]:
+        return self._names
+    @property
+    def trace(self) -> List[Tuple[float]]:
+        return self._trace
+
+    def append(self, *args, **kwargs):
+        ls = [None for _ in range(len(self.names))]
+        for i, arg in enumerate(args):
+            ls[i] = arg
+        for k, v in kwargs.items():
+            i = self._n_dict[k]
+            assert ls[i] is None
+            ls[i] = v
+        self._trace.append(tuple(ls))
+    
+    def unravel(self) -> List[List[float]]:
+        return list(zip(*self.trace))
+    
+    def plot(self, **kwargs):
+        for trace in list(zip(*self.trace)):
+            plt.plot(trace, **kwargs)
+        plt.legend(self.names)
 
 
 class TrafficEngineeringLPSolution(ABC):
@@ -261,7 +320,7 @@ class TrafficEngineeringLP(ABC):
 
     @property
     @abstractmethod
-    def objective_trace(self) -> Optional[List]:
+    def objective_trace(self) -> Optional[TrafficEngineeringLPObjectiveTrace]:
         """List of objective values during algorithm iterations"""
 
     @property
@@ -326,12 +385,11 @@ class TrafficEngineeringLP(ABC):
         """
 
     @abstractmethod
-    def check(self, feasibility_tol: Optional[float] = None, feasibility_ratio: Optional[float] = None, 
-              report: bool = False, **kwargs):
+    def check(self, eval_params: TrafficEngineeringLPEvaluationParams):
         """
         Performs sanity checks on the current solution and cache the summary of the checks.
         This result should be stored in the `check_result` property.
-        Violations during each check should be reported if `report` has been set to `True`.
+        The properties of `eval_params` determines how strict the checks are.
         """
 
     @abstractmethod
