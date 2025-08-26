@@ -1,14 +1,17 @@
+import math
 import contextlib
 import numpy as np
+import te.constants
 import networkx as nx
 from itertools import groupby
 from collections import Counter
 from joblib import Parallel, delayed
-from typing import Optional, List, Tuple, NewType
+from typing import Optional, List, Tuple, NewType, Set
 from collections import defaultdict
 from te.traffic_models.base import Commodity
 from te.algorithms.array_utils.cpu_utils import cpu_mmap, cpu_dump
-from te.algorithms.utils import str_round, is_satisfied, is_negligible, as_fail, as_warning, as_info
+from te.algorithms.utils import str_round
+from utils.logging import as_fail, as_warning, as_info, as_success
 from te.algorithms.sub_algorithms.utils import (get_slice_starts_and_exclusive_ends, get_number_of_required_workers,
                                                 TempHelper, NUM_PROCS)
 
@@ -38,6 +41,33 @@ LIST_OF_VIOLATION_TYPES = [VIOLATION_OUTFLOW, VIOLATION_LOOP, VIOLATION_LEAK, VI
 LEVEL_NEGLIGIBLE = ViolationSeverity(0)
 LEVEL_MILD = ViolationSeverity(1)
 LEVEL_SEVERE = ViolationSeverity(2)
+
+
+def is_satisfied(optim, actual, feasibility_tol: Optional[float], feasibility_ratio: Optional[float]):
+    """
+    Check if `actual` is close to `optim` assignment.
+    The test can either use absolute or relative tolerance (if both are present, only
+    absolute tolerance is considered).
+    """
+    if feasibility_tol is not None:
+        return math.isclose(optim, actual, abs_tol=feasibility_tol)
+    if abs(optim) < te.constants.FLOAT_RES:
+        return math.isclose(actual, 0, abs_tol=te.constants.FLOAT_RES)
+    return math.isclose(optim, actual, rel_tol=feasibility_ratio)
+
+
+def is_negligible(actual, baseline, feasibility_tol: Optional[float], feasibility_ratio: Optional[float]):
+    """
+    If `feasibility_tol` is given, the it checks if absolute value of `actual` is
+    within `min(feasibility_tol, baseline)`.
+    If `feasibility_ratio` is present, it checks if the absolute value is within
+    `baseline * feasibility_ratio` tolerance.
+    """
+    if abs(actual) < te.constants.FLOAT_RES:
+        return True
+    if feasibility_tol is not None:
+        return abs(actual) < min(baseline, feasibility_tol)
+    return abs(actual) < abs(baseline * feasibility_ratio)
 
 
 def get_violation_severity(violation: Violation) -> ViolationSeverity:
@@ -149,9 +179,10 @@ def _check_centralized_flow_conservation(
         shift: int, flows: np.ndarray, graph: nx.DiGraph, 
         commodities: List[Commodity], feasibility_tol: Optional[float],
         feasibility_ratio: Optional[float] = None
-    ) -> List[Violation]:
+    ) -> Tuple[List[Violation], Set[int]]:
 
     violations = []
+    unsats = set()
     for k, commodity in enumerate(commodities):
         SOURCE = commodity.source
         DESTINATION = commodity.destination
@@ -170,6 +201,7 @@ def _check_centralized_flow_conservation(
             if v == SOURCE:
                 if not is_satisfied(fout, DEMAND, feasibility_tol, feasibility_ratio):
                     violations.append((VIOLATION_OUTFLOW, k+shift, v, fout, DEMAND))
+                    unsats.add(k)
                 if not is_negligible(fin, DEMAND, feasibility_tol, feasibility_ratio):
                     violations.append((VIOLATION_LOOP, k+shift, v, fin, DEMAND))
             elif v == DESTINATION:
@@ -177,10 +209,11 @@ def _check_centralized_flow_conservation(
                     violations.append((VIOLATION_LEAK, k+shift, v, fout, DEMAND))
                 if not is_satisfied(fin, DEMAND, feasibility_tol, feasibility_ratio):
                     violations.append((VIOLATION_INFLOW, k+shift, v, fin, DEMAND))
+                    unsats.add(k)
             else:
                 if not is_satisfied(fout, fin, feasibility_tol, feasibility_ratio):
                     violations.append((VIOLATION_INFLOW, k+shift, v, fin, fout))
-    return violations
+    return violations, unsats
 
 
 def report_violations(violations: List[Violation]):
@@ -206,20 +239,29 @@ def check_flow_conservation(
         commodities: List[Commodity], feasibility_tol: Optional[float],
         feasibility_ratio: Optional[float] = None,
         report: bool = False
-    ):
+    ) -> Tuple[float, Set[int]]:
     """
     (PARALLEL VERSION)
     Check if solution satisfies all of the following constraints:
         - Transit nodes conserve flows                                    ( flow conservation )
         - A demand destined to a node, never flows out from that node     (  no demand leaks  )
         - A demand sourced from a node, never flows back into that node   (      no loops     )
+    Returns the ratio of unsatisfied demands as well as the particular commodity indices
     """
+    assert (feasibility_ratio is None) ^ (feasibility_tol is None), "Exactly one of `feasibility_tol` or `feasibility_ratio` must be given"
+    if feasibility_ratio is not None:
+        print(as_info(f"Checking flow assignment with relative tolerance of {feasibility_ratio}"))
+    else:
+        print(as_info(f"Checking flow assignment with absolute tolerance of {feasibility_tol}"))
     N = len(graph.edges())
     K = len(commodities)
     slices = get_slice_starts_and_exclusive_ends(K, MAX_NUMBER_OF_WORKERS, MAX_NUMBER_OF_COMMODITIES_PER_CORE)
 
+    # We'll accumulate the set of unsatisfied commodity indices
+    unsatisfied_commodities: Set[int] = set()
+
     if K <= MAX_NUMBER_OF_COMMODITIES_PER_CORE:
-        violations = _check_centralized_flow_conservation(0, flows, graph, commodities, feasibility_tol, feasibility_ratio)
+        violations, unsatisfied_commodities = _check_centralized_flow_conservation(0, flows, graph, commodities, feasibility_tol, feasibility_ratio)
     else:
         with contextlib.closing(TempHelper(TEMP_FOLDER_NAME)) as tp:
             # MEMMAP the array to allow for concurrent writing
@@ -234,9 +276,15 @@ def check_flow_conservation(
                     for begin, end in slices)
             violations = []
             for item in violations_it:
-                violations.extend(item)
+                violations.extend(item[0])
+                unsatisfied_commodities = unsatisfied_commodities.union(item[1])
+            if len(violations) == 0:
+                print(as_success("No flow assignment violations were found."))
+            else:
+                print(as_warning("Flow assignment violations exist."))
+                if report:
+                    report_violations(violations)
+                else:
+                    show_violation_severity(violations, K, graph.number_of_nodes())
             del X_KE
-    if report:
-        report_violations(violations)
-    else:
-        show_violation_severity(violations, K, graph.number_of_nodes())
+    return len(unsatisfied_commodities)/K, unsatisfied_commodities

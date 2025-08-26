@@ -13,11 +13,12 @@ from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
 from te.algorithms.sub_algorithms.pgd import (do_iterative_plain_pgd, do_iterative_pgd_with_exact_line_search,
                                               do_block_plain_pgd, do_block_pgd_with_exact_line_search)
+from te.algorithms.sub_algorithms.link_capacity_test import check_capacity_constraint
 from te.algorithms.sub_algorithms.flow_conservation_test import check_flow_conservation
 from te.algorithms.sub_algorithms.admm_consensus_test import outer_admm_consensus_test, inner_admm_consensus_test
 from topologies.utils import (get_edge_indexing, get_graph_M_matrix, 
                               get_adjacency_null_space, get_feasible_flow_assignment)
-from te.algorithms.utils import (check_capacity_constraint, optimize_or_scream, make_model, 
+from te.algorithms.utils import (optimize_or_scream, make_model, 
                                  get_solution_maximum_utilization, careful_norm, 
                                  careful_norm_squared)
 

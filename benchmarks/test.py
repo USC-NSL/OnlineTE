@@ -157,11 +157,12 @@ def multi_gpu_unregulated_admm_test(topology: str, seed: int, scale_factor: floa
 
 
 if __name__ == '__main__':
-    centralized_test(SMALL_TOPOLOGY, RNG_SEED, method=GRB.METHOD_DUAL, save_solution=True)
+    # centralized_test(SMALL_TOPOLOGY, RNG_SEED, method=GRB.METHOD_DUAL, save_solution=True)
     # centralized_test(SMALL_TOPOLOGY, RNG_SEED, method=GRB.METHOD_BARRIER, crossover=False, save_solution=True)
+    # centralized_test(SMALL_TOPOLOGY, RNG_SEED, method=GRB.METHOD_BARRIER, crossover=False)
     # centralized_test(SMALL_TOPOLOGY, RNG_SEED, method=GRB.METHOD_BARRIER, crossover=True, save_solution=True)
-    # centralized_test(SMALL_MEDIUM_TOPOLOGY, RNG_SEED)
-    # centralized_test(MEDIUM_TOPOLOGY, RNG_SEED)
+    # centralized_test(SMALL_MEDIUM_TOPOLOGY, RNG_SEED, report=True)
+    centralized_test(MEDIUM_TOPOLOGY, RNG_SEED, report=True)
     # centralized_test(HUGE_TOPOLOGY, RNG_SEED, scale_factor=200)
     # regularized_admm_test(HUGE_TOPOLOGY, RNG_SEED, scale_factor=200)
     # regularized_admm_test(SMALL_TOPOLOGY, RNG_SEED)

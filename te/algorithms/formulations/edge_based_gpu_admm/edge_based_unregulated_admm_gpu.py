@@ -13,12 +13,12 @@ from te.algorithms.base import TrafficEngineeringLP, GurobiSolverParams, SolverP
 from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
 from te.algorithms.sub_algorithms.pgd import do_plain_pgd_with_step_reduction
+from te.algorithms.sub_algorithms.link_capacity_test import check_capacity_constraint
 from te.algorithms.sub_algorithms.feasible_assignment import get_feasible_flow_assignment
 from te.algorithms.sub_algorithms.flow_conservation_test import check_flow_conservation
 from te.algorithms.sub_algorithms.admm_consensus_test import outer_admm_consensus_test, inner_admm_consensus_test
 from topologies.utils import get_edge_indexing, get_graph_M_matrix, get_adjacency_null_space
-from te.algorithms.utils import (check_capacity_constraint, optimize_or_scream, make_model, 
-                                 careful_norm)
+from te.algorithms.utils import optimize_or_scream, make_model, careful_norm
 from te.algorithms.statistics.helpers import (record_cpu_runtime, record_gpu_runtime, record_reserved_gpu_memory, 
                                               record_used_gpu_memory)
 from te.algorithms.array_utils import set_global_precision
@@ -531,7 +531,7 @@ class GPUUnregulatedADMMLP(TrafficEngineeringLP):
 
         """
         The update rule for r_e is:
-            r_e <-- r_e + (X_oe - \sum_k X_ke)/2
+            r_e <-- r_e + (X_oe - sum_k X_ke)/2
         """
 
         R_E = self._r_e

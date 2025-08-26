@@ -16,7 +16,7 @@ share/
 lib64
 
 # No IPython for now
-*.ipynb
+# *.ipynb
 
 # Ansible hosts need to be regenerated
 hosts

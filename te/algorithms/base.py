@@ -5,11 +5,11 @@ import networkx as nx
 import te.constants
 import dataclasses
 from multiprocessing import cpu_count
-from typing import List, Optional, Tuple, Dict, Union, Any
+from typing import List, Optional, Tuple, Dict, Union, Any, Set
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from te.algorithms import SOLUTION_DIR
-from utils.logging import LINE_SEPARATOR_LENGTH
+from utils.logging import LINE_SEPARATOR_LENGTH, as_success, as_fail
 from te.traffic_models.base import TrafficMatrixBase, Commodity
 
 
@@ -181,6 +181,26 @@ class GurobiSolverParams(SolverParams):
         self.left_column_share = 0.5
 
 
+@dataclass
+class TrafficEngineeringLPCheckResult:
+    unsat_ratio: float
+    congested_ratio: float
+    unsat_commodities: Set[int]
+    congested_links: Set[int]
+
+    def __str__(self) -> str:
+        out = []
+        if len(self.unsat_commodities) == 0:
+            out.append(as_success("ALL DEMANDS WERE SATISFIED"))
+        else:
+            out.append(as_fail("{:.1f}% OF DEMANDS WERE NOT SATISFIED".format(self.unsat_ratio*100)))
+        if len(self.congested_links) == 0:
+            out.append(as_success("ALL LINK CAPCITIES WERE HONORED"))
+        else:
+            out.append(as_fail("{:.1f}% OF LINKS ARE CONGESTED".format(self.congested_ratio*100)))
+        return '\n'.join(out)
+
+
 class TrafficEngineeringLPSolution(ABC):
     def dump(self, name: str, path: str = None):
         path = path if path is not None else os.path.join(SOLUTION_DIR, name)
@@ -253,6 +273,15 @@ class TrafficEngineeringLP(ABC):
     @abstractmethod
     def assignments(self) -> np.ndarray:
         """Return current assignments based on the solution"""
+    
+    @property
+    # @abstractmethod
+    def check_result(self) -> TrafficEngineeringLPCheckResult:
+        """
+        Checking the LP result usually takes time. So every time `check` has been called, the
+        result is cached in this property.
+        Invoking this method on an unsolved LP _MUST_ raise a ValueError
+        """
 
     @abstractmethod
     def initialize_to(self, solution: TrafficEngineeringLPSolution):
@@ -297,9 +326,12 @@ class TrafficEngineeringLP(ABC):
         """
 
     @abstractmethod
-    def check(self, feasibility_tol: Optional[float] = None, feasibility_ratio: Optional[float] = None):
+    def check(self, feasibility_tol: Optional[float] = None, feasibility_ratio: Optional[float] = None, 
+              report: bool = False, **kwargs):
         """
-        Performs sanity checks on the current solution
+        Performs sanity checks on the current solution and cache the summary of the checks.
+        This result should be stored in the `check_result` property.
+        Violations during each check should be reported if `report` has been set to `True`.
         """
 
     @abstractmethod
