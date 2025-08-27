@@ -50,7 +50,7 @@ def do_plain_pgd(lambda_k, x_k_0, nnt, n, c, gamma: float, thresh: Optional[floa
 def do_iterative_plain_pgd(lambda_block, x_block_0, nnt, n, c_block, gamma: float, thresh: Optional[float], n_iter: int):
     """
     Plain PGD, but receives the input in block (i.e. multiple columns per input).
-    Drastically cuts down on the time spend communicating between the node and
+    Drastically cuts down on the time spent communicating between the node and
     the controller.
 
     The actual implementation however, still sequentially does PGD on each column.
@@ -269,10 +269,9 @@ def do_multi_gpu_plain_pgd_with_step_reduction(lambda_block, x_block_0, nnt, n, 
                                                n_iter: int, kappa: float, epoch: int):
     """
     A plain block oriented PGD operation, with step size heuristic.
-    This will run a GPU, as such, norm-2 and selective operations (like
+    This will run on a GPU, as such, norm-2 and selective operations (like
     checking for converged columns) become extremely slow.
     Matrix operations on the other hand benefit greatly.
-    As such, this implementation is meant to be very small fast.
 
     The step size heuristic is:
 
