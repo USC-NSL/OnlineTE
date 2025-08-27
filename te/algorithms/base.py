@@ -334,13 +334,19 @@ class TrafficEngineeringLP(ABC):
         """Return current assignments based on the solution"""
     
     @property
-    # @abstractmethod
     def check_result(self) -> TrafficEngineeringLPCheckResult:
         """
         Checking the LP result usually takes time. So every time `check` has been called, the
         result is cached in this property.
-        Invoking this method on an unsolved LP _MUST_ raise a ValueError
+        Invoking this method on an unsolved LP will raise a ValueError
         """
+        if not hasattr(self, '_check_result') or self._check_result is None:
+            raise ValueError
+        return self._check_result
+    
+    @check_result.setter
+    def check_result(self, _res: TrafficEngineeringLPCheckResult):
+        self._check_result = _res
 
     @abstractmethod
     def initialize_to(self, solution: TrafficEngineeringLPSolution):

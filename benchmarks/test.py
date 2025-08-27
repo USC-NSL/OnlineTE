@@ -16,6 +16,7 @@ warnings.filterwarnings("error")
 
 RNG_SEED = 12345
 FEASIBILITY_RATIO = 1e-2
+FLOAT_RES = 1e-4
 
 SMALL_TOPOLOGY = 'Claranet'
 SMALL_MEDIUM_TOPOLOGY = 'Forthnet'
@@ -28,15 +29,18 @@ ARTIFICIAL_MEDIUM_TOPOLOGY_4 = 'Artificial-400'
 
 SMALL_EVAL_PARAMS = TrafficEngineeringLPEvaluationParams(
     TopologyName='Claranet', Seed=RNG_SEED, PrintReports=True,
-    FeasibilityRatio=FEASIBILITY_RATIO
+    FeasibilityRatio=FEASIBILITY_RATIO,
+    FloatResolution=FLOAT_RES
 )
 SMALL_MEDIUM_EVAL_PARAMS = TrafficEngineeringLPEvaluationParams(
     TopologyName='Forthnet', Seed=RNG_SEED, PrintReports=True,
-    FeasibilityRatio=FEASIBILITY_RATIO
+    FeasibilityRatio=FEASIBILITY_RATIO,
+    FloatResolution=FLOAT_RES
 )
 MEDIUM_EVAL_PARAMS = TrafficEngineeringLPEvaluationParams(
     TopologyName='Interoute', Seed=RNG_SEED, PrintReports=False,
-    FeasibilityRatio=FEASIBILITY_RATIO
+    FeasibilityRatio=FEASIBILITY_RATIO,
+    FloatResolution=FLOAT_RES
 )
 
 
@@ -119,7 +123,7 @@ def gpu_unregulated_admm_test(eval_params: TrafficEngineeringLPEvaluationParams)
     n = graph.number_of_edges()
 
     solver_params = GPUUnregulatedADMMSolverParams(
-        NumberOfEpochs=150,
+        NumberOfEpochs=100,
         NumberOfNetworkUpdates=2,
         PGDIterations=2,
         Gamma=2,
@@ -166,18 +170,18 @@ def multi_gpu_unregulated_admm_test(eval_params: TrafficEngineeringLPEvaluationP
 if __name__ == '__main__':
     # centralized_test(SMALL_EVAL_PARAMS(SaveSol=True), method=GRB.METHOD_DUAL)
     # centralized_test(SMALL_EVAL_PARAMS(SaveSol=True), method=GRB.METHOD_BARRIER, crossover=False)
-    # centralized_test(SMALL_EVAL_PARAMS, method=GRB.METHOD_BARRIER, crossover=False)
-    centralized_test(SMALL_MEDIUM_EVAL_PARAMS)
+    centralized_test(SMALL_EVAL_PARAMS, method=GRB.METHOD_BARRIER, crossover=False)
+    # centralized_test(SMALL_MEDIUM_EVAL_PARAMS)
     # centralized_test(MEDIUM_EVAL_PARAMS)
     # centralized_test(HUGE_TOPOLOGY, RNG_SEED, scale_factor=200)
     # regularized_admm_test(HUGE_TOPOLOGY, RNG_SEED, scale_factor=200)
     # regularized_admm_test(SMALL_EVAL_PARAMS)
     # unregulated_admm_test(SMALL_EVAL_PARAMS)
     # unregulated_admm_test(SMALL_MEDIUM_EVAL_PARAMS)
-    # unregulated_admm_test(MEDIUM_TOPOLOGY, RNG_SEED)
-    # gpu_unregulated_admm_test(SMALL_TOPOLOGY, RNG_SEED)
-    # gpu_unregulated_admm_test(SMALL_MEDIUM_TOPOLOGY, RNG_SEED)
-    # gpu_unregulated_admm_test(MEDIUM_TOPOLOGY, RNG_SEED)
+    # unregulated_admm_test(MEDIUM_EVAL_PARAMS)
+    # gpu_unregulated_admm_test(SMALL_EVAL_PARAMS)
+    # gpu_unregulated_admm_test(SMALL_MEDIUM_EVAL_PARAMS)
+    # gpu_unregulated_admm_test(MEDIUM_EVAL_PARAMS)
     # gpu_unregulated_admm_test(HUGE_TOPOLOGY, RNG_SEED, report=False)
     # gpu_unregulated_admm_test(ARTIFICIAL_MEDIUM_TOPOLOGY_1, RNG_SEED)
     # gpu_unregulated_admm_test(ARTIFICIAL_MEDIUM_TOPOLOGY_2, RNG_SEED)

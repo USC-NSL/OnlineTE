@@ -1,4 +1,3 @@
-import tqdm
 import gurobipy
 import numpy as np
 import networkx as nx
@@ -12,7 +11,7 @@ from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
 from te.algorithms.sub_algorithms.link_capacity_test import check_capacity_constraint
 from te.algorithms.sub_algorithms.flow_conservation_test import check_flow_conservation
 from te.algorithms.utils import make_model
-from utils.logging import as_info, as_fail
+from utils.logging import as_info, as_fail, ShortTQDMEnumerate
 
 
 class CentralizedEdgeBasedLP(TrafficEngineeringLP):
@@ -30,7 +29,6 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
         self._demand_constraints: List[Tuple[gurobipy.Constr, gurobipy.Constr]] = None
         self._capacity_constraints: gurobipy.tupledict = None
         self._X_ek: np.ndarray = None
-        self._check_result: Optional[TrafficEngineeringLPCheckResult] = None
         
         self._report_problem_size()
     
@@ -67,12 +65,6 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
     def assignments(self) -> np.ndarray:
         assert self._X_ek is not None
         return self._X_ek
-    
-    @property
-    def check_result(self) -> TrafficEngineeringLPCheckResult:
-        if self._check_result is None:
-            raise ValueError
-        return self._check_result
 
     def _report_problem_size(self):
         M = len(self._graph.nodes)
@@ -126,7 +118,6 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
         assert self._model is not None and self._flows is not None
 
         K = len(self._commodity_list)
-        NUM_EDGES = self._graph.number_of_edges()
         MODEL = self._model
         GRAPH = self._graph
         FLOWS = self._flows
@@ -136,14 +127,11 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
         # Capacity constraint
         print(as_info("Adding capacity constraints"))
         capacity_constraints: List[gurobipy.Constr] = []
-        pbar = tqdm.tqdm(total=NUM_EDGES, bar_format='{l_bar}{bar:36}{r_bar}{bar:-36b}')
-        for e, (_, _, c_e) in enumerate(GRAPH.edges.data('capacity')):
+        for e, (_, _, c_e) in ShortTQDMEnumerate(GRAPH.edges.data('capacity')):
             total_flow = gurobipy.LinExpr()
             for k in range(K):
                 total_flow.addTerms(1, FLOWS[(e, k)])
             capacity_constraints.append(MODEL.addConstr(total_flow <= UTILITY * c_e))
-            pbar.update()
-        pbar.close()
         self._capacity_constraints = capacity_constraints
 
         """
@@ -171,8 +159,7 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
 
         demand_constraints = []
         print(as_info("Adding demand/flow-conservation constraints"))
-        pbar = tqdm.tqdm(total=K, bar_format='{l_bar}{bar:36}{r_bar}{bar:-36b}')
-        for k, commodity in enumerate(COMMODITIES):
+        for k, commodity in ShortTQDMEnumerate(COMMODITIES):
             SOURCE = commodity.source
             DESTINATION = commodity.destination
             DEMAND = commodity.demand
@@ -197,7 +184,6 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
                 else:
                     # Flow conservation in transit
                     MODEL.addConstr(flow_out[v] == flow_in[v])
-            pbar.update()
         self._demand_constraints = demand_constraints
 
     def _add_objective(self):
@@ -225,7 +211,7 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
             self._model.resetParams()
     
     def solve(self, params: SolverParams = None) -> float:
-        self._check_result = None
+        self.check_result = None
         if params:
             self.reset(with_params=True)
             self._params = params
@@ -250,7 +236,7 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
             self._X_ek, self._graph, self._commodity_list,
             eval_params
         )
-        self._check_result = TrafficEngineeringLPCheckResult(
+        self.check_result = TrafficEngineeringLPCheckResult(
             unsat_ratio=unsat_ratio,
             congested_ratio=congested_ratio,
             unsat_commodities=unsat_commodities,

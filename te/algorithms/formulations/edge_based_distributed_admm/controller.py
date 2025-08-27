@@ -1,19 +1,20 @@
 import time
-import tqdm
 import signal
 import gurobipy
 import numpy as np
 import networkx as nx
 import asyncio.exceptions
+from collections import defaultdict
 from typing import List, Tuple, Optional
 from gurobipy import GRB, GurobiError
-from te.algorithms.base import TrafficEngineeringLP, SolverParams
+from te.algorithms.base import (TrafficEngineeringLP, SolverParams, TrafficEngineeringLPCheckResult, TrafficEngineeringLPEvaluationParams, 
+                                TrafficEngineeringLPObjectiveTrace)
 from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
-from topologies.utils import get_edge_indexing, get_graph_M_matrix, get_adjacency_null_space
+from topologies.utils import get_graph_M_matrix, get_adjacency_null_space
 from topologies.utils import get_sparse_null_space, get_symbolic_graph_M_matrix
 from utils.exceptions import SolutionInterrupted
-from utils.logging import as_info, as_warning, log_subsection_separator
+from utils.logging import as_info, as_warning, log_subsection_separator, ShortTQDM
 from te.algorithms.array_utils import set_global_precision
 from te.algorithms.array_utils.cpu_utils import (CPUArray, DoublePrecisionCPUArray, 
                                                  cpu_array, cpu_zeros, cpu_double_array, 
@@ -41,7 +42,6 @@ class ControllerNode(TrafficEngineeringLP):
         self._rng = np.random.default_rng(seed=solver_params.Seed)
         self._commodity_list = traffic_to_commodity(self._traffic)
 
-        self._edge_indexing = get_edge_indexing(graph)
         self._NULL_M: CPUArray = None
         self._NNT_M: CPUArray = None
         
@@ -71,7 +71,7 @@ class ControllerNode(TrafficEngineeringLP):
 
         self._backend: Optional[ControllerCommunicationBackendBase] = None
 
-        self._objective_trace: List[Tuple[float, float]] = []
+        self._objective_trace: TrafficEngineeringLPObjectiveTrace = TrafficEngineeringLPObjectiveTrace(['Perceived Utilization', 'Actual Utilization'])
         self._objective_gap_trace = []
 
         # These we call right now, as opposed to doing them under `initialize`
@@ -137,7 +137,7 @@ class ControllerNode(TrafficEngineeringLP):
         return self._utility.X
     
     @property
-    def objective_trace(self) -> Optional[List[Tuple[float, float]]]:
+    def objective_trace(self) -> Optional[TrafficEngineeringLPObjectiveTrace]:
         return self._objective_trace
 
     @property
@@ -348,7 +348,8 @@ class ControllerNode(TrafficEngineeringLP):
             self._model_controller.resetParams()
     
     @record_cpu_runtime('Solve')
-    def solve(self, params: Optional[int] = None) -> float:        
+    def solve(self, params: Optional[int] = None) -> float:
+        self.check_result = None
         MODEL_CONTROLLER = self._model_controller
         PARAMS = self._solver_params
         EPOCHS = params if params is not None else PARAMS.NumberOfEpochs
@@ -356,7 +357,7 @@ class ControllerNode(TrafficEngineeringLP):
         
         try:
             t = time.time()
-            for epoch in tqdm.tqdm(range(EPOCHS), bar_format='{l_bar}{bar:36}{r_bar}{bar:-36b}'):
+            for epoch in ShortTQDM(range(EPOCHS)):
             # for epoch in range(PARAMS.NumberOfEpochs):
                 optimize_or_scream(MODEL_CONTROLLER)
                 for i in reversed(range(PARAMS.NumberOfNetworkUpdates)):
@@ -368,7 +369,7 @@ class ControllerNode(TrafficEngineeringLP):
                 self._reconvene_network_updates()
                 self._update_controller_objective()
 
-                self._objective_trace.append((self._utility.X, get_solution_maximum_utilization(self._Xo_e_assigned, self._graph)))
+                self._objective_trace.append(self._utility.X, get_solution_maximum_utilization(self._Xo_e_assigned, self._graph))
             self._set_X_ek()
             return time.time() - t
         except GurobiError as e:
@@ -380,54 +381,56 @@ class ControllerNode(TrafficEngineeringLP):
         except asyncio.exceptions.CancelledError:
             return -1
     
-    def check(self, feasibility_tol: Optional[float] = None, feasibility_ratio: Optional[float] = None, report: bool = False):
+    def check(self, eval_params: TrafficEngineeringLPEvaluationParams):
         NUM_EDGES = self._NUM_EDGES
 
         # Are outer ADMM pairs in consensus?
         XO_E = np.array([self._Xo_e[e].X for e in range(NUM_EDGES)])
         ZO_E = self._Zo_e
-        outer_admm_consensus_test(XO_E, ZO_E, feasibility_tol, feasibility_ratio, report)
+        outer_admm_consensus_test(XO_E, ZO_E, eval_params=eval_params)
         
         # Are inner ADMM pairs in consensus?
         Y_BAR_T = self._Y_bar_t
         P_BAR_T = self._P_bar_t
-        inner_admm_consensus_test(Y_BAR_T, P_BAR_T, feasibility_tol, feasibility_ratio, report)
+        inner_admm_consensus_test(Y_BAR_T, P_BAR_T, eval_params=eval_params)
         
         # Now, check flow conservation ...
         X_EK = self._X_ek
-        check_flow_conservation(X_EK, self._graph, self._commodity_list, feasibility_tol, feasibility_ratio, report=report)
-        check_capacity_constraint(
-            X_EK, self._graph, self._commodity_list, 
-            feasibility_tol=feasibility_tol, feasibility_ratio=feasibility_ratio
+        unsat_ratio, unsat_commodities = check_flow_conservation(
+            X_EK, self._graph, self._commodity_list, eval_params=eval_params)
+        congested_ratio, congested_links = check_capacity_constraint(
+            X_EK, self._graph, self._commodity_list, eval_params=eval_params)
+        self.check_result = TrafficEngineeringLPCheckResult(
+            unsat_ratio=unsat_ratio,
+            congested_ratio=congested_ratio,
+            unsat_commodities=unsat_commodities,
+            congested_links=congested_links
         )
 
     def get_solution_commodity_list(self) -> List[Tuple[Commodity, Commodity]]:
-        COMMODITIES = self._commodity_list
-        X_EK = self._X_ek
-        GRAPH = self._graph
-        INDICES = self._edge_indexing
+        assert self._X_ek is not None
 
-        return [
-            (
-                Commodity(
-                    source=commodity.source,
-                    destination=commodity.destination,
-                    demand=sum([
-                        X_EK[INDICES[(v, commodity.destination)], i] \
-                            for v in GRAPH.predecessors(commodity.destination)
-                    ])
-                ),
-                Commodity(
-                    source=commodity.source,
-                    destination=commodity.destination,
-                    demand=sum([
-                        X_EK[INDICES[(commodity.source, v)], i] \
-                            for v in GRAPH.successors(commodity.source)
-                    ])
-                )
+        COMMODITIES = self._commodity_list
+        GRAPH = self._graph
+        X = self._X_ek
+
+        ls = []
+        for k, commodity in enumerate(COMMODITIES):
+            flow_out = defaultdict(list)
+            flow_in = defaultdict(list)
+            for e, edge in enumerate(GRAPH.edges()):
+                flow_out[edge[0]].append(X[e, k])
+                flow_in[edge[1]].append(X[e, k])
+            commodity_sent = Commodity(
+                source=commodity.source, destination=commodity.destination,
+                demand=sum(flow_out[commodity.source])
             )
-            for i, commodity in enumerate(COMMODITIES)
-        ]
+            commodity_received = Commodity(
+                source=commodity.source, destination=commodity.destination,
+                demand=sum(flow_in[commodity.destination])
+            )
+            ls.append((commodity_sent, commodity_received))
+        return ls
     
     def update_traffic_matrix(self, tm):
         # First, record the matrix and the new commodities

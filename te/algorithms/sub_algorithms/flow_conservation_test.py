@@ -32,10 +32,15 @@ NEGLIGIBLE_DEMAND_ABS_TOL = 1e-3
 SEVERE_VIOLATION_REL_TOL = 5e-2
 
 VIOLATION_OUTFLOW = ViolationType(0)
+"""The output of source node is not its demand"""
 VIOLATION_LOOP = ViolationType(1)
+"""The source node is receiving its own demand"""
 VIOLATION_LEAK = ViolationType(2)
+"""The destination node does not completely consume the demand"""
 VIOLATION_INFLOW = ViolationType(3)
+"""The input of the destination node is not its demand"""
 VIOLATION_TRANSIT = ViolationType(4)
+"""Flow conservation does not hold on a transit node"""
 LIST_OF_VIOLATION_TYPES = [VIOLATION_OUTFLOW, VIOLATION_LOOP, VIOLATION_LEAK, VIOLATION_INFLOW, VIOLATION_TRANSIT]
 
 
@@ -277,13 +282,13 @@ def check_flow_conservation(
             for item in violations_it:
                 violations.extend(item[0])
                 unsatisfied_commodities = unsatisfied_commodities.union(item[1])
-            if len(violations) == 0:
-                print(as_success("No flow assignment violations were found."))
-            else:
-                print(as_warning("Flow assignment violations exist."))
-                if eval_params.PrintReports:
-                    report_violations(violations)
-                else:
-                    show_violation_severity(violations, K, graph.number_of_nodes())
             del X_KE
+    if len(violations) == 0:
+        print(as_success("No flow assignment violations were found."))
+    else:
+        print(as_warning("Flow assignment violations exist."))
+        if eval_params.PrintReports:
+            report_violations(violations)
+        else:
+            show_violation_severity(violations, K, graph.number_of_nodes())
     return len(unsatisfied_commodities)/K, unsatisfied_commodities

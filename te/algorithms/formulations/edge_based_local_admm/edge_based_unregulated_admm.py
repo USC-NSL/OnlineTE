@@ -186,7 +186,7 @@ class UnregulatedADMMLP(TrafficEngineeringLP):
         return self._utility.X
     
     @property
-    def objective_trace(self) -> Optional[List[float]]:
+    def objective_trace(self) -> Optional[TrafficEngineeringLPObjectiveTrace]:
         return self._objective_trace
 
     @property

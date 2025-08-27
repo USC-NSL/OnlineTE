@@ -1,6 +1,7 @@
+import tqdm
 import gurobipy
 import numpy as np
-from typing import List
+from typing import List, Union, Iterable, Optional
 
 
 class ANSIColors:
@@ -61,3 +62,42 @@ _LOG_SUBSECTION_SEPARATOR = '-' * LINE_SEPARATOR_LENGTH
 
 def log_subsection_separator() -> str:
     return _LOG_SUBSECTION_SEPARATOR
+
+
+TQDM_PBAR_LEN = 36
+
+class ShortTQDM:
+    @classmethod
+    def pbar_format(cls) -> str:
+        return '{l_bar}{bar:36}{r_bar}{bar:-36b}'
+
+    def __init__(self, object: Iterable, length: Optional[int] = None):
+        if hasattr(object, '__len__'):
+            self._len = len(object)
+        else:
+            assert length is not None
+            self._len = length
+        self._pbar = tqdm.tqdm(object, bar_format=self.pbar_format(), total=self._len)
+        self._object = iter(object)
+    
+    def __len__(self) -> int:
+        return self._len
+    
+    def __iter__(self):
+        return self
+    
+    def __next__(self):
+        try:
+            obj = next(self._object)
+            self._pbar.update()
+            return obj
+        except StopIteration:
+            self._pbar.close()
+            raise StopIteration
+    
+
+class ShortTQDMEnumerate(ShortTQDM):
+    def __init__(self, object: List):
+        self._len = len(object)
+        self._object = enumerate(object)
+        self._pbar = tqdm.tqdm(object, bar_format=self.pbar_format(), total=self._len)

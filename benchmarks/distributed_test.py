@@ -3,6 +3,7 @@ import argparse
 import contextlib
 import concurrent.futures
 from typing import Optional
+from te.algorithms.base import TrafficEngineeringLPEvaluationParams
 from te.algorithms.formulations.aggregate import (
     NetworkWorkerNode, ControllerNode,
     DistributedADMMSolverParams, DistributedADMMWorkerRPCParams, 
@@ -43,19 +44,18 @@ CONVERTER_ITERS: Optional[int] = None
 WARM_EPOCHS: Optional[int] = None
 
 
-def local_distributed_admm_test(topology: str, seed: int, scale_factor: float = 10.0,
-                                save_solution: bool = False, multicast: bool = False, **kwargs):
-    c, graph, tm = get_uniform_tm_problem_with_capacity_heuristic(topology, seed, scale_factor=scale_factor)
+def local_distributed_admm_test(eval_params: TrafficEngineeringLPEvaluationParams, multicast: bool = False):
+    c, graph, tm = get_uniform_tm_problem_with_capacity_heuristic(eval_params.TopologyName, eval_params.Seed, scale_factor=eval_params.ScaleFactor)
     print(f"Network link capacity is: {str(round(c, 2))}")
 
     solution_params = None
-    if save_solution:
+    if eval_params.SaveSol:
         solution_params = EdgeBasedMinimizeMaximumUtilitySolutionParams(
-            seed=seed, topology_name=topology, capacity=c,
+            seed=eval_params.Seed, topology_name=eval_params.TopologyName, capacity=c,
             tm_model_name=tm.type(), tm_model_params=tm.params,
             path=None, sol_name=default_solution_name(
-                topology_name=topology, rng_seed=seed, tm_type=tm.type(),
-                postfix='ours'
+                topology_name=eval_params.TopologyName, rng_seed=eval_params.Seed, 
+                tm_type=tm.type(), postfix='ours'
             )
         )
 
@@ -87,6 +87,7 @@ def local_distributed_admm_test(topology: str, seed: int, scale_factor: float = 
         with contextlib.closing(ControllerNode(graph, tm, SOLVER_PARAMS, CONTROLLER_RPC_PARAMS)) as lp:
             lp.initialize()
             print(as_info(f"Solving With: {lp.alg_name}"))
+            print(as_info(f"Evaluating With Parameters:\n{eval_params}"))
             print(as_info(f"Solving With Parameters:\n{SOLVER_PARAMS}"))
             print(as_info(f"Communication Backend `{CONTROLLER_RPC_PARAMS.Backend}` With Parameters:\n{CONTROLLER_RPC_PARAMS.stringify_up_to_level(1)}"))
             print(as_info("Waiting For Network Nodes ..."))
@@ -102,12 +103,16 @@ def local_distributed_admm_test(topology: str, seed: int, scale_factor: float = 
             
             if converter is not None:
                 print(as_info(log_subsection_title("BASELINE SOLUTION")))
-                
+            
+            print(as_info(log_subsection_title("MAKING TE LP")))
             lp.make_lp()
+            print(as_info(log_subsection_title(f"SOLVING WITH: {lp.alg_name}")))
             t = lp.solve()
+            print(as_info(log_subsection_title("CHECKING SOLUTION")))
             if t > 0:
-                lp.check(feasibility_tol=FEASIBILITY_TOL, feasibility_ratio=FEASIBILITY_RATIO)
-                get_solution_confusion_matrix(lp, feasibility_tol=FEASIBILITY_TOL, feasibility_ratio=FEASIBILITY_RATIO, **kwargs)
+                lp.check(eval_params)
+                print(lp.check_result)
+                get_solution_confusion_matrix(lp, eval_params)
                 print(as_info(f"Solved in {str_round(t, 2)} seconds"))
                 print(as_info(f"Final objective value: {str_round(lp.objective_value, 4)}"))
                 print(as_info(f"Actual utilization: {str_round(get_solution_maximum_utilization(lp.assignments, lp.graph), 4)}"))
@@ -128,8 +133,8 @@ def local_distributed_admm_test(topology: str, seed: int, scale_factor: float = 
                     lp.update_traffic_matrix(converted_tm)
                     t = lp.solve(params=args.warm_epochs)
                     if t > 0:
-                        lp.check(feasibility_tol=FEASIBILITY_TOL, feasibility_ratio=FEASIBILITY_RATIO)
-                        get_solution_confusion_matrix(lp, feasibility_tol=FEASIBILITY_TOL, feasibility_ratio=FEASIBILITY_RATIO, **kwargs)
+                        lp.check(eval_params)
+                        get_solution_confusion_matrix(lp, eval_params)
                         print(as_info(f"Solved in {str_round(t, 2)} seconds"))
                         print(as_info(f"Final objective value: {str_round(lp.objective_value, 4)}"))
                         print(as_info(f"Actual utilization: {str_round(get_solution_maximum_utilization(lp.assignments, lp.graph), 4)}"))
@@ -139,19 +144,18 @@ def local_distributed_admm_test(topology: str, seed: int, scale_factor: float = 
                 print(as_info(stats))
 
 
-def remote_distributed_admm_test(topology: str, seed: int, scale_factor: float = 10.0,
-                                 save_solution: bool = False, **kwargs):
-    c, graph, tm = get_uniform_tm_problem_with_capacity_heuristic(topology, seed, scale_factor=scale_factor)
+def remote_distributed_admm_test(eval_params: TrafficEngineeringLPEvaluationParams):
+    c, graph, tm = get_uniform_tm_problem_with_capacity_heuristic(eval_params.TopologyName, eval_params.Seed, scale_factor=eval_params.ScaleFactor)
     print(f"Network link capacity is: {str(round(c, 2))}")
 
     solution_params = None
-    if save_solution:
+    if eval_params.SaveSol:
         solution_params = EdgeBasedMinimizeMaximumUtilitySolutionParams(
-            seed=seed, topology_name=topology, capacity=c,
+            seed=eval_params.Seed, topology_name=eval_params.TopologyName, capacity=c,
             tm_model_name=tm.type(), tm_model_params=tm.params,
             path=None, sol_name=default_solution_name(
-                topology_name=topology, rng_seed=seed, tm_type=tm.type(),
-                postfix='ours'
+                topology_name=eval_params.TopologyName, rng_seed=eval_params.Seed, 
+                tm_type=tm.type(), postfix='ours'
             )
         )
 
@@ -185,8 +189,8 @@ def remote_distributed_admm_test(topology: str, seed: int, scale_factor: float =
         lp.make_lp()
         t = lp.solve()
         if t > 0:
-            lp.check(feasibility_tol=FEASIBILITY_TOL, feasibility_ratio=FEASIBILITY_RATIO)
-            get_solution_confusion_matrix(lp, feasibility_tol=FEASIBILITY_TOL, feasibility_ratio=FEASIBILITY_RATIO, **kwargs)
+            lp.check(eval_params)
+            get_solution_confusion_matrix(lp, eval_params)
             print(as_info(f"Solved in {str_round(t, 2)} seconds"))
             print(as_info(f"Final objective value: {str_round(lp.objective_value, 4)}"))
             print(as_info(f"Actual utilization: {str_round(get_solution_maximum_utilization(lp.assignments, lp.graph), 4)}"))
@@ -207,8 +211,8 @@ def remote_distributed_admm_test(topology: str, seed: int, scale_factor: float =
                 lp.update_traffic_matrix(converted_tm)
                 t = lp.solve(params=args.warm_epochs)
                 if t > 0:
-                    lp.check(feasibility_tol=FEASIBILITY_TOL, feasibility_ratio=FEASIBILITY_RATIO)
-                    get_solution_confusion_matrix(lp, feasibility_tol=FEASIBILITY_TOL, feasibility_ratio=FEASIBILITY_RATIO, **kwargs)
+                    lp.check(eval_params)
+                    get_solution_confusion_matrix(lp, eval_params)
                     print(as_info(f"Solved in {str_round(t, 2)} seconds"))
                     print(as_info(f"Final objective value: {str_round(lp.objective_value, 4)}"))
                     print(as_info(f"Actual utilization: {str_round(get_solution_maximum_utilization(lp.assignments, lp.graph), 4)}"))
@@ -306,6 +310,14 @@ if __name__ == '__main__':
         Precision=args.precision,
     )
 
+    EVAL_PARAMS = TrafficEngineeringLPEvaluationParams(
+        TopologyName=args.topo, Seed=args.seed, ScaleFactor=args.scale_factor,
+        FeasibilityTolerance=FEASIBILITY_TOL, 
+        FeasibilityRatio=FEASIBILITY_RATIO,
+        PrintReports=args.report_unsat,
+        SaveSol=args.save_sol
+    )
+
     def set_backend_specific_params(rpc_params: DistributedADMMControllerRPCParams):
         if args.backend_name == 'gRPC-synchronous':
             rpc_params.NumThreads = args.num_threads if args.num_threads is not None else args.num_workers
@@ -331,10 +343,7 @@ if __name__ == '__main__':
             AddressList=tuple([(LOCAL_HOST, BASE_PORT + worker_id) for worker_id in range(args.num_workers)])
         )
         set_backend_specific_params(CONTROLLER_RPC_PARAMS)
-        local_distributed_admm_test(args.topo, args.seed, args.scale_factor, 
-                                    save_solution=args.save_sol, 
-                                    multicast=(args.backend_name == 'multicast'),
-                                    report=args.report_unsat)
+        local_distributed_admm_test(EVAL_PARAMS, multicast=(args.backend_name == 'multicast'))
     else:
         if len(args.hosts) > 0:
             assert len(args.hosts) == args.num_workers
@@ -347,8 +356,7 @@ if __name__ == '__main__':
             AddressList=tuple(hosts)
         )
         set_backend_specific_params(CONTROLLER_RPC_PARAMS)
-        remote_distributed_admm_test(args.topo, args.seed, args.scale_factor, 
-                                     save_solution=args.save_sol, report=args.report_unsat)
+        remote_distributed_admm_test(EVAL_PARAMS)
     # local_distributed_admm_test(SMALL_TOPOLOGY, RNG_SEED, save_solution=True)
     # local_distributed_admm_test(SMALL_MEDIUM_TOPOLOGY, RNG_SEED)
     # local_distributed_admm_test(MEDIUM_TOPOLOGY, RNG_SEED)

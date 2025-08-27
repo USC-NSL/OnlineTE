@@ -1,5 +1,4 @@
 import time
-import tqdm
 import gurobipy
 import cupy as cp
 import numpy as np
@@ -17,7 +16,7 @@ from te.algorithms.sub_algorithms.admm_consensus_test import outer_admm_consensu
 from te.algorithms.sub_algorithms.flow_conservation_test import check_flow_conservation
 from te.algorithms.sub_algorithms.link_capacity_test import check_capacity_constraint
 from topologies.utils import get_edge_indexing, get_graph_M_matrix, get_adjacency_null_space
-from utils.logging import as_fail, as_warning
+from utils.logging import as_fail, as_warning, ShortTQDM
 from te.algorithms.utils import get_solution_maximum_utilization, optimize_or_scream, make_model
 from te.algorithms.statistics.helpers import record_cpu_runtime, record_gpu_runtime, record_reserved_gpu_memory
 from te.algorithms.array_utils import set_global_precision
@@ -493,7 +492,7 @@ class MultiGPUUnregulatedADMMLP(TrafficEngineeringLP):
         epoch = 0
         max_iters = PARAMS.NumberOfEpochs
         try:
-            for epoch in tqdm.tqdm(range(PARAMS.NumberOfEpochs)):
+            for epoch in ShortTQDM(range(PARAMS.NumberOfEpochs)):
             # while True:
                 if ((max_iters is not None) and (epoch == max_iters)):
                     break
