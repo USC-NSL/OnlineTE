@@ -3,6 +3,7 @@
 - name: Prepare gRPC
   hosts: controller_group:workers_group
   remote_user: aghavidel
+  gather_facts: false
   tasks:
 
   - name: Compile protobuffs
@@ -11,6 +12,7 @@
 - name: Copy TE Worker Service File
   hosts: workers_group
   become: true
+  gather_facts: false
   vars:
     worker_env:
       - key: WORKER_ID
@@ -33,6 +35,7 @@
 - name: Enable TE Worker Service
   hosts: workers_group
   remote_user: aghavidel
+  gather_facts: false
   tasks:
     - name: Give EXEC Premission To Launcher
       command: chdir=/home/aghavidel/DistributedTE chmod +x ansible/distributed_admm/launch_worker.sh
