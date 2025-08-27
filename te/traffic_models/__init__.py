@@ -4,6 +4,8 @@ from .base import (
     TrafficMatrixParamsBase, TrafficMatrixConverterParamsBase,
     _MODELS, _PARAMS, _CONVERTERS, _CONVERTER_PARAMS
 )
+from . import models
+from . import converters
 
 
 def get_traffic_model(name: str) -> Type[TrafficMatrixBase]:

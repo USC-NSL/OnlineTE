@@ -17,7 +17,9 @@ from utils.logging import as_info, as_warning, as_success, log_section_title, lo
 from te.algorithms.utils import (get_solution_confusion_matrix, stringify_collected_stats, 
                                  str_round, get_solution_maximum_utilization)
 from topologies.utils import get_uniform_tm_problem_with_capacity_heuristic
-from te.traffic_models.converters import NCFlowTrafficMatrixConverter, NCFlowTrafficMatrixConverterParams
+# from te.traffic_models import get_traffic_converter, get_traffic_converter_params, TrafficMatrixConverterBase, TrafficMatrixConverterParamsBase
+# from te.traffic_models.converters import NCFlowTrafficMatrixConverter, NCFlowTrafficMatrixConverterParams
+from te.traffic_models.converters import SampledConverter, SampledTrafficMatrixConverterParams
 
 
 RNG_SEED = 12345
@@ -39,7 +41,8 @@ SOLVER_PARAMS: DistributedADMMSolverParams = DistributedADMMSolverParams()
 CONTROLLER_RPC_PARAMS: DistributedADMMControllerRPCParams = DistributedADMMControllerRPCParams()
 
 CONVERTER_SEED: Optional[int] = None
-CONVERTER_PARAMS: Optional[NCFlowTrafficMatrixConverterParams] = None
+# CONVERTER_PARAMS: Optional[NCFlowTrafficMatrixConverterParams] = None
+CONVERTER_PARAMS: Optional[SampledTrafficMatrixConverterParams] = None
 CONVERTER_ITERS: Optional[int] = None
 WARM_EPOCHS: Optional[int] = None
 
@@ -62,7 +65,8 @@ def local_distributed_admm_test(eval_params: TrafficEngineeringLPEvaluationParam
     if CONVERTER_PARAMS is not None:
         assert CONVERTER_ITERS is not None and CONVERTER_SEED is not None
         print(as_info(log_section_title("MLU PROBLEM (WITH WARM-START)")))
-        converter = NCFlowTrafficMatrixConverter(CONVERTER_SEED, CONVERTER_PARAMS)
+        # converter = NCFlowTrafficMatrixConverter(CONVERTER_SEED, CONVERTER_PARAMS)
+        converter = SampledConverter(CONVERTER_SEED, CONVERTER_PARAMS)
     else:
         print(as_info(log_section_title("MLU PROBLEM")))
         converter = None
@@ -112,7 +116,8 @@ def local_distributed_admm_test(eval_params: TrafficEngineeringLPEvaluationParam
             if t > 0:
                 lp.check(eval_params)
                 print(lp.check_result)
-                get_solution_confusion_matrix(lp, eval_params)
+                if converter is None:
+                    get_solution_confusion_matrix(lp, eval_params)
                 print(as_info(f"Solved in {str_round(t, 2)} seconds"))
                 print(as_info(f"Final objective value: {str_round(lp.objective_value, 4)}"))
                 print(as_info(f"Actual utilization: {str_round(get_solution_maximum_utilization(lp.assignments, lp.graph), 4)}"))
@@ -134,10 +139,12 @@ def local_distributed_admm_test(eval_params: TrafficEngineeringLPEvaluationParam
                     t = lp.solve(params=args.warm_epochs)
                     if t > 0:
                         lp.check(eval_params)
-                        get_solution_confusion_matrix(lp, eval_params)
+                        print(lp.check_result)
+                        # get_solution_confusion_matrix(lp, eval_params)
                         print(as_info(f"Solved in {str_round(t, 2)} seconds"))
                         print(as_info(f"Final objective value: {str_round(lp.objective_value, 4)}"))
                         print(as_info(f"Actual utilization: {str_round(get_solution_maximum_utilization(lp.assignments, lp.graph), 4)}"))
+                get_solution_confusion_matrix(lp, eval_params)
             
             stats = stringify_collected_stats()
             if stats is not None:
@@ -162,7 +169,7 @@ def remote_distributed_admm_test(eval_params: TrafficEngineeringLPEvaluationPara
     if CONVERTER_PARAMS is not None:
         assert CONVERTER_ITERS is not None and CONVERTER_SEED is not None
         print(as_info(log_section_title("MLU PROBLEM (WITH WARM-START)")))
-        converter = NCFlowTrafficMatrixConverter(CONVERTER_SEED, CONVERTER_PARAMS)
+        converter = SampledConverter(CONVERTER_SEED, CONVERTER_PARAMS)
     else:
         print(as_info(log_section_title("MLU PROBLEM")))
         converter = None
@@ -190,6 +197,7 @@ def remote_distributed_admm_test(eval_params: TrafficEngineeringLPEvaluationPara
         t = lp.solve()
         if t > 0:
             lp.check(eval_params)
+            print(lp.check_result)
             get_solution_confusion_matrix(lp, eval_params)
             print(as_info(f"Solved in {str_round(t, 2)} seconds"))
             print(as_info(f"Final objective value: {str_round(lp.objective_value, 4)}"))
@@ -212,6 +220,7 @@ def remote_distributed_admm_test(eval_params: TrafficEngineeringLPEvaluationPara
                 t = lp.solve(params=args.warm_epochs)
                 if t > 0:
                     lp.check(eval_params)
+                    print(lp.check_result)
                     get_solution_confusion_matrix(lp, eval_params)
                     print(as_info(f"Solved in {str_round(t, 2)} seconds"))
                     print(as_info(f"Final objective value: {str_round(lp.objective_value, 4)}"))
@@ -288,10 +297,16 @@ if __name__ == '__main__':
     warm_start_params_group.add_argument('--converter-seed', type=int, help='RNG seed for TM converter')
     warm_start_params_group.add_argument('--warm-iters', type=int, help='Number of warm-start iterations')
     warm_start_params_group.add_argument('--warm-epochs', type=int, help='Number of epochs per warm-start iteration')
-    warm_start_params_group.add_argument('--scale-mean', type=float, default=0.1, 
-                                         help='Relative scaling of TM mean between conversions')
-    warm_start_params_group.add_argument('--scale-std', type=float, default=0.2, 
-                                         help='Relative scaling of TM standard deviation between conversions')
+    # warm_start_params_group.add_argument('--scale-mean', type=float, default=0.1, 
+    #                                      help='Relative scaling of TM mean between conversions')
+    # warm_start_params_group.add_argument('--scale-std', type=float, default=0.2, 
+    #                                      help='Relative scaling of TM standard deviation between conversions')
+    warm_start_params_group.add_argument('--delta-max', type=float, default=0.4, 
+                                         help='Maximum change of demand value')
+    warm_start_params_group.add_argument('--delta-min', type=float, default=0.2, 
+                                         help='Minimum change of demand value')
+    warm_start_params_group.add_argument('--num-samples', type=int, default=10, 
+                                         help='Number of concurrent demand changes')
     
     args = parser.parse_args()
 
@@ -333,7 +348,8 @@ if __name__ == '__main__':
     
     CONVERTER_ITERS = args.warm_iters
     if CONVERTER_ITERS is not None:
-        CONVERTER_PARAMS = NCFlowTrafficMatrixConverterParams(args.scale_mean, args.scale_std)
+        # CONVERTER_PARAMS = NCFlowTrafficMatrixConverterParams(args.scale_mean, args.scale_std)
+        CONVERTER_PARAMS = SampledTrafficMatrixConverterParams(args.delta_max, args.delta_min, args.num_samples)
         CONVERTER_SEED = args.converter_seed
         WARM_EPOCHS = args.warm_epochs
 

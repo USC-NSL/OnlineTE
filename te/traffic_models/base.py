@@ -2,7 +2,6 @@ import os
 import pickle
 import numpy as np
 import te.constants
-import te.traffic_models
 from te import TE_PATH
 from typing import Dict, Type, List, ClassVar, Optional
 from abc import ABC, abstractmethod
