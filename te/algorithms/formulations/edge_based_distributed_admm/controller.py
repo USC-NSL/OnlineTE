@@ -58,10 +58,9 @@ class ControllerNode(TrafficEngineeringLP):
 
         self._X_ek: Optional[CPUArray] = None
         self._X_ek_start: Optional[CPUArray] = None
-        self._Xo_e_start: Optional[CPUArray] = None
-        self._Xo_e_assigned: Optional[CPUArray] = None
-        self._Xo_e: Optional[gurobipy.tupledict] = None
-        self._Zo_e: Optional[CPUArray] = None
+        self._Z_e_start: Optional[CPUArray] = None
+        self._Z_e: Optional[gurobipy.tupledict] = None
+        self._X_ek_sum_e: Optional[CPUArray] = None
         self._utility: Optional[gurobipy.Var] = None
         self._r_e: Optional[CPUArray] = None
 
@@ -152,7 +151,7 @@ class ControllerNode(TrafficEngineeringLP):
     @record_cpu_runtime('Feasible-Assignment')
     def _set_initial_feasible_solution(self):
         self._X_ek_start = get_feasible_flow_assignment(self._graph, self._commodity_list)
-        self._Xo_e_start = np.sum(self._X_ek_start, axis=1)
+        self._Z_e_start = np.sum(self._X_ek_start, axis=1)
     
     def _set_NULL_M(self):
         M = self._M
@@ -167,6 +166,9 @@ class ControllerNode(TrafficEngineeringLP):
         self._T = T
         self._NUM_EDGES = n
     
+    def _get_Z_value(self) -> CPUArray:
+        return cpu_array([self._Z_e[e].X for e in range(self._NUM_EDGES)])
+    
     def _initialize_variables_and_residuals(self):
         T = self._T
         NUM_EDGES = self._NUM_EDGES
@@ -174,10 +176,10 @@ class ControllerNode(TrafficEngineeringLP):
         self._c_norm = np.linalg.norm(self._capacities)
         self._r_e = cpu_zeros((NUM_EDGES,))
         self._u_t = cpu_zeros((T,))
-        self._Zo_e = cpu_array(self._Xo_e_start)
         self._P_bar_t = cpu_zeros((T,))
         self._Y_bar_t = cpu_zeros((T,))
         self._X_ek = cpu_array(self._X_ek_start)
+        self._X_ek_sum_e = cpu_array(self._Z_e_start)
     
     def are_network_nodes_ready(self) -> bool:
         return self._backend.are_network_nodes_ready()
@@ -220,13 +222,13 @@ class ControllerNode(TrafficEngineeringLP):
         MODEL_CONTROLLER: gurobipy.Model = \
             make_model('EdgeBasedDistributedTE_Controller', params=PARAMS, env=ENV, BarConvTol=PARAMS.BigGamma)
         
-        self._Xo_e = MODEL_CONTROLLER.addVars(NUM_EDGES, lb=0.0, vtype=GRB.CONTINUOUS, name='XO_E')
+        self._Z_e = MODEL_CONTROLLER.addVars(NUM_EDGES, lb=0.0, vtype=GRB.CONTINUOUS, name='Z_E')
         self._utility = MODEL_CONTROLLER.addVar(lb=0.0, ub=1.0, vtype=GRB.CONTINUOUS, name='U')
 
         self._model_controller = MODEL_CONTROLLER
     
     def _get_F(self) -> np.ndarray:
-        return self._Zo_e + self._r_e - self._Xo_e_start
+        return self._get_Z_value() - self._Z_e_start - self._r_e
     
     def _set_X_ek(self):
         self._X_ek = self._backend.get_X_ek(basis=self._NULL_M, initial_feasible_solution=self._X_ek_start)
@@ -235,19 +237,19 @@ class ControllerNode(TrafficEngineeringLP):
         assert self._model_controller is not None
 
         GRAPH = self._graph
-        XO_E = self._Xo_e
+        Z_E = self._Z_e
         UTILITY = self._utility
         MODEL_CONTROLLER = self._model_controller
 
         for i, (_, _, c_e) in enumerate(GRAPH.edges(data='capacity')):
-            MODEL_CONTROLLER.addConstr(XO_E[i] / c_e <= UTILITY)
+            MODEL_CONTROLLER.addConstr(Z_E[i] / c_e <= UTILITY)
     
     @record_cpu_runtime('Controller-Update')
     def _update_controller_objective(self):
         NUM_EDGES = self._NUM_EDGES
         UTILITY = self._utility
-        XO_E = self._Xo_e
-        ZO_E = self._Zo_e
+        Z_E = self._Z_e
+        X_EK_SUM_E = self._X_ek_sum_e
         R_E = self._r_e
         RHO = self._solver_params.Rho
         MODEL_CONTROLLER = self._model_controller
@@ -255,7 +257,7 @@ class ControllerNode(TrafficEngineeringLP):
         OBJECTIVE_CONTROLLER = gurobipy.QuadExpr()
         OBJECTIVE_CONTROLLER.addTerms(self._c_norm * np.sqrt(NUM_EDGES), UTILITY)
         for e in range(NUM_EDGES):
-            OBJECTIVE_CONTROLLER += (RHO/2) * (XO_E[e] - ZO_E[e] + R_E[e]) ** 2
+            OBJECTIVE_CONTROLLER += (RHO/2) * (X_EK_SUM_E[e] - Z_E[e] + R_E[e]) ** 2
         MODEL_CONTROLLER.setObjective(OBJECTIVE_CONTROLLER, GRB.MINIMIZE)
         self._objective_controller = OBJECTIVE_CONTROLLER
     
@@ -264,7 +266,7 @@ class ControllerNode(TrafficEngineeringLP):
 
         self._update_controller_objective()
 
-    @record_return_value('PGD-Runtime')
+    @record_return_value('QP-Runtime')
     @record_cpu_runtime('Network-Update')
     def _do_network_update(self, epoch: int):
         if self._solver_params.NumberOfLocalUpdates > 0:
@@ -306,20 +308,19 @@ class ControllerNode(TrafficEngineeringLP):
         )
         return norm_in_consensus(self._P_bar_t, self._Y_bar_t, 5e-4)
     
-    @record_cpu_runtime('Update-Zo-Re')
-    def _update_Zo_e_and_r_e(self):
+    @record_cpu_runtime('Update-X-EK-SUM')
+    def _update_X_ek_sum(self):
+        self._X_ek_sum_e = self._Z_e_start + len(self._commodity_list) * self._NULL_M @ self._Y_bar_t
+    
+    @record_cpu_runtime('Update-Re')
+    def _update_r_e(self):
         assert self._model_controller is not None
 
-        NUM_EDGES = self._NUM_EDGES
         R_E = self._r_e
-        XO_E = self._Xo_e
-        XO_E_ = cpu_array([XO_E[e].X for e in range(NUM_EDGES)])
-        X_KE_SUM_E = self._Xo_e_start + len(self._commodity_list) * self._NULL_M @ self._Y_bar_t
+        Z_E = self._get_Z_value()
+        X_EK_SUME_E = self._X_ek_sum_e
 
-        Zo_e = (XO_E_ + X_KE_SUM_E) / 2
-        self._Zo_e = Zo_e
-        self._r_e = R_E + (XO_E_ - X_KE_SUM_E) / 2
-        self._Xo_e_assigned = X_KE_SUM_E
+        self._r_e = R_E + (X_EK_SUME_E - Z_E)
 
     def close(self):
         self._backend.close()
@@ -365,11 +366,12 @@ class ControllerNode(TrafficEngineeringLP):
                     if i > 0 and self._reconvene_network_updates():
                         break
 
-                self._update_Zo_e_and_r_e()
+                self._update_X_ek_sum()
+                self._update_r_e()
                 self._reconvene_network_updates()
                 self._update_controller_objective()
 
-                self._objective_trace.append(self._utility.X, get_solution_maximum_utilization(self._Xo_e_assigned, self._graph))
+                self._objective_trace.append(self._utility.X, get_solution_maximum_utilization(self._X_ek_sum_e, self._graph))
             self._set_X_ek()
             return time.time() - t
         except GurobiError as e:
@@ -385,9 +387,9 @@ class ControllerNode(TrafficEngineeringLP):
         NUM_EDGES = self._NUM_EDGES
 
         # Are outer ADMM pairs in consensus?
-        XO_E = np.array([self._Xo_e[e].X for e in range(NUM_EDGES)])
-        ZO_E = self._Zo_e
-        outer_admm_consensus_test(XO_E, ZO_E, eval_params=eval_params)
+        X_EK_SUM_E = self._X_ek_sum_e
+        Z_E = self._get_Z_value()
+        outer_admm_consensus_test(X_EK_SUM_E, Z_E, eval_params=eval_params)
         
         # Are inner ADMM pairs in consensus?
         Y_BAR_T = self._Y_bar_t
