@@ -131,6 +131,13 @@ class WorkerNodeCommunicationBackendBase(ABC):
     @set_solver_parameters.setter
     def set_solver_parameters(self, f: Callable[[SolverParams], None]):
         self._set_solver_parameters = f
+
+    @property
+    def reset_inner_dual_variable(self) -> Callable[[None], None]:
+        return self._reset_inner_dual_variable
+    @reset_inner_dual_variable.setter
+    def reset_inner_dual_variable(self, f: Callable[[None], None]):
+        self._reset_inner_dual_variable = f
     
     def register_signal_handler(self):
         """Delegate signal handling to the backend, otherwise, the controller/worker should do it"""

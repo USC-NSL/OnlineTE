@@ -1,6 +1,7 @@
 import time
 import argparse
 import contextlib
+import multiprocessing
 import concurrent.futures
 from typing import Optional
 from te.algorithms.base import TrafficEngineeringLPEvaluationParams
@@ -71,7 +72,10 @@ def local_distributed_admm_test(eval_params: TrafficEngineeringLPEvaluationParam
         print(as_info(log_section_title("MLU PROBLEM")))
         converter = None
     
-    with concurrent.futures.ProcessPoolExecutor(max_workers=CONTROLLER_RPC_PARAMS.NumWorkers) as network_pool:
+    with concurrent.futures.ProcessPoolExecutor(
+        max_workers=CONTROLLER_RPC_PARAMS.NumWorkers, 
+        mp_context=multiprocessing.get_context(method='spawn')
+    ) as network_pool:
         display_param = DistributedADMMWorkerRPCParams(
             IP=[addr[0] for addr in CONTROLLER_RPC_PARAMS.AddressList],
             Port=[addr[1] for addr in CONTROLLER_RPC_PARAMS.AddressList],

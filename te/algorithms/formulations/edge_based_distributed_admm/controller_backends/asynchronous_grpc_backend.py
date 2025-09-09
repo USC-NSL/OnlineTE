@@ -190,3 +190,9 @@ class AsynchronousgRPCBackend(ControllerCommunicationBackendBase):
     
     def set_active_commodity_count(self, K: int):
         self._event_loop.run_until_complete(self._set_active_commodity_count(K))
+
+    async def _reset_inner_dual_variable(self):
+        await asyncio.gather(*[stub.ResetInnerDualVariable(Empty()) for stub in self._worker_stubs])
+
+    def reset_inner_dual_variable(self):
+        self._event_loop.run_until_complete(self._reset_inner_dual_variable())

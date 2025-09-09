@@ -118,3 +118,7 @@ class NetworkWorkerNodeListener(DistributedADMMSolverServicer):
     def SetActiveCommodityCount(self, request: distributed_lp_messages.ActiveCommodityCount, context):
         self._backend.set_active_commodity_count(request.TotalNumberOfCommodities)
         return Empty()
+    
+    def ResetInnerDualVariable(self, request, context):
+        self._backend.reset_inner_dual_variable()
+        return Empty()

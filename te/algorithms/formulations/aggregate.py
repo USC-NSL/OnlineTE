@@ -1,4 +1,5 @@
 from .edge_based_centralized.edge_based_centralized import CentralizedEdgeBasedLP, GurobiSolverParams
+from .edge_based_centralized.dual_edge_based_centralized import DualCentralizedEdgeBasedLP
 from .edge_based_distributed_admm.controller import ControllerNode, DistributedADMMSolverParams, DistributedADMMControllerRPCParams
 from .edge_based_distributed_admm.worker import NetworkWorkerNode, DistributedADMMWorkerRPCParams
 from .edge_based_local_admm.edge_based_unregulated_admm import UnregulatedADMMLP, UnregulatedADMMSolverParams

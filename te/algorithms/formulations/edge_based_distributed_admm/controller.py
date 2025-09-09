@@ -167,7 +167,10 @@ class ControllerNode(TrafficEngineeringLP):
         self._NUM_EDGES = n
     
     def _get_Z_value(self) -> CPUArray:
-        return cpu_array([self._Z_e[e].X for e in range(self._NUM_EDGES)])
+        try:
+            return cpu_array([self._Z_e[e].X for e in range(self._NUM_EDGES)])
+        except AttributeError:
+            return cpu_array(self._Z_e_start)
     
     def _initialize_variables_and_residuals(self):
         T = self._T
@@ -312,15 +315,18 @@ class ControllerNode(TrafficEngineeringLP):
     def _update_X_ek_sum(self):
         self._X_ek_sum_e = self._Z_e_start + len(self._commodity_list) * self._NULL_M @ self._Y_bar_t
     
+    def _reset_u_t(self):
+        self._u_t = cpu_zeros((self._NULL_M.shape[1],))
+        self._backend.reset_inner_dual_variable()
+    
     @record_cpu_runtime('Update-Re')
     def _update_r_e(self):
         assert self._model_controller is not None
 
         R_E = self._r_e
         Z_E = self._get_Z_value()
-        X_EK_SUME_E = self._X_ek_sum_e
-
-        self._r_e = R_E + (X_EK_SUME_E - Z_E)
+        X_EK_SUM_E = self._X_ek_sum_e
+        self._r_e = R_E + (X_EK_SUM_E - Z_E)
 
     def close(self):
         self._backend.close()
@@ -355,21 +361,23 @@ class ControllerNode(TrafficEngineeringLP):
         PARAMS = self._solver_params
         EPOCHS = params if params is not None else PARAMS.NumberOfEpochs
         SHIFT = 0 if params is None else PARAMS.NumberOfEpochs // 2
-        
+
         try:
             t = time.time()
+            optimize_or_scream(MODEL_CONTROLLER)
+            self._update_r_e()
             for epoch in ShortTQDM(range(EPOCHS)):
-            # for epoch in range(PARAMS.NumberOfEpochs):
-                optimize_or_scream(MODEL_CONTROLLER)
+            # for epoch in range(EPOCHS):
+                # self._reset_u_t()
                 for i in reversed(range(PARAMS.NumberOfNetworkUpdates)):
                     self._do_network_update(epoch + SHIFT)
                     if i > 0 and self._reconvene_network_updates():
                         break
-
-                self._update_X_ek_sum()
-                self._update_r_e()
                 self._reconvene_network_updates()
+                self._update_X_ek_sum()
                 self._update_controller_objective()
+                optimize_or_scream(MODEL_CONTROLLER)
+                self._update_r_e()
 
                 self._objective_trace.append(self._utility.X, get_solution_maximum_utilization(self._X_ek_sum_e, self._graph))
             self._set_X_ek()
@@ -382,6 +390,35 @@ class ControllerNode(TrafficEngineeringLP):
             return time.time() - t
         except asyncio.exceptions.CancelledError:
             return -1
+        
+        # try:
+        #     t = time.time()
+        #     for epoch in ShortTQDM(range(EPOCHS)):
+        #     # for epoch in range(EPOCHS):
+        #         # self._reset_u_t()
+        #         for i in reversed(range(PARAMS.NumberOfNetworkUpdates)):
+        #             self._do_network_update(epoch + SHIFT)
+        #             if i > 0 and self._reconvene_network_updates():
+        #                 break
+        #             print(f'Inner distance: {str(round(np.linalg.norm(self._Y_bar_t - self._P_bar_t), 4))}')
+        #         self._reconvene_network_updates()
+        #         print(f'Inner distance: {str(round(np.linalg.norm(self._Y_bar_t - self._P_bar_t), 4))}')
+        #         self._update_X_ek_sum()
+        #         self._update_controller_objective()
+        #         optimize_or_scream(MODEL_CONTROLLER)
+        #         self._update_r_e()
+
+        #         self._objective_trace.append(self._utility.X, get_solution_maximum_utilization(self._X_ek_sum_e, self._graph))
+        #     self._set_X_ek()
+        #     return time.time() - t
+        # except GurobiError as e:
+        #     print(f'Error code {e.errno}: {e}')
+        #     return -1
+        # except SolutionInterrupted:
+        #     self._set_X_ek()
+        #     return time.time() - t
+        # except asyncio.exceptions.CancelledError:
+        #     return -1
     
     def check(self, eval_params: TrafficEngineeringLPEvaluationParams):
         NUM_EDGES = self._NUM_EDGES

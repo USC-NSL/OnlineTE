@@ -103,6 +103,9 @@ class ControllerCommunicationBackendBase(ABC):
         """Delegate signal handling to the backend, otherwise, the controller/worker should do it"""
         signal.signal(signal.SIGINT, self.stop)
         signal.signal(signal.SIGTERM, self.die)
+    
+    def reset_inner_dual_variable(self):
+        pass
 
 
 _BACKENDS: Dict[str, Type[ControllerCommunicationBackendBase]] = dict()

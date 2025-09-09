@@ -63,9 +63,9 @@ class NetworkWorkerNode:
 
     def initialize(self):
         if self._rpc_params.Multicast:
-            self._backend: WorkerNodeCommunicationBackendBase = MulticastBackend(rpc_params)
+            self._backend: WorkerNodeCommunicationBackendBase = MulticastBackend(self._rpc_params)
         else:
-            self._backend: WorkerNodeCommunicationBackendBase = SynchronousgRPCBackend(rpc_params)
+            self._backend: WorkerNodeCommunicationBackendBase = SynchronousgRPCBackend(self._rpc_params)
         self._backend.set_initial_feasible_solution = self.set_initial_feasible_solution
         self._backend.set_null_space_basis = self.set_null_space_basis
         self._backend.set_solver_parameters = self.set_solver_parameters
@@ -73,6 +73,7 @@ class NetworkWorkerNode:
         self._backend.report_chunk = self.report_chunk
         self._backend.report_aggregate = self.report_aggregate
         self._backend.set_active_commodity_count = self.set_active_commodity_count
+        self._backend.reset_inner_dual_variable = self.reset_inner_dual_variable
         self._backend.start()
     
     def wait(self):
@@ -175,6 +176,10 @@ class NetworkWorkerNode:
     
     def set_active_commodity_count(self, K: int):
         self._K = K
+    
+    def reset_inner_dual_variable(self):
+        self._u_t = cpu_zeros((self._T,))
+        self._u_t_cached = cpu_zeros((self._T,))
 
     def update_cached_values(self, u_t: CPUArray, P_bar_t: CPUArray, Y_bar_t: CPUArray):
         self._u_t_cached = u_t
