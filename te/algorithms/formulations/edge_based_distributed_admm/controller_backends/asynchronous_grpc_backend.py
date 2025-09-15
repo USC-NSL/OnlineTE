@@ -129,6 +129,27 @@ class AsynchronousgRPCBackend(ControllerCommunicationBackendBase):
 
     def get_X_ek(self, basis: CPUArray, initial_feasible_solution: CPUArray):
         return self._event_loop.run_until_complete(self._get_X_ek(basis, initial_feasible_solution))
+
+    # DEBUG
+    async def _get_Y_tk(self):
+        chunks = await asyncio.gather(*[
+            async_rebuild_chunked_array(stub.RequestChunk(Empty()))
+            for stub in self._worker_stubs
+        ])
+        return np.hstack(list(chunks))
+    # DEBUG
+    def get_Y_tk(self):
+        return self._event_loop.run_until_complete(self._get_Y_tk())
+    # DEBUG
+    async def _get_Lambda_ek(self):
+        chunks = await asyncio.gather(*[
+            async_rebuild_chunked_array(stub.DebugRequestLambda(Empty()))
+            for stub in self._worker_stubs
+        ])
+        return np.hstack(list(chunks))
+    # DEBUG
+    def get_Lambda_ek(self):
+        return self._event_loop.run_until_complete(self._get_Lambda_ek())
     
     async def _get_X_ek_sum(self):
         serialized_chunks = await asyncio.gather(*[

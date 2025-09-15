@@ -55,6 +55,7 @@ class ControllerNode(TrafficEngineeringLP):
 
         self._capacities: Optional[DoublePrecisionCPUArray] = None
         self._c_norm: Optional[float] = None
+        self._alpha: Optional[float] = None
 
         self._X_ek: Optional[CPUArray] = None
         self._X_ek_start: Optional[CPUArray] = None
@@ -63,6 +64,11 @@ class ControllerNode(TrafficEngineeringLP):
         self._X_ek_sum_e: Optional[CPUArray] = None
         self._utility: Optional[gurobipy.Var] = None
         self._r_e: Optional[CPUArray] = None
+
+        self._utility_bound_constraints: Tuple[gurobipy.Constr, gurobipy.Constr] = None
+        """Gives the dual variables `v_neg` and `v_pos`"""
+        self._capacity_constraints: List[gurobipy.Constr] = None
+        """Gives the dual variables `tau_e`, a vector of length `n`"""
 
         self._P_bar_t: Optional[CPUArray] = None
         self._Y_bar_t: Optional[CPUArray] = None
@@ -225,8 +231,10 @@ class ControllerNode(TrafficEngineeringLP):
         MODEL_CONTROLLER: gurobipy.Model = \
             make_model('EdgeBasedDistributedTE_Controller', params=PARAMS, env=ENV, BarConvTol=PARAMS.BigGamma)
         
-        self._Z_e = MODEL_CONTROLLER.addVars(NUM_EDGES, lb=0.0, vtype=GRB.CONTINUOUS, name='Z_E')
-        self._utility = MODEL_CONTROLLER.addVar(lb=0.0, ub=1.0, vtype=GRB.CONTINUOUS, name='U')
+        # self._Z_e = MODEL_CONTROLLER.addVars(NUM_EDGES, lb=0.0, vtype=GRB.CONTINUOUS, name='Z_E')
+        self._Z_e = MODEL_CONTROLLER.addVars(NUM_EDGES, lb=float('-inf'), vtype=GRB.CONTINUOUS, name='Z_E')
+        # self._utility = MODEL_CONTROLLER.addVar(lb=0.0, ub=1.0, vtype=GRB.CONTINUOUS, name='U')
+        self._utility = MODEL_CONTROLLER.addVar(lb=float('-inf'), vtype=GRB.CONTINUOUS, name='U')
 
         self._model_controller = MODEL_CONTROLLER
     
@@ -244,8 +252,17 @@ class ControllerNode(TrafficEngineeringLP):
         UTILITY = self._utility
         MODEL_CONTROLLER = self._model_controller
 
-        for i, (_, _, c_e) in enumerate(GRAPH.edges(data='capacity')):
-            MODEL_CONTROLLER.addConstr(Z_E[i] / c_e <= UTILITY)
+        # Utilization bound constraints
+        u_low = MODEL_CONTROLLER.addConstr(UTILITY >= 0)
+        u_high = MODEL_CONTROLLER.addConstr(-UTILITY >= -1)
+        self._utility_bound_constraints = (u_low, u_high)
+
+        # for i, (_, _, c_e) in enumerate(GRAPH.edges(data='capacity')):
+        #     MODEL_CONTROLLER.addConstr(Z_E[i] / c_e <= UTILITY)
+        capacity_constraints: List[gurobipy.Constr] = []
+        for e, (_, _, c_e) in enumerate(GRAPH.edges.data('capacity')):
+            capacity_constraints.append(MODEL_CONTROLLER.addConstr(UTILITY * c_e >= Z_E[e]))
+        self._capacity_constraints = capacity_constraints
     
     @record_cpu_runtime('Controller-Update')
     def _update_controller_objective(self):
@@ -256,12 +273,14 @@ class ControllerNode(TrafficEngineeringLP):
         R_E = self._r_e
         RHO = self._solver_params.Rho
         MODEL_CONTROLLER = self._model_controller
+        ALPHA = self._c_norm * np.sqrt(NUM_EDGES)
         
         OBJECTIVE_CONTROLLER = gurobipy.QuadExpr()
-        OBJECTIVE_CONTROLLER.addTerms(self._c_norm * np.sqrt(NUM_EDGES), UTILITY)
+        OBJECTIVE_CONTROLLER.addTerms(ALPHA, UTILITY)
         for e in range(NUM_EDGES):
             OBJECTIVE_CONTROLLER += (RHO/2) * (X_EK_SUM_E[e] - Z_E[e] + R_E[e]) ** 2
         MODEL_CONTROLLER.setObjective(OBJECTIVE_CONTROLLER, GRB.MINIMIZE)
+        self._alpha = ALPHA
         self._objective_controller = OBJECTIVE_CONTROLLER
     
     def _add_objective(self):
@@ -354,6 +373,42 @@ class ControllerNode(TrafficEngineeringLP):
         if with_params:
             self._model_controller.resetParams()
     
+    def check_stopping_criterion(self):
+        K = len(self.commodity_list)
+        NUM_EDGES = self._NUM_EDGES
+        T = self._T
+        C_E = self._capacities
+        Z_E = self._get_Z_value()
+        V_MINUS = self._utility_bound_constraints[0].BarPi
+        V_PLUS = self._utility_bound_constraints[1].BarPi
+        TAU_E = np.array([const.BarPi for const in self._capacity_constraints])
+        R_E = self._r_e
+        UTILIZATION = self._utility.X
+        ALPHA = self._alpha
+        X_EK_START = self._X_ek_start
+        X_EK_SUM_START = self._Z_e_start
+        X_EK_SUM_E = self._X_ek_sum_e
+        Y_TK = self._backend.get_Y_tk()
+        LAMBDA_EK = self._backend.get_Lambda_ek()
+        Y_BAR_T = self._Y_bar_t
+        P_BAR_T = self._P_bar_t
+        N = self._NULL_M
+
+        primal_inf_1 = np.linalg.norm(X_EK_SUM_E - Z_E) / NUM_EDGES
+        primal_inf_2 = np.linalg.norm(Y_BAR_T - P_BAR_T) / T
+        # WHY IS IT MINUS????
+        dual_inf_1 = np.dot(np.abs(Z_E), np.abs(-TAU_E + R_E)) / NUM_EDGES
+        dual_inf_2 = np.sum(np.abs(np.array([np.dot(N @ Y_TK[:, k], LAMBDA_EK[:, k] + R_E) for k in range(K)]))) / (K * NUM_EDGES)
+        dual_inf_3 = np.abs(ALPHA - V_MINUS + V_PLUS - np.dot(TAU_E, C_E))
+        objective_gap = np.abs(V_PLUS + np.sum([np.dot(X_EK_START[:, k], LAMBDA_EK[:, k] + R_E) for k in range(K)]) - ALPHA * UTILIZATION) / (ALPHA * UTILIZATION)
+
+        # print(f"PRIMAL INF I: {str(round(primal_inf_1, 4))}")
+        # print(f"PRIMAL INF II: {str(round(primal_inf_2, 4))}")
+        # print(f"DUAL INF I: {str(round(dual_inf_1, 4))}")
+        # print(f"DUAL INF II: {str(round(dual_inf_2, 4))}")
+        # print(f"DUAL INF III: {str(round(dual_inf_3, 4))}")
+        print(f"OBJECTIVE GAP: {str(round(objective_gap, 4))} (EXPECTED: {(np.abs(UTILIZATION/0.5592 - 1))})")
+    
     @record_cpu_runtime('Solve')
     def solve(self, params: Optional[int] = None) -> float:
         self.check_result = None
@@ -366,8 +421,8 @@ class ControllerNode(TrafficEngineeringLP):
             t = time.time()
             optimize_or_scream(MODEL_CONTROLLER)
             self._update_r_e()
-            for epoch in ShortTQDM(range(EPOCHS)):
-            # for epoch in range(EPOCHS):
+            # for epoch in ShortTQDM(range(EPOCHS)):
+            for epoch in range(EPOCHS):
                 # self._reset_u_t()
                 for i in reversed(range(PARAMS.NumberOfNetworkUpdates)):
                     self._do_network_update(epoch + SHIFT)
@@ -380,6 +435,7 @@ class ControllerNode(TrafficEngineeringLP):
                 self._update_r_e()
 
                 self._objective_trace.append(self._utility.X, get_solution_maximum_utilization(self._X_ek_sum_e, self._graph))
+                # self.check_stopping_criterion()
             self._set_X_ek()
             return time.time() - t
         except GurobiError as e:

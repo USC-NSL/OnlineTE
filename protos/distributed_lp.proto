@@ -16,6 +16,9 @@ service DistributedADMMSolver {
     rpc SetSolverParameters(SolverParameters) returns (google.protobuf.Empty) {}
     rpc SetActiveCommodityCount(ActiveCommodityCount) returns (google.protobuf.Empty) {}
     rpc Close(google.protobuf.Empty) returns (google.protobuf.Empty) {}
+
+    // DEBUG
+    rpc DebugRequestLambda(google.protobuf.Empty) returns (stream Chunk) {}
 }
 
 message InitMessage {

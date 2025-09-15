@@ -174,16 +174,19 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
                 if edge[1] == SOURCE:
                     MODEL.addConstr(FLOWS[(e, k)] == 0)
             
+            source_constraint = None
+            destination_constraint = None
             for v in GRAPH.nodes():
                 if v == SOURCE:
                     # Demand constraint from source
-                    MODEL.addConstr(flow_out[v] - flow_in[v] == DEMAND)
+                    source_constraint = MODEL.addConstr(flow_out[v] - flow_in[v] == DEMAND)
                 elif v == DESTINATION:
                     # Demand constraint in destination
-                    MODEL.addConstr(flow_in[v] - flow_out[v] == DEMAND)
+                    destination_constraint = MODEL.addConstr(flow_in[v] - flow_out[v] == DEMAND)
                 else:
                     # Flow conservation in transit
                     MODEL.addConstr(flow_out[v] == flow_in[v])
+            demand_constraints.append((source_constraint, destination_constraint))
         self._demand_constraints = demand_constraints
 
     def _add_objective(self):

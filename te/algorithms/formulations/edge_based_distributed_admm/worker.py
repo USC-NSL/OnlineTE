@@ -74,6 +74,7 @@ class NetworkWorkerNode:
         self._backend.report_aggregate = self.report_aggregate
         self._backend.set_active_commodity_count = self.set_active_commodity_count
         self._backend.reset_inner_dual_variable = self.reset_inner_dual_variable
+        self._backend.debug_request_lambda = self.debug_request_lambda
         self._backend.start()
     
     def wait(self):
@@ -191,6 +192,9 @@ class NetworkWorkerNode:
     
     def report_aggregate(self) -> CPUArray:
         return np.sum(self._X_ek_start_chunk + self._NULL_M @ self._Y_tk_chunk, axis=1)
+    
+    def debug_request_lambda(self) -> CPUArray:
+        return cpu_array(self._lambda_ek_chunk)
     
     def close(self):
         self._backend.close()

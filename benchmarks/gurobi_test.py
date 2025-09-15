@@ -1,3 +1,4 @@
+import numpy as np
 import argparse
 import contextlib
 from typing import Optional

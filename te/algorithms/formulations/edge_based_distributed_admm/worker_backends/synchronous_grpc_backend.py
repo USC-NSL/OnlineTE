@@ -122,3 +122,6 @@ class NetworkWorkerNodeListener(DistributedADMMSolverServicer):
     def ResetInnerDualVariable(self, request, context):
         self._backend.reset_inner_dual_variable()
         return Empty()
+    
+    def DebugRequestLambda(self, request, context):
+        return chunk_big_array(self._backend.debug_request_lambda(), GRPC_ARRAY_STREAM_MAX_LEN)
