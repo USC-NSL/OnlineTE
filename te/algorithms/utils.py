@@ -250,7 +250,7 @@ def test_mlu(lp_cls: Type[TrafficEngineeringLP], graph: nx.DiGraph, tm: TrafficM
         print(as_info(log_subsection_title(f"SOLVING WITH: {lp.alg_name}")))
         t = lp.solve()
         print(as_info(log_subsection_title("CHECKING SOLUTION")))
-        if t > 0:
+        if t >= 0:
             lp.check(eval_params)
             print(lp.check_result)
             get_solution_confusion_matrix(lp, eval_params)

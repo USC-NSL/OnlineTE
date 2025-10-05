@@ -7,7 +7,13 @@ from typing import List, Tuple
 from utils.logging import as_warning
 
 
-NUM_PROCS = multiprocessing.cpu_count()
+NUM_PROCS = max(multiprocessing.cpu_count() - 4, 1)
+"""
+Maximum number of processes that will be spawned to do any parallel task.
+We avoid going up to exactly the CPU count, since that will bring a lot of
+contention and cause problems.
+We leave 4 cores alone at all times for other things.
+"""
 
 
 class TempHelper:

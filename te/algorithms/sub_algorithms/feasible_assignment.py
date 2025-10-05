@@ -17,7 +17,7 @@ MEMMAP_FILE_NAME = 'X_KE.npy'
 
 
 def _get_feasible_flow_assignment(edge_indexing: Dict[Tuple[int, int], int], graph: nx.DiGraph,
-                                  commodity_slice: List[Commodity], array_slice: np.ndarray) -> np.ndarray:
+                                  commodity_slice: List[Commodity], array_slice: np.ndarray):
     for k, commodity in enumerate(commodity_slice):
         SOURCE = commodity.source
         DESTINATION = commodity.destination

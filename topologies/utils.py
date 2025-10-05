@@ -16,6 +16,7 @@ from topologies import (
 )
 from te.traffic_models.base import TrafficMatrixBase, Commodity
 from te.traffic_models.models import UniformTrafficMatrix, UniformTrafficMatrixParams
+from utils.logging import as_warning
 
 
 TOPOLGOY_ZOO_PATH = os.path.join(TOPOLOGIES_PATH, TOPOLOGY_ZOO_DIR_NAME)
@@ -60,16 +61,21 @@ def load_zoo_topology(name: str, seed: Optional[int] = None) -> nx.DiGraph:
     self_loops = list(nx.selfloop_edges(g))
     if len(self_loops) > 0:
         g.remove_edges_from(self_loops)
-        print(f"Removing {len(self_loops)} self-loop edges")
+        print(as_warning(f"Removing {len(self_loops)} self-loop edges"))
         
     # Remove isolated nodes (some topologies have it, like "US Signal")
     isolateds = list(nx.isolates(g))
     if len(isolateds) > 0:
         g.remove_nodes_from(isolateds)
         g = nx.relabel_nodes(g, {n: i for i, n in enumerate(g.nodes())})
-        print(f"Removing {len(isolateds)} isolated nodes")
+        print(as_warning(f"Removing {len(isolateds)} isolated nodes"))
 
-    return g.to_directed()
+    new_g = nx.Graph(g)
+    
+    if new_g.number_of_edges() != g.number_of_edges():
+        print(as_warning(f"Removing {g.number_of_edges() - new_g.number_of_edges()} parallel edges"))
+
+    return new_g.to_directed()
 
 
 def _get_graph_list_to_join(n_nodes: int, num: int = 1, seed: Optional[int] = None) -> List[nx.DiGraph]:

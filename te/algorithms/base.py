@@ -32,6 +32,33 @@ as_simplex_basis_name = lambda name: with_postfix(name, SIMPLEX_BASIS_POSTFIX)
 
 
 class SolverParams(ABC):
+    """
+    ABC for any set of solver/evaluation parameters that we want to bundle
+    together and make known to the user.
+    By default, it supports a pretty-print such that a table is shown for
+    a given object when stringified.
+
+    Every inheritence of this class, adds an extra `depth` to it.
+    Depth 0 is always the parameters introduced by the latest inheritence, and
+    inner depths go into the fields inherited by the parents.
+
+    For examples:
+    ```
+    @dataclass
+    class A(SolverParams):
+        field1: str
+    
+    @dataclass
+    class B(SolverParams):
+        field2: str
+    
+    B_obj = B('a', 'b')
+    print(B_obj.child_fields)               # returns `{'field2': 'a'}
+    print(B_obj.get_fields_up_to_level(1))  # returns `{'field2': 'a', 'field1': 'b'}
+    ```
+
+    TODO: Force this to always check if we are implementing a `dataclass`.
+    """
     PRINT_FORMAT = "| {:^{left_padding}} | {:^{right_padding}} |"
 
     @property
@@ -169,6 +196,34 @@ class SolutionElementBase(ABC):
 
 @dataclass
 class GurobiSolverParams(SolverParams):
+    """
+    Solver parameters for Gurobi.
+
+    Attributes
+    ----------
+    Method: int
+        The Gurobi solver method to be used (values should be clones of `GRB` enums)
+    Crossover: int
+        Whether to use Simplex crossover after finishing Barrier iterations. Since
+        Gurobi epxects `int`s, we use `int` instead of `bool`.
+    NumericFocus: int
+        How careful should Gurobi be about numerical errors. See Gurobi docs for
+        how to set them. We have noted that Dual Simplex in particular might need
+        to have this with a higher value when solving MLU on large topologies.
+    ConvTol: float
+        Objective convergence tolerance (used for _ALL_ algorithms, not just Barrier).
+    FeasibilityTol: float
+        Constraint violation tolerance. 
+    Presolve: int
+        Whether to allow for Gurobi to apply presolve to the model. In our experience,
+        with Barrier in particular, it is not worth it and it is much better to go
+        directly to the solver.
+    Threads: int
+        Number of threads to use for Barrier/Concurrent solver. Simplex methods do
+        not benefit from multiple threads.
+    LogFile:
+        Output log file for Gurobi.
+    """
     Method: int = te.constants.DEFAULT_SOLVER_METHOD
     Crossover: int = te.constants.DEFAULT_CROSSOVER
     NumericFocus: int = te.constants.DEFAULT_NUMERIC_FOCUS
@@ -184,6 +239,56 @@ class GurobiSolverParams(SolverParams):
 
 @dataclass
 class TrafficEngineeringLPEvaluationParams(SolverParams):
+    """
+    All generic evaluation parameters go into this class.
+
+    Attributes
+    ---------
+    TopologyName: str
+        Name of the topology that we are solving on.
+        The name is just for logging.
+    Seed: int
+        Any RNG will be initialized to this seed to make the
+        evaluations reproducible.
+    ScaleFactor: float
+        When a problem can become infeasible because of capacity
+        constraints, this value can be used to inflate capacity
+        values by a set amount to prevent that.
+        By default, a value of `10.0` is used, but needs to be
+        adjusted for each topology.
+    FloatResolution: float
+        A pair of floating point numbers that are less than this 
+        value apart are treated as the same. May also be used as
+        an `epsilon` tolerance when numerical problems may arise
+        (e.g. when a divide by zero is likely).
+    FeasibilityTolerance: float
+        Absolute contraint violation tolerance. Will override any
+        other values if needed (including the one from Gurobi).
+    FeasibilityRatio: float
+        Relative objective _AND_ constraint violation. 
+    PrintReports: bool = `False`
+        Essentially a `verbose` flag. Prints the detailed report of
+        what we are doing and detailed description of constraint or
+        objective violations.
+    ShowPLT: bool = `False`
+        Pop up a window for `PLT` plots in the end.
+    SavePLT: bool = `True`
+        Save any `PLT` plots generated.
+    SaveSol: bool = `False`
+        Save the final solution by calling the `save_sol` method
+        of the problem.
+        (Note that the output can be very large).
+    TraceOutputPath: Optional[str] = `'res.txt'`
+        A simple text file, containing the objective value trace, if the
+        problem class actually implemented and provided it.
+    PLTOutputPath: Optional[str] = `'res.png'`
+        Path to the output file for all `PLT` plots.
+    
+    Note
+    ----
+    For now, exactly one of `FeasibilityTolerance` or `FeasibilityRatio` must
+    be given.
+    """
     TopologyName: str
     Seed: int
     ScaleFactor: float = 10.0
@@ -210,6 +315,21 @@ class TrafficEngineeringLPEvaluationParams(SolverParams):
 
 @dataclass
 class TrafficEngineeringLPCheckResult:
+    """
+    A simple class for reporting the quality of a TE solution after it was
+    checked for violations.
+
+    Attributes
+    ----------
+    unsat_ratio: float
+        Ratio of unsatisfied demands.
+    congested_ratio: float
+        Ratio of links that are congested.
+    unsat_commodities: Set[int]
+        A set of commodity indices that are unsatisfied.
+    congested_links: Set[int]
+        Set of link (edge) indices that are congested.
+    """
     unsat_ratio: float
     congested_ratio: float
     unsat_commodities: Set[int]

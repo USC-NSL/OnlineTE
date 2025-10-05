@@ -1,3 +1,4 @@
+# Edge-Based Solvers
 from .edge_based_centralized.edge_based_centralized import CentralizedEdgeBasedLP, GurobiSolverParams
 from .edge_based_centralized.dual_edge_based_centralized import DualCentralizedEdgeBasedLP
 from .edge_based_distributed_admm.controller import ControllerNode, DistributedADMMSolverParams, DistributedADMMControllerRPCParams
@@ -10,3 +11,6 @@ try:
     from .edge_based_gpu_admm.edge_based_unregulated_admm_gpu import GPUUnregulatedADMMLP, GPUUnregulatedADMMSolverParams
 except ModuleNotFoundError:
     pass
+
+# Path-Based Solvers
+from .path_based_centralized.path_based_centralized import CentralizedPathBasedLP, CentralizedPathBasedSolverParams

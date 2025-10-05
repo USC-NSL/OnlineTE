@@ -1,6 +1,6 @@
 import numpy as np
 from te.algorithms.array_utils import get_global_precision, DOUBLE_PRECISION, SINGLE_PRECISION, HALF_PRECISION
-from typing import Tuple, Callable, Any
+from typing import Tuple, Callable, Any, Optional
 
 CPUArray = np.ndarray
 """Alias for `numpy.ndarray`, an array that lives on the RAM. Plenty of space usually."""
@@ -33,8 +33,12 @@ def set_cpu_float_precision():
 
 cpu_zeros: Callable[[Tuple[int]], CPUArray]  = lambda shape: np.zeros(shape=shape, dtype=_CPU_DTYPE)
 """Wrapper for `np.zeros`. Enforces the global data type"""
-cpu_mmap: Callable[[str, Tuple[int], str], CPUArray] = \
-    lambda path, shape, mode: np.lib.format.open_memmap(shape=shape, filename=path, mode=mode, dtype=_CPU_DTYPE)
+# TODO: Fix the type hint for this ...
+def cpu_mmap(path: str, shape: Tuple[int], mode: str, dtype: Optional[str] = None):
+    if dtype is None:
+        return np.lib.format.open_memmap(shape=shape, filename=path, mode=mode, dtype=_CPU_DTYPE)
+    else:
+        return np.lib.format.open_memmap(shape=shape, filename=path, mode=mode, dtype=dtype)
 """Alias for MMAP"""
 cpu_array: Callable[[Any], CPUArray] = lambda input: np.array(input, dtype=_CPU_DTYPE)
 """Create a copy of an array-like thing"""
