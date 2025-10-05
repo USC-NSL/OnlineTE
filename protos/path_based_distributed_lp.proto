@@ -1,0 +1,59 @@
+syntax = "proto3";
+import "google/protobuf/empty.proto";
+import "array.proto";
+
+
+service PathBasedDistributedADMMSolver {
+    rpc SetAlpha(stream Chunk) returns (google.protobuf.Empty) {}
+    rpc SetBeta(stream Chunk) returns (google.protobuf.Empty) {}
+    rpc SetDemands(stream Chunk) returns (google.protobuf.Empty) {}
+    rpc DoNetworkUpdate(NetworkUpdateRequest) returns (NetworkUpdateResponse) {}
+    rpc UpdateWorkerNode(UpdateMessage) returns (google.protobuf.Empty) {}
+    rpc RequestChunk(google.protobuf.Empty) returns (stream Chunk) {}
+    rpc QueryState(google.protobuf.Empty) returns (State) {}
+    rpc SetSolverParameters(SolverParameters) returns (google.protobuf.Empty) {}
+    rpc SetActiveCommodityCount(ActiveCommodityCount) returns (google.protobuf.Empty) {}
+    rpc Close(google.protobuf.Empty) returns (google.protobuf.Empty) {}
+}
+
+message UpdateMessage {
+    SerializedNumpyArrayMessage X_bar_e = 1;
+    SerializedNumpyArrayMessage P_bar_e = 2;
+    SerializedNumpyArrayMessage u_e = 3;
+    int32 xid = 4;
+}
+
+message NetworkUpdateRequest {
+    int32 epoch = 1;
+    int32 xid = 2;
+}
+
+message NetworkUpdateResponse {
+    int32 worker_id = 1;
+    int32 runtime_ns = 2;
+    SerializedNumpyArrayMessage means = 3;
+    int32 xid = 4;
+}
+
+message State {
+    bool ready = 1;
+}
+
+message SolverParameters {
+    int32 NumberOfPathsPerCommodity = 1;
+    string TopologyName = 2;
+    int32 NumberOfEpochs = 3;
+    int32 NumberOfNetworkUpdates = 4;
+    float Rho = 5;
+    float Eta = 6;
+    float Gamma = 7;
+    float Kappa = 8;
+    int32 QPIterations = 9;
+    int32 NumWorkers = 10;
+    string Precision = 11;
+    int32 Seed = 12;
+}
+
+message ActiveCommodityCount {
+    int32 TotalNumberOfCommodities = 1;
+}
