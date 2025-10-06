@@ -1,7 +1,7 @@
 import signal
-from typing import Dict, Type, Callable, Tuple, Optional
+from typing import Dict, Type, Callable, Tuple
 from abc import ABC, abstractmethod
-from te.algorithms.array_utils.cpu_utils import CPUArray
+from te.algorithms.array_utils.cpu_utils import CPUArray, BooleanCPUArray, IntegerCPUArray
 from te.algorithms.base import SolverParams
 
 
@@ -70,17 +70,17 @@ class WorkerNodeCommunicationBackendBase(ABC):
         """
 
     @property
-    def set_alpha(self) -> Callable[[CPUArray], None]:
+    def set_alpha(self) -> Callable[[BooleanCPUArray], None]:
         return self._set_alpha
     @set_alpha.setter
-    def set_alpha(self, f: Callable[[CPUArray], None]):
+    def set_alpha(self, f: Callable[[BooleanCPUArray], None]):
         self._set_alpha = f
 
     @property
-    def set_beta(self) -> Callable[[CPUArray], None]:
+    def set_beta(self) -> Callable[[IntegerCPUArray], None]:
         return self._set_beta
     @set_beta.setter
-    def set_beta(self, f: Callable[[CPUArray], None]):
+    def set_beta(self, f: Callable[[IntegerCPUArray], None]):
         self._set_beta = f
 
     @property
@@ -117,13 +117,6 @@ class WorkerNodeCommunicationBackendBase(ABC):
     @report_chunk.setter
     def report_chunk(self, f: Callable[[None], CPUArray]):
         self._report_chunk = f
-    
-    # @property
-    # def report_aggregate(self) -> Callable[[None], CPUArray]:
-    #     return self._report_aggregate
-    # @report_aggregate.setter
-    # def report_aggregate(self, f: Callable[[None], CPUArray]):
-    #     self._report_aggregate = f
     
     @property
     def is_worker_node_ready(self) -> bool:

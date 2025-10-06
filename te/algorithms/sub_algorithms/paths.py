@@ -114,14 +114,14 @@ class TShortestPaths:
                 commodities.append((src, dst))
 
         if K <= MAX_NUMBER_OF_COMMODITIES_PER_CORE:
-            alpha_k = np.zeros(dtype=np.bool, shape=(K, self._N, self._T))
+            alpha_k = np.zeros(dtype=bool, shape=(K, self._N, self._T))
             beta_k = np.zeros(dtype=np.int32, shape=(K,))
             TShortestPaths._get_paths(EDGE_INDEXING, T, graph, commodities, alpha_k, beta_k)
         else:
             with contextlib.closing(TempHelper(TEMP_FOLDER_NAME)) as tp:
                 alpha_path = tp.get_file_path(MEMMAP_FILE_NAME_ALPHA)
                 beta_path = tp.get_file_path(MEMMAP_FILE_NAME_BETA)
-                ALPHA_KET = cpu_mmap(alpha_path, (K, E, T), 'w+', np.bool)
+                ALPHA_KET = cpu_mmap(alpha_path, (K, E, T), 'w+', bool)
                 BETA_K = cpu_mmap(beta_path, (K,), 'w+', np.int32)
                 nprocs = get_number_of_required_workers(K, MAX_NUMBER_OF_WORKERS, MAX_NUMBER_OF_COMMODITIES_PER_CORE)
                 print(as_info(f'Spawning {nprocs} workers to get path assignments'))

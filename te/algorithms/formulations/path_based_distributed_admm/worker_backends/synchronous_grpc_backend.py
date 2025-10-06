@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from .base import WorkerNodeCommunicationBackendBase, worker_node_communication_backend
 from te.algorithms.formulations.edge_based_distributed_admm.utils import (
     serialized_message_to_array, array_to_serialized_message,
-    rebuild_chunked_array, chunk_big_array, get_optional_field,
+    rebuild_chunked_array, chunk_big_array, 
     GRPC_ARRAY_STREAM_MAX_LEN)
 from .. import PathBasedDistributedADMMSolverParams, PathBasedDistributedADMMWorkerRPCParams
 
@@ -100,9 +100,6 @@ class NetworkWorkerNodeListener(PathBasedDistributedADMMSolverServicer):
     
     def RequestChunk(self, request, context):
         return chunk_big_array(self._backend.report_chunk(), GRPC_ARRAY_STREAM_MAX_LEN)
-    
-    def RequestAggregate(self, request, context):
-        return array_to_serialized_message(self._backend.report_aggregate())
     
     def QueryState(self, request, context):
         return distributed_lp_messages.State(ready=self._backend.is_alive)

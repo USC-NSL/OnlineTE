@@ -3,7 +3,7 @@ import asyncio
 import numpy as np
 from typing import List, ClassVar, Optional
 from dataclasses import dataclass
-from te.algorithms.array_utils.cpu_utils import CPUArray
+from te.algorithms.array_utils.cpu_utils import CPUArray, BooleanCPUArray, IntegerCPUArray
 from .. import PathBasedDistributedADMMControllerRPCParams, PathBasedDistributedADMMSolverParams
 from .base import (ControllerCommunicationBackendBase, controller_communication_backend,
                    controller_communication_backend_params)
@@ -85,7 +85,7 @@ class AsynchronousgRPCBackend(ControllerCommunicationBackendBase):
         return self._event_loop.run_until_complete(self._are_network_nodes_ready())
 
     async def _initialize_worker_nodes(self, solver_params: PathBasedDistributedADMMSolverParams, 
-                                       alpha: CPUArray, beta: CPUArray, demands: CPUArray):
+                                       alpha: BooleanCPUArray, beta: IntegerCPUArray, demands: CPUArray):
         NUM_WORKERS = self.number_of_nodes
         ALPHA_KET_CHUNKS = np.array_split(alpha, NUM_WORKERS, axis=0)
         BETA_K_CHUNKS = np.array_split(beta, NUM_WORKERS, axis=0)
@@ -98,11 +98,11 @@ class AsynchronousgRPCBackend(ControllerCommunicationBackendBase):
 
         # Now, send the path and demand configurations
         await asyncio.gather(*[
-            stub.SetAlpha(chunk_big_array(ALPHA_KET_CHUNKS[i], GRPC_ARRAY_STREAM_MAX_LEN))
+            stub.SetAlpha(chunk_big_array(ALPHA_KET_CHUNKS[i], GRPC_ARRAY_STREAM_MAX_LEN, dtype=bool))
             for i, stub in enumerate(WORKERS)
         ])
         await asyncio.gather(*[
-            stub.SetBeta(chunk_big_array(BETA_K_CHUNKS[i], GRPC_ARRAY_STREAM_MAX_LEN))
+            stub.SetBeta(chunk_big_array(BETA_K_CHUNKS[i], GRPC_ARRAY_STREAM_MAX_LEN, dtype=np.int32))
             for i, stub in enumerate(WORKERS)
         ])
         await asyncio.gather(*[
@@ -111,7 +111,7 @@ class AsynchronousgRPCBackend(ControllerCommunicationBackendBase):
         ])
     
     def initialize_worker_nodes(self, solver_params: PathBasedDistributedADMMSolverParams,
-                                alpha: CPUArray, beta: CPUArray, demands: CPUArray):
+                                alpha: BooleanCPUArray, beta: IntegerCPUArray, demands: CPUArray):
         self._event_loop.run_until_complete(self._initialize_worker_nodes(solver_params, alpha, beta, demands))
     
     async def _update_demands(self, updated_demands: CPUArray):
@@ -142,8 +142,8 @@ class AsynchronousgRPCBackend(ControllerCommunicationBackendBase):
         runtimes, serialized_x_bar_chunks = zip(*list([(res.runtime_ns, res.means) for res in responses]))
         return max(runtimes), np.mean([serialized_message_to_array(chunk) for chunk in serialized_x_bar_chunks], axis=0)
     
-    def do_network_update(self, epoch: int, F_e: Optional[CPUArray] = None):
-        message = distributed_lp_messages.NetworkUpdateRequest(epoch=epoch, F_e=array_to_serialized_message(F_e))
+    def do_network_update(self, epoch: int):
+        message = distributed_lp_messages.NetworkUpdateRequest(epoch=epoch)
         return self._event_loop.run_until_complete(self._do_network_update(message))
     
     async def _reconvene_network_updates(self, message: distributed_lp_messages.UpdateMessage):

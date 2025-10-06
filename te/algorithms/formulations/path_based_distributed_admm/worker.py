@@ -6,11 +6,12 @@ import numpy as np
 from typing import Optional, Tuple
 from utils.logging import as_warning
 from te.algorithms.array_utils import set_global_precision
-from te.algorithms.array_utils.cpu_utils import CPUArray, cpu_zeros, cpu_array, set_cpu_float_precision
+from te.algorithms.array_utils.cpu_utils import (CPUArray, IntegerCPUArray, BooleanCPUArray, 
+                                                 cpu_zeros, cpu_array, set_cpu_float_precision)
 from . import PathBasedDistributedADMMSolverParams, PathBasedDistributedADMMWorkerRPCParams
 from .worker_backends.base import WorkerNodeCommunicationBackendBase
 from .worker_backends.synchronous_grpc_backend import SynchronousgRPCBackend
-from te.algorithms.sub_algorithms.pgd import do_plain_pgd_with_step_reduction
+from te.algorithms.sub_algorithms.pgd import do_plain_path_based_pgd_with_step_reduction
 
 
 class NetworkWorkerNode:
@@ -25,9 +26,10 @@ class NetworkWorkerNode:
         self._T: Optional[int] = None
         self._NUM_EDGES: Optional[int] = None
         self._CHUNK_LEN: Optional[int] = None
-        self._alpha_ket_chunk: Optional[CPUArray] = None
-        self._beta_k_chunk: Optional[CPUArray] = None
+        self._alpha_ket_chunk: Optional[BooleanCPUArray] = None
+        self._beta_k_chunk: Optional[IntegerCPUArray] = None
         self._D_k_chunk: Optional[CPUArray] = None
+        
         self._X_bar_e_cached: Optional[CPUArray] = None
         self._P_bar_e_cached: Optional[CPUArray] = None
         self._u_e_cached: Optional[CPUArray] = None
@@ -71,13 +73,24 @@ class NetworkWorkerNode:
     def wait(self):
         self._backend.wait()
     
-    def set_alpha(self, alpha: CPUArray):
+    def set_alpha(self, alpha: BooleanCPUArray):
         self._alpha_ket_chunk = alpha
-        self._CHUNK_LEN, self._NUM_EDGES, self._T = alpha.shape
-    def set_beta(self, beta: CPUArray):
+        K, N, T = alpha.shape
+        
+        self._CHUNK_LEN = K 
+        self._NUM_EDGES = N 
+        self._T = T
+        
+        self._X_bar_e_cached = cpu_zeros((N,))
+        self._P_bar_e_cached = cpu_zeros((N,))
+        self._u_e_cached = cpu_zeros((N,))
+        self._X_ek_chunk = cpu_zeros((N, K))
+        self._Y_tk_chunk = cpu_zeros((T, K))
+
+    def set_beta(self, beta: IntegerCPUArray):
         self._beta_k_chunk = beta
     def set_demands(self, demands: CPUArray):
-        self._D_k_chunk = demands[:, np.newaxis]
+        self._D_k_chunk = demands
 
     def _get_current_C(self) -> CPUArray:
         X_EK = self._X_ek_chunk
@@ -86,6 +99,10 @@ class NetworkWorkerNode:
         U_E = self._u_e_cached
         
         return X_EK - np.expand_dims(X_BAR_E - P_BAR_E + U_E, axis=1)
+    
+    def _get_scaled_alpha_ket(self) -> CPUArray:
+        # TODO: Should was just make this an attribute?
+        return self._alpha_ket_chunk * self._D_k_chunk[:, np.newaxis, np.newaxis]
     
     def set_solver_parameters(self, new_params: PathBasedDistributedADMMSolverParams):
         self._solver_params = new_params
@@ -96,17 +113,16 @@ class NetworkWorkerNode:
         GAMMA = self._solver_params.Gamma
         KAPPA = self._solver_params.Kappa
         PGD_ITERS = self._solver_params.QPIterations
-        NULL_M = self._NULL_M
-        NNT_M = self._NNT_M
-        X_EK_START_CHUNK = self._X_ek_start_chunk
-        LAMBDA_EK_CHUNK = self._lambda_ek_chunk
-        C_TK_CHUNK = self._get_current_C()
+        C_EK_CHUNK = self._get_current_C()
+        Y_TK_CHUNK = self._Y_tk_chunk
+        SCALED_ALPHA_KET_CHUNK = self._get_scaled_alpha_ket()
+        BETA_K_CHUNK = self._beta_k_chunk
         
         start = time.perf_counter_ns()
-        self._lambda_ek_chunk, self._Y_tk_chunk = \
-            do_plain_pgd_with_step_reduction(LAMBDA_EK_CHUNK, X_EK_START_CHUNK, NNT_M, NULL_M, C_TK_CHUNK, GAMMA, 
-                                                PGD_ITERS, KAPPA, epoch)
-        means = np.mean(self._Y_tk_chunk, axis=1)
+        self._Y_tk_chunk = \
+            do_plain_path_based_pgd_with_step_reduction(Y_TK_CHUNK, SCALED_ALPHA_KET_CHUNK, C_EK_CHUNK, 
+                                                        BETA_K_CHUNK, GAMMA, PGD_ITERS, KAPPA, epoch)
+        means = np.mean(np.einsum("ijk,ki->ji", SCALED_ALPHA_KET_CHUNK, self._Y_tk_chunk), axis=1)
         return time.perf_counter_ns() - start, means
     
     def set_active_commodity_count(self, K: int):

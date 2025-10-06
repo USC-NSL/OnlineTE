@@ -1,7 +1,7 @@
 import signal
-from typing import Dict, Type, Tuple, Optional
+from typing import Dict, Type, Tuple
 from abc import ABC, abstractmethod
-from te.algorithms.array_utils.cpu_utils import CPUArray
+from te.algorithms.array_utils.cpu_utils import CPUArray, BooleanCPUArray, IntegerCPUArray
 from te.algorithms.base import SolverParams
 from .. import PathBasedDistributedADMMControllerRPCParams
 
@@ -65,7 +65,7 @@ class ControllerCommunicationBackendBase(ABC):
         """Check if all network nodes are ready"""
 
     @abstractmethod
-    def initialize_worker_nodes(self, solver_params: SolverParams, alpha: CPUArray, beta: CPUArray, demands: CPUArray):
+    def initialize_worker_nodes(self, solver_params: SolverParams, alpha: BooleanCPUArray, beta: IntegerCPUArray, demands: CPUArray):
         """Initialize worker nodes with solver parameters and path configurations (i.e. alpha_ket, beta_k, D_k)"""
 
     @abstractmethod
@@ -73,7 +73,7 @@ class ControllerCommunicationBackendBase(ABC):
         """Update D_k"""
     
     @abstractmethod
-    def get_X_ek(self, alpha: CPUArray, demands: CPUArray) -> CPUArray:
+    def get_X_ek(self, alpha: BooleanCPUArray, demands: CPUArray) -> CPUArray:
         """Get the final solution array (X_ek)"""
     
     @abstractmethod

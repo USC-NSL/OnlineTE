@@ -13,13 +13,13 @@ warnings.filterwarnings("error")
 class PathBasedDistributedADMMSolverParams(GurobiSolverParams):
     NumberOfPathsPerCommodity: int = 16
     TopologyName: Optional[str] = None
-    NumberOfEpochs: Optional[int] = 100
-    NumberOfNetworkUpdates: int = 4
+    NumberOfEpochs: Optional[int] = 50
+    NumberOfNetworkUpdates: int = 2
     Rho: float = 1.0
     Eta: float = 8.0
     Gamma: float = 1.0
     Kappa: float = 0.2
-    QPIterations: int = 2
+    QPIterations: int = 4
     Precision: Literal['double', 'single', 'half'] = SINGLE_PRECISION
     Seed: int = te.constants.DEFAULT_SEED
 

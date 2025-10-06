@@ -13,7 +13,7 @@ from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
 from topologies.utils import get_graph_M_matrix
 from utils.exceptions import SolutionInterrupted
-from utils.logging import as_info, as_warning, log_subsection_separator
+from utils.logging import as_info, as_warning, log_subsection_separator, ShortTQDM
 from te.algorithms.array_utils import set_global_precision
 from te.algorithms.array_utils.cpu_utils import (CPUArray, DoublePrecisionCPUArray, 
                                                  cpu_array, cpu_zeros, cpu_double_array, 
@@ -161,12 +161,13 @@ class ControllerNode(TrafficEngineeringLP):
             return cpu_zeros((self._NUM_EDGES,))
     
     def _initialize_variables_and_residuals(self):
-        NUM_EDGES = self._NUM_EDGES
+        NUM_EDGES = self.graph.number_of_edges()
+        self._NUM_EDGES = NUM_EDGES
         self._capacities = cpu_double_array([item[-1] for item in self._graph.edges(data='capacity')])
         self._c_norm = np.linalg.norm(self._capacities)
         self._r_e = cpu_zeros((NUM_EDGES,))
         self._u_e = cpu_zeros((NUM_EDGES,))
-        self._X_bar_e = cpu_array((NUM_EDGES,))
+        self._X_bar_e = cpu_zeros((NUM_EDGES,))
         self._P_bar_e = cpu_zeros((NUM_EDGES,))
         self._X_ek_sum_e = cpu_zeros((NUM_EDGES,))
     
@@ -208,8 +209,9 @@ class ControllerNode(TrafficEngineeringLP):
         self._env = ENV
 
         PARAMS = self._solver_params
+        # TODO: Get back `BigGamma` for the solver parameters ...
         MODEL_CONTROLLER: gurobipy.Model = \
-            make_model('PathBasedDistributedTE_Controller', params=PARAMS, env=ENV, BarConvTol=PARAMS.BigGamma)
+            make_model('PathBasedDistributedTE_Controller', params=PARAMS, env=ENV, BarConvTol=1e-6)
         
         # self._Z_e = MODEL_CONTROLLER.addVars(NUM_EDGES, lb=0.0, vtype=GRB.CONTINUOUS, name='Z_E')
         self._Z_e = MODEL_CONTROLLER.addVars(NUM_EDGES, lb=float('-inf'), vtype=GRB.CONTINUOUS, name='Z_E')
@@ -355,8 +357,8 @@ class ControllerNode(TrafficEngineeringLP):
             t = time.time()
             optimize_or_scream(MODEL_CONTROLLER)
             self._update_r_e()
-            # for epoch in ShortTQDM(range(EPOCHS)):
-            for epoch in range(EPOCHS):
+            for epoch in ShortTQDM(range(EPOCHS)):
+            # for epoch in range(EPOCHS):
                 for i in reversed(range(PARAMS.NumberOfNetworkUpdates)):
                     self._do_network_update(epoch + SHIFT)
                     if i > 0 and self._reconvene_network_updates():

@@ -1,13 +1,11 @@
 from typing import Type
 from .base import ControllerCommunicationBackendBase, _BACKENDS, _PARAMS
-from .. import DistributedADMMControllerRPCParams
+from .. import PathBasedDistributedADMMControllerRPCParams
 
-from . import synchronous_grpc_backend
 from . import asynchronous_grpc_backend
-from . import udp_multicast_backend
 
 
-def get_backend(params: DistributedADMMControllerRPCParams) -> ControllerCommunicationBackendBase:
+def get_backend(params: PathBasedDistributedADMMControllerRPCParams) -> ControllerCommunicationBackendBase:
     global _BACKENDS
     name = params.Backend
     assert name in _BACKENDS, f'No communication backend `{name}` has been registered'
@@ -15,7 +13,7 @@ def get_backend(params: DistributedADMMControllerRPCParams) -> ControllerCommuni
     return _BACKENDS[name](params)
 
 
-def get_backend_params(name: str) -> Type[DistributedADMMControllerRPCParams]:
+def get_backend_params(name: str) -> Type[PathBasedDistributedADMMControllerRPCParams]:
     global _PARAMS
     assert name in _PARAMS, f'No communication backend `{name}` has been registered'
 
