@@ -80,6 +80,10 @@ class NetworkWorkerNodeListener(DistributedADMMSolverServicer):
         self._backend.set_null_space_basis(rebuild_chunked_array(request_iterator))
         return Empty()
     
+    def SetCommodityInOutMask(self, request_iterator: Iterator[array_messages.Chunk], context):
+        self._backend.set_commodity_in_out_mask(rebuild_chunked_array(request_iterator))
+        return Empty()
+    
     def DoNetworkUpdate(self, request: distributed_lp_messages.NetworkUpdateRequest, context):
         F_e = serialized_message_to_array(get_optional_field(request, 'F_e'))
         runtime, means = self._backend.do_inner_loop_update(request.epoch, F_e)

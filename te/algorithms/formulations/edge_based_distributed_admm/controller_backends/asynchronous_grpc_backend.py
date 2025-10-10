@@ -3,7 +3,7 @@ import asyncio
 import numpy as np
 from typing import List, ClassVar, Optional
 from dataclasses import dataclass
-from te.algorithms.array_utils.cpu_utils import CPUArray
+from te.algorithms.array_utils.cpu_utils import CPUArray, BooleanCPUArray
 from .. import DistributedADMMControllerRPCParams, DistributedADMMSolverParams
 from .base import (ControllerCommunicationBackendBase, controller_communication_backend,
                    controller_communication_backend_params)
@@ -83,10 +83,11 @@ class AsynchronousgRPCBackend(ControllerCommunicationBackendBase):
         return self._event_loop.run_until_complete(self._are_network_nodes_ready())
 
     async def _initialize_worker_nodes(self, solver_params: DistributedADMMSolverParams, basis: CPUArray, 
-                                       initial_feasible_solution: CPUArray):
+                                       initial_feasible_solution: CPUArray, in_out_mask: Optional[BooleanCPUArray] = None):
         NUM_WORKERS = self.number_of_nodes
         NULL_M = basis
         X_EK_START_CHUNKS = np.array_split(initial_feasible_solution, NUM_WORKERS, axis=1)
+        MASK_EK_CHUNKS = None if in_out_mask is None else np.array_split(in_out_mask, NUM_WORKERS, axis=1)
         WORKERS = self._worker_stubs
 
         # Update solver parameters
@@ -104,10 +105,17 @@ class AsynchronousgRPCBackend(ControllerCommunicationBackendBase):
             stub.SetNullSpaceBasis(chunk_big_array(NULL_M, GRPC_ARRAY_STREAM_MAX_LEN))
             for stub in WORKERS
         ])
+
+        # If it exists, send the mask as well
+        if MASK_EK_CHUNKS is not None:
+            await asyncio.gather(*[
+                stub.SetCommodityInOutMask(chunk_big_array(MASK_EK_CHUNKS[i], GRPC_ARRAY_STREAM_MAX_LEN, dtype=bool)) 
+                for i, stub in enumerate(WORKERS)
+            ])
     
     def initialize_worker_nodes(self, solver_params: DistributedADMMSolverParams, basis: CPUArray, 
-                                initial_feasible_solution: CPUArray):
-        self._event_loop.run_until_complete(self._initialize_worker_nodes(solver_params, basis, initial_feasible_solution))
+                                initial_feasible_solution: CPUArray, in_out_mask: Optional[BooleanCPUArray] = None):
+        self._event_loop.run_until_complete(self._initialize_worker_nodes(solver_params, basis, initial_feasible_solution, in_out_mask))
     
     async def _update_demands(self, updated_feasible_solution: CPUArray):
         X_EK_START_CHUNKS = np.array_split(updated_feasible_solution, self.number_of_nodes, axis=1)

@@ -1,7 +1,7 @@
 import signal
 from typing import Dict, Type, Tuple, Optional
 from abc import ABC, abstractmethod
-from te.algorithms.array_utils.cpu_utils import CPUArray
+from te.algorithms.array_utils.cpu_utils import CPUArray, BooleanCPUArray
 from te.algorithms.base import SolverParams
 from .. import DistributedADMMControllerRPCParams
 
@@ -65,7 +65,8 @@ class ControllerCommunicationBackendBase(ABC):
         """Check if all network nodes are ready"""
 
     @abstractmethod
-    def initialize_worker_nodes(self, solver_params: SolverParams, basis: CPUArray, initial_feasible_solution: CPUArray):
+    def initialize_worker_nodes(self, solver_params: SolverParams, basis: CPUArray, initial_feasible_solution: CPUArray,
+                                in_out_mask: Optional[BooleanCPUArray] = None):
         """Initialize worker nodes with solver parameters and initial feasible solution (X_ek_0)"""
 
     @abstractmethod

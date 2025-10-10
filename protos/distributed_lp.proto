@@ -7,6 +7,7 @@ service DistributedADMMSolver {
     rpc SetInitialFeasibleSolution(stream Chunk) returns (google.protobuf.Empty) {}
     // rpc InitializeWorkerNode(InitMessage) returns (google.protobuf.Empty) {}
     rpc SetNullSpaceBasis(stream Chunk) returns (google.protobuf.Empty) {}
+    rpc SetCommodityInOutMask(stream Chunk) returns (google.protobuf.Empty) {}
     rpc DoNetworkUpdate(NetworkUpdateRequest) returns (NetworkUpdateResponse) {}
     rpc ResetInnerDualVariable(google.protobuf.Empty) returns (google.protobuf.Empty) {}
     rpc UpdateWorkerNode(UpdateMessage) returns (google.protobuf.Empty) {}

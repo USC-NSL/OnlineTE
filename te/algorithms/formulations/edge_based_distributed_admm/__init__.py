@@ -12,12 +12,12 @@ warnings.filterwarnings("error")
 @dataclass
 class DistributedADMMSolverParams(GurobiSolverParams):
     NumberOfEpochs: Optional[int] = 100
-    NumberOfNetworkUpdates: int = 4
+    NumberOfNetworkUpdates: int = 3
     NumberOfLocalUpdates: int = 0
-    Rho: float = 1.0
-    Eta: float = 8.0
+    Rho: float = 8.0
+    Eta: float = 0.5
     Gamma: float = 1.0
-    Kappa: float = 0.2
+    Kappa: float = 0.01
     QPIterations: int = 2
     QPMethod: Literal['PGD', 'ADMM'] = 'PGD'
     BigGamma: float = 1e-7

@@ -228,7 +228,7 @@ def do_block_pgd_with_exact_line_search(lambda_block, x_block_0, nnt, n, c_block
 
 
 def do_plain_pgd_with_step_reduction(lambda_block, x_block_0, nnt, n, c_block, gamma: float, n_iter: int, 
-                                     kappa: float, epoch: int):
+                                     kappa: float, epoch: int, mask = None):
     """
     A plain block oriented PGD operation, with step size heuristic.
     The step size heuristic is:
@@ -242,7 +242,11 @@ def do_plain_pgd_with_step_reduction(lambda_block, x_block_0, nnt, n, c_block, g
     step_size = gamma / ((epoch+1) ** kappa)
     for _ in range(n_iter):
         grad_block = nnt @ lambda_block + big_c_block
-        mod.clip(lambda_block - step_size * grad_block, a_min=0, a_max=None, out=lambda_block)
+        # mod.clip(lambda_block - step_size * grad_block, a_min=0, a_max=None, out=lambda_block)
+        assert mask is not None
+        lambda_block = lambda_block - step_size * grad_block
+        correction = mod.clip(mod.multiply(lambda_block, mask), a_min=None, a_max=0)
+        lambda_block = mod.clip(lambda_block, a_min=0, a_max=None) + correction
     del big_c_block
     del grad_block
     y_block = c_block + n.T @ lambda_block

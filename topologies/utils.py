@@ -396,6 +396,7 @@ def get_sparse_null_space(symbolic_M_matrix: sp.Matrix) -> np.ndarray:
     return np.hstack([np.array(base.tolist(), dtype=np.float64) for base in orthonormal_basis])
 
 
+@DeprecationWarning
 def get_feasible_flow_assignment(graph: nx.DiGraph, commodities: List[Commodity]):
     N = len(graph.edges())
     K = len(commodities)
@@ -412,6 +413,17 @@ def get_feasible_flow_assignment(graph: nx.DiGraph, commodities: List[Commodity]
             X_KE[EDGE_INDEXING[edge], k] = DEMAND
     return X_KE
 
+def get_commodity_in_out_mask(graph: nx.DiGraph, commodities: List[Commodity], 
+                              edge_indexing: Optional[Dict[Tuple[int, int], int]] = None) -> np.ndarray:
+    if edge_indexing is None:
+        edge_indexing = get_edge_indexing(graph)
+    mask = np.zeros(dtype=bool, shape=(graph.number_of_edges(), len(commodities)))
+    for k, commodity in enumerate(commodities):
+        for edge in graph.out_edges(nbunch=commodity.destination, data=False):
+            mask[edge_indexing[edge], k] = True
+        for edge in graph.in_edges(nbunch=commodity.source, data=False):
+            mask[edge_indexing[edge], k] = True
+    return mask
 
 # def get_feasible_flow_assignment_gpu(graph: nx.DiGraph, commodities: List[Commodity]):
 #     N = len(graph.edges())

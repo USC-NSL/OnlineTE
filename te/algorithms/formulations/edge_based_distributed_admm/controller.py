@@ -11,12 +11,12 @@ from te.algorithms.base import (TrafficEngineeringLP, SolverParams, TrafficEngin
                                 TrafficEngineeringLPObjectiveTrace)
 from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
-from topologies.utils import get_graph_M_matrix, get_adjacency_null_space
+from topologies.utils import get_graph_M_matrix, get_adjacency_null_space, get_commodity_in_out_mask
 from topologies.utils import get_sparse_null_space, get_symbolic_graph_M_matrix
 from utils.exceptions import SolutionInterrupted
 from utils.logging import as_info, as_warning, log_subsection_separator, ShortTQDM
 from te.algorithms.array_utils import set_global_precision
-from te.algorithms.array_utils.cpu_utils import (CPUArray, DoublePrecisionCPUArray, 
+from te.algorithms.array_utils.cpu_utils import (CPUArray, DoublePrecisionCPUArray, BooleanCPUArray,
                                                  cpu_array, cpu_zeros, cpu_double_array, 
                                                  set_cpu_float_precision)
 from te.algorithms.utils import optimize_or_scream, make_model, get_solution_maximum_utilization
@@ -47,6 +47,7 @@ class ControllerNode(TrafficEngineeringLP):
         
         self._T: Optional[int] = None
         self._NUM_EDGES: Optional[int] = None
+        self._M_MASK: Optional[BooleanCPUArray] = None
 
         self._env: gurobipy.Env = None
 
@@ -158,6 +159,13 @@ class ControllerNode(TrafficEngineeringLP):
     def _set_initial_feasible_solution(self):
         self._X_ek_start = get_feasible_flow_assignment(self._graph, self._commodity_list)
         self._Z_e_start = np.sum(self._X_ek_start, axis=1)
+        
+        # TODO: Are these safe?
+        # if self._T is not None:
+        #     T = self._T
+        #     NUM_EDGES = self._NUM_EDGES
+        #     self._r_e = cpu_zeros((NUM_EDGES,))
+        #     self._u_t = cpu_zeros((T,))
     
     def _set_NULL_M(self):
         M = self._M
@@ -171,6 +179,7 @@ class ControllerNode(TrafficEngineeringLP):
         self._NNT_M = N @ N.T
         self._T = T
         self._NUM_EDGES = n
+        self._M_MASK = get_commodity_in_out_mask(self.graph, self.commodity_list)
     
     def _get_Z_value(self) -> CPUArray:
         try:
@@ -243,6 +252,10 @@ class ControllerNode(TrafficEngineeringLP):
     
     def _set_X_ek(self):
         self._X_ek = self._backend.get_X_ek(basis=self._NULL_M, initial_feasible_solution=self._X_ek_start)
+        # self._X_ek = np.multiply(
+        #     self._backend.get_X_ek(basis=self._NULL_M, initial_feasible_solution=self._X_ek_start),
+        #     self._M_MASK
+        # )
     
     def _add_constraints(self):
         assert self._model_controller is not None
@@ -307,7 +320,9 @@ class ControllerNode(TrafficEngineeringLP):
         Y_BAR_T = self._Y_bar_t
         F_E = self._get_F()
         NULL_M = self._NULL_M
-        P_BAR_T = (NULL_M.T @ F_E + (ETA/RHO) * (U_T + Y_BAR_T)) / (K + (ETA/RHO))
+        # P_BAR_T = (NULL_M.T @ F_E + (ETA/RHO) * (U_T + Y_BAR_T)) / (K + (ETA/RHO))
+        # TODO: See https://github.com/USC-NSL/DistributedTE/issues/29
+        P_BAR_T = (NULL_M.T @ F_E / K + (ETA/RHO) * (U_T + Y_BAR_T)) / (1 + (ETA/RHO))
         self._P_bar_t = P_BAR_T
     
     def _update_u_t(self):
@@ -364,7 +379,8 @@ class ControllerNode(TrafficEngineeringLP):
         self._backend.initialize_worker_nodes(
             self._solver_params,
             self._NULL_M, 
-            self._X_ek_start
+            self._X_ek_start,
+            self._M_MASK
         )
         self._backend.set_active_commodity_count(len(self._commodity_list))
     
@@ -421,8 +437,8 @@ class ControllerNode(TrafficEngineeringLP):
             t = time.time()
             optimize_or_scream(MODEL_CONTROLLER)
             self._update_r_e()
-            # for epoch in ShortTQDM(range(EPOCHS)):
-            for epoch in range(EPOCHS):
+            for epoch in ShortTQDM(range(EPOCHS)):
+            # for epoch in range(EPOCHS):
                 # self._reset_u_t()
                 for i in reversed(range(PARAMS.NumberOfNetworkUpdates)):
                     self._do_network_update(epoch + SHIFT)
@@ -434,7 +450,7 @@ class ControllerNode(TrafficEngineeringLP):
                 optimize_or_scream(MODEL_CONTROLLER)
                 self._update_r_e()
 
-                self._objective_trace.append(self._utility.X, get_solution_maximum_utilization(self._X_ek_sum_e, self._graph))
+                self._objective_trace.append(float(self._utility.X), float(get_solution_maximum_utilization(self._X_ek_sum_e, self._graph)))
                 # self.check_stopping_criterion()
             self._set_X_ek()
             return time.time() - t
@@ -534,7 +550,6 @@ class ControllerNode(TrafficEngineeringLP):
         # Get a new feasible solution (if the matrix did not change too much),
         # then this also will not change too much.
         self._set_initial_feasible_solution()
-        self._Zo_e = cpu_array(self._Xo_e_start)
         # Send it to the backend
         self._backend.update_demands(self._X_ek_start)
     

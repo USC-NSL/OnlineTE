@@ -82,6 +82,13 @@ class WorkerNodeCommunicationBackendBase(ABC):
     @set_null_space_basis.setter
     def set_null_space_basis(self, f: Callable[[CPUArray], None]):
         self._set_null_space_basis = f
+
+    @property
+    def set_commodity_in_out_mask(self) -> Callable[[CPUArray], None]:
+        return self._set_commodity_in_out_mask
+    @set_commodity_in_out_mask.setter
+    def set_commodity_in_out_mask(self, f: Callable[[CPUArray], None]):
+        self._set_commodity_in_out_mask = f
     
     @property
     def do_inner_loop_update(self) -> Callable[[int, Optional[CPUArray]], Tuple[int, CPUArray]]:
