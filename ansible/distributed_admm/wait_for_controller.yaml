@@ -50,6 +50,6 @@
     - name: Get `res.png`
       fetch:
         src: /home/aghavidel/DistributedTE/res.png
-        dest: /project/distte/notebooks/res.png
+        dest: /home/aghavidel/res.png
         flat: true
   
