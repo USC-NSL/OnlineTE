@@ -17,6 +17,7 @@ from topologies import (
 from te.traffic_models.base import TrafficMatrixBase, Commodity
 from te.traffic_models.models import UniformTrafficMatrix, UniformTrafficMatrixParams
 from utils.logging import as_warning
+from numba.typed import Dict
 
 
 TOPOLGOY_ZOO_PATH = os.path.join(TOPOLOGIES_PATH, TOPOLOGY_ZOO_DIR_NAME)
@@ -192,6 +193,31 @@ def get_in_edge_mapping(graph: nx.DiGraph):
                 if v == dst:
                     mapping[v].append([pred_v, i])
 
+    return mapping
+
+
+def get_node_out_array(graph: nx.DiGraph) -> Dict[int, np.ndarray]:
+    """Returns a mapping from node index to an array of out-going edge indices"""
+    mapping: Dict[int, np.ndarray] = Dict()
+    indexing = get_edge_indexing(graph)
+    
+    for v in range(graph.number_of_nodes()):
+        mapping[v] = np.zeros(shape=(graph.out_degree(v),), dtype=np.int32)
+        for i, anc_v in enumerate(graph.successors(v)):
+            mapping[v][i] = indexing[(v, anc_v)]
+    print(mapping)
+    return mapping
+
+
+def get_node_in_array(graph: nx.DiGraph) -> Dict[int, np.ndarray]:
+    """Returns a mapping from node index to an array of incoming edge indices"""
+    mapping: Dict[int, np.ndarray] = Dict()
+    indexing = get_edge_indexing(graph)
+    
+    for v in range(graph.number_of_nodes()):
+        mapping[v] = np.zeros(shape=(graph.in_degree(v),), dtype=np.int32)
+        for i, pred_v in enumerate(graph.predecessors(v)):
+            mapping[v][i] = indexing[(pred_v, v)]
     return mapping
 
 

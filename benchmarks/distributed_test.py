@@ -3,8 +3,9 @@ import argparse
 import contextlib
 import multiprocessing
 import concurrent.futures
-from typing import Optional
-from te.algorithms.base import TrafficEngineeringLPEvaluationParams
+from typing import Optional, Tuple
+from dataclasses import dataclass
+from te.algorithms.base import TrafficEngineeringLPEvaluationParams, SolverParams
 from te.algorithms.formulations.aggregate import (
     NetworkWorkerNode, ControllerNode,
     DistributedADMMSolverParams, DistributedADMMWorkerRPCParams, 
@@ -76,13 +77,13 @@ def local_distributed_admm_test(eval_params: TrafficEngineeringLPEvaluationParam
         max_workers=CONTROLLER_RPC_PARAMS.NumWorkers, 
         mp_context=multiprocessing.get_context(method='spawn')
     ) as network_pool:
-        display_param = DistributedADMMWorkerRPCParams(
-            IP=[addr[0] for addr in CONTROLLER_RPC_PARAMS.AddressList],
-            Port=[addr[1] for addr in CONTROLLER_RPC_PARAMS.AddressList],
-            WorkerID=[i for i in range(len(CONTROLLER_RPC_PARAMS.AddressList))],
-            Multicast=multicast
-        )
-        print(as_info(f"Local Worker Backend Parameters:\n{display_param}"))
+        # display_param = DistributedADMMWorkerRPCParams(
+        #     IP=[addr[0] for addr in CONTROLLER_RPC_PARAMS.AddressList],
+        #     Port=[addr[1] for addr in CONTROLLER_RPC_PARAMS.AddressList],
+        #     WorkerID=[i for i in range(len(CONTROLLER_RPC_PARAMS.AddressList))],
+        #     Multicast=multicast
+        # )
+        # print(as_info(f"Local Worker Backend Parameters:\n{display_param.stringify_up_to_level(0)}"))
         for worker_id, worker_addr in enumerate(CONTROLLER_RPC_PARAMS.AddressList):
             network_pool.submit(
                 NetworkWorkerNode.spawn_and_wait, 

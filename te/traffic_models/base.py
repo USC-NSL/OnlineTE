@@ -3,7 +3,7 @@ import pickle
 import numpy as np
 import te.constants
 from te import TE_PATH
-from typing import Dict, Type, List, ClassVar, Optional
+from typing import Dict, Type, List, ClassVar, Optional, Tuple
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
@@ -159,6 +159,16 @@ def traffic_to_commodity(tm: TrafficMatrixBase) -> List[Commodity]:
     TM = tm.tm
     return [
         Commodity(src_idx, dst_idx, TM[src_idx, dst_idx]) \
+            for src_idx, dst_idx in np.ndindex(TM.shape) \
+            if src_idx != dst_idx
+    ]
+
+
+def traffic_to_list_of_tuples(tm: TrafficMatrixBase) -> List[Tuple[float, int, int]]:
+    """Convert a traffic matrix to a list of tuples"""
+    TM = tm.tm
+    return [
+        (src_idx, dst_idx, TM[src_idx, dst_idx]) \
             for src_idx, dst_idx in np.ndindex(TM.shape) \
             if src_idx != dst_idx
     ]
