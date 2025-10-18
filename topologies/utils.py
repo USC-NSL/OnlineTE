@@ -17,7 +17,7 @@ from topologies import (
 from te.traffic_models.base import TrafficMatrixBase, Commodity
 from te.traffic_models.models import UniformTrafficMatrix, UniformTrafficMatrixParams
 from utils.logging import as_warning
-from numba.typed import Dict
+# from numba.typed import Dict
 
 
 TOPOLGOY_ZOO_PATH = os.path.join(TOPOLOGIES_PATH, TOPOLOGY_ZOO_DIR_NAME)
