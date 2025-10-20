@@ -231,7 +231,7 @@ class MulticastBackend(ControllerCommunicationBackendBase):
             except socket.timeout:
                 # This could be a lost packet ...
                 # Since the update is idempotent, we can just send it again
-                as_warning(f"Timeout on network gather ({remaining_workers}/{self.number_of_nodes} workers remaining)")
+                print(as_warning(f"Timeout on network gather ({remaining_workers}/{self.number_of_nodes} workers remaining)"))
                 self._scatter_socket.sendto(packet, self.SCATTER_ADDRESS)
         if not self.is_alive:
             raise SolutionInterrupted

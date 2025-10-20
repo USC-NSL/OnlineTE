@@ -284,7 +284,7 @@ if __name__ == '__main__':
                                        help='Number of threads in backend thread pool. Defaults to number of workers.')
     
     async_rpc_params_group = parser.add_argument_group('Asynchronous gRPC Backend Parameters')
-    async_rpc_params_group.add_argument('--timeout', type=float, default=5.0,
+    async_rpc_params_group.add_argument('--timeout', type=float, default=1.0,
                                         help='Future `get` timeout for `asyncio`')
     
     multicast_backend_params_group = parser.add_argument_group('UDP Multicast Backend Parameters')

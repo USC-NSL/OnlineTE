@@ -101,7 +101,7 @@ class MulticastBackend(WorkerNodeCommunicationBackendBase):
                                 self._xid = request.xid
                             elif self.current_xid >= request.xid:
                                 # Duplicate request, ignore
-                                as_warning(f"Duplicate request (current XID: {self.current_xid}, got {request.xid})")
+                                print(as_warning(f"Duplicate request (current XID: {self.current_xid}, got {request.xid})"))
                                 continue
                             F_e = serialized_message_to_array(get_optional_field(request, 'F_e'))
                             runtime, means = self.do_inner_loop_update(request.epoch, F_e)
