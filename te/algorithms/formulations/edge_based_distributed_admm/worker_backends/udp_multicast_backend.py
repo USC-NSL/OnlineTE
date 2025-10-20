@@ -99,6 +99,7 @@ class MulticastBackend(WorkerNodeCommunicationBackendBase):
                         if self.current_xid == None:
                             self._xid = request.xid
                         elif self.current_xid >= request.xid:
+                            buffer = buffer[consumed_length:]
                             continue
                         else:
                             self._xid = request.xid
