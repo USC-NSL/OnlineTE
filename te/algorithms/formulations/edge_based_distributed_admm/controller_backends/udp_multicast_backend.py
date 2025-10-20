@@ -29,6 +29,7 @@ class MulticastControllerBackendParams(DistributedADMMControllerRPCParams):
     TTL: int = 2
     ScatterPort: int = 12000
     Timeout: float = 1
+    UpdateCopyCount: int = 3
     
     def __post_init__(self):
         self.left_column_share = 0.2
@@ -80,6 +81,38 @@ class TLVRPCMessages:
 
 @controller_communication_backend
 class MulticastBackend(ControllerCommunicationBackendBase):
+    """
+    Implements the UDP multicast backend for screaming and receiving updates from worker nodes.
+    Our updates are small, but come at high frequency; We can also assume that the network is
+    somewhat stable.
+    
+    These facts combined, make this backend _MUCH_ more efficient that gRPC. The only real
+    price payed here is that since this is plain IP multicast, it is unreliable and we can
+    get packet loss.
+
+    Assuming packet loss is _rare_, our best effort solution is to make this backend idempotent
+    and thus just retry if things go south. To this end, this backend expects messages to have
+    a transaction ID (`xid`) field (in particular `NetworkUpdateRequest` and `UpdateMessage`
+    have a `xid` field).
+    
+    This backend maintains a local `xid` value that starts from 0 (it can be accessed by
+    `MulticastBackend.current_xid`). The procedure for using and updating this value is as
+    follows:
+        
+    - When `do_network_update` is called, the current XID is stamped on the request and
+    sent out. The workers implicitly ACK the request by giving a `NetworkUpdateResponse`
+    message. If not all make it, we timeout and send the update again.
+    A worker thus must not accept an update if the `xid` value stamped on the update
+    is not larger than its own, and upon seeing a new `xid`, the worker must update its
+    own `xid` value to match that.
+    As the controller algorithm is synchronous, we will _NOT_ move on until all workers
+    have responded.
+        
+    - When `reconvene_network_updates` is called, we increment our `xid` and then we 
+    send out multiple copies of our update instead of just one (we pace them so that 
+    it is not a sudden burst).
+    We _hope_ that at least one copy reaches each node, as the author is lazy.
+    """
     def __init__(self, rpc_params: DistributedADMMControllerRPCParams):
         super().__init__()
         self._rpc_params = rpc_params
@@ -215,6 +248,7 @@ class MulticastBackend(ControllerCommunicationBackendBase):
         return self._event_loop.run_until_complete(self._get_X_ek_sum())
     
     def do_network_update(self, epoch: int, F_e: Optional[CPUArray] = None):
+        self.update_xid()
         message = distributed_lp_messages.NetworkUpdateRequest(epoch=epoch, xid=self.current_xid, 
                                                                F_e=array_to_serialized_message(F_e))
         packet = TLVRPCMessages.serialize_do_inner_loop(message)
@@ -239,14 +273,15 @@ class MulticastBackend(ControllerCommunicationBackendBase):
         return max(runtimes), np.mean([serialized_message_to_array(chunk) for chunk in serialized_y_bar_chunks], axis=0)
     
     def reconvene_network_updates(self, P_bar_t: CPUArray, Y_bar_t: CPUArray, u_t: CPUArray):
+        self.update_xid()
         message = distributed_lp_messages.UpdateMessage(
             P_bar_t = array_to_serialized_message(P_bar_t),
             Y_bar_t = array_to_serialized_message(Y_bar_t),
             u_t = array_to_serialized_message(u_t),
             xid = self.current_xid
         )
-        self._scatter_socket.sendto(TLVRPCMessages.serialize_update_network_nodes(message), self.SCATTER_ADDRESS)
-        self.update_xid()
+        for _ in range(self._rpc_params.UpdateCopyCount):
+            self._scatter_socket.sendto(TLVRPCMessages.serialize_update_network_nodes(message), self.SCATTER_ADDRESS)
 
     async def _close_node(self, worker_id: int):
         try:

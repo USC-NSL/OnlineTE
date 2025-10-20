@@ -96,13 +96,13 @@ class MulticastBackend(WorkerNodeCommunicationBackendBase):
                     update = TLVRPCMessages.get_packet_rpc_message(buffer)
                     if update is not None:
                         update_type, consumed_length, request = update
+                        if self.current_xid == None:
+                            self._xid = request.xid
+                        elif self.current_xid >= request.xid:
+                            continue
+                        else:
+                            self._xid = request.xid
                         if update_type == TLVRPCMessages.DoInnerLoops:
-                            if self.current_xid == None:
-                                self._xid = request.xid
-                            elif self.current_xid >= request.xid:
-                                # Duplicate request, ignore
-                                print(as_warning(f"Duplicate request (current XID: {self.current_xid}, got {request.xid})"))
-                                continue
                             F_e = serialized_message_to_array(get_optional_field(request, 'F_e'))
                             runtime, means = self.do_inner_loop_update(request.epoch, F_e)
                             response = distributed_lp_messages.NetworkUpdateResponse(
@@ -117,7 +117,6 @@ class MulticastBackend(WorkerNodeCommunicationBackendBase):
                                 serialized_message_to_array(request.P_bar_t),
                                 serialized_message_to_array(request.Y_bar_t)
                             )
-                            self.update_xid()
                         else:
                             raise ValueError(f'Unexpected update type: {update_type}')
                         buffer = buffer[consumed_length:]
