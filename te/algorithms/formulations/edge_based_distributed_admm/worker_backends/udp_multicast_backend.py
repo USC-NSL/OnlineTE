@@ -1,6 +1,5 @@
 import grpc
 import socket
-import asyncio
 import threading
 import protos.distributed_lp.distributed_lp_pb2 as distributed_lp_messages
 from typing import Optional, Iterator
@@ -91,7 +90,7 @@ class MulticastBackend(WorkerNodeCommunicationBackendBase):
         try:
             while self.is_alive:
                 try:
-                    packet, addr = self._gather_socket.recvfrom(10240)
+                    packet, addr = self._gather_socket.recvfrom(40960)
                     buffer += packet
                     update = TLVRPCMessages.get_packet_rpc_message(buffer)
                     if update is not None:
@@ -99,6 +98,9 @@ class MulticastBackend(WorkerNodeCommunicationBackendBase):
                         if update_type == TLVRPCMessages.DoInnerLoops:
                             if self.current_xid == None:
                                 self._xid = request.xid
+                            elif self.current_xid >= request.xid:
+                                # Duplicate request, ignore
+                                continue
                             F_e = serialized_message_to_array(get_optional_field(request, 'F_e'))
                             runtime, means = self.do_inner_loop_update(request.epoch, F_e)
                             response = distributed_lp_messages.NetworkUpdateResponse(

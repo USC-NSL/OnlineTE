@@ -13,6 +13,7 @@ from .base import (ControllerCommunicationBackendBase, controller_communication_
 from ..utils import (serialized_message_to_array, array_to_serialized_message,
                      chunk_big_array, async_rebuild_chunked_array,
                      GRPC_ARRAY_STREAM_MAX_LEN)
+from utils.logging import as_warning
 
 import protos.distributed_lp.distributed_lp_pb2 as distributed_lp_messages
 from protos.distributed_lp.distributed_lp_pb2_grpc import DistributedADMMSolverStub
@@ -27,7 +28,7 @@ class MulticastControllerBackendParams(DistributedADMMControllerRPCParams):
     HostName: str = socket.gethostname()
     TTL: int = 2
     ScatterPort: int = 12000
-    Timeout: float = 5
+    Timeout: float = 1
     
     def __post_init__(self):
         self.left_column_share = 0.2
@@ -224,11 +225,14 @@ class MulticastBackend(ControllerCommunicationBackendBase):
             try:
                 # TODO: For now, assume the response fits in a single packet, but that may not be the case ...
                 res = distributed_lp_messages.NetworkUpdateResponse.FromString(
-                    self._scatter_socket.recv(10240))
+                    self._scatter_socket.recv(40960))
                 responses[res.worker_id] = res
                 remaining_workers -= 1
             except socket.timeout:
-                pass
+                # This could be a lost packet ...
+                # Since the update is idempotent, we can just send it again
+                as_warning(f"Timeout on network gather ({remaining_workers}/{self.number_of_nodes} workers remaining)")
+                self._scatter_socket.sendto(packet, self.SCATTER_ADDRESS)
         if not self.is_alive:
             raise SolutionInterrupted
         runtimes, serialized_y_bar_chunks = zip(*list([(res.runtime_ns, res.means) for res in responses]))
