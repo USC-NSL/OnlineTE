@@ -24,6 +24,11 @@ class DistributedADMMSolverParams(GurobiSolverParams):
     Precision: Literal['double', 'single', 'half'] = SINGLE_PRECISION
     Seed: int = te.constants.DEFAULT_SEED
 
+    def __post_init__(self):
+        # We override `BarConvTol` to be the same value as `BigGamma`
+        self.ConvTol = self.BigGamma
+        self._left_column_share = 0.5
+
 
 @dataclass
 class DistributedADMMWorkerRPCParams(SolverParams):

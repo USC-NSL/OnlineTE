@@ -84,3 +84,5 @@ cpu_int_array: Callable[[Any], IntegerCPUArray] = lambda input: np.array(input, 
 """Create a copy of an array-like thing that is always `np.int32`, regardles of global data type"""
 cpu_int_zeros: Callable[[Tuple[int]], IntegerCPUArray] = lambda shape: np.zeros(shape=shape, dtype=np.int32)
 """Always returns zero array with `np.int32`, regardless of global data type"""
+
+cpu_cast_float: Callable[[Any], Any] = lambda val: _CPU_DTYPE(val)
