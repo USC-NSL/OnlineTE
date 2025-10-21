@@ -138,7 +138,7 @@ def get_solution_confusion_matrix(lp: TrafficEngineeringLP, eval_params: Traffic
                 else:
                     fig = plt.figure(figsize=(12, 3))
                     plt.subplot(1, 3, 1)
-                    # plt.xlim([100, 200])
+                    # plt.xlim([100, 300])
                     objective_trace.plot()
                     ax = plt.subplot(1, 3, 2)
                     plt.plot(objective_gap_trace)
