@@ -1,72 +1,76 @@
 import time
 import signal
+import gurobipy
 import numpy as np
 import networkx as nx
 import asyncio.exceptions
 from collections import defaultdict
 from typing import List, Tuple, Optional
+from gurobipy import GRB, GurobiError
 from te.algorithms.base import (TrafficEngineeringLP, SolverParams, TrafficEngineeringLPCheckResult, TrafficEngineeringLPEvaluationParams, 
                                 TrafficEngineeringLPObjectiveTrace)
 from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
-from topologies.utils import get_graph_M_matrix, get_adjacency_null_space, get_commodity_in_out_mask
-from topologies.utils import get_symbolic_graph_M_matrix
+from topologies.utils import get_graph_M_matrix
 from utils.exceptions import SolutionInterrupted
 from utils.logging import as_info, as_warning, log_subsection_separator, ShortTQDM
 from te.algorithms.array_utils import set_global_precision
-from te.algorithms.array_utils.cpu_utils import (CPUArray, BooleanCPUArray,
+from te.algorithms.array_utils.cpu_utils import (CPUArray, DoublePrecisionCPUArray, 
                                                  cpu_array, cpu_zeros, cpu_double_array, 
                                                  set_cpu_float_precision)
-from te.algorithms.utils import get_solution_maximum_utilization
-from te.algorithms.sub_algorithms.feasible_assignment import get_feasible_flow_assignment
+from te.algorithms.utils import optimize_or_scream, make_model, get_solution_maximum_utilization
 from te.algorithms.sub_algorithms.admm_consensus_test import outer_admm_consensus_test, inner_admm_consensus_test, norm_in_consensus
 from te.algorithms.sub_algorithms.link_capacity_test import check_capacity_constraint
 from te.algorithms.sub_algorithms.flow_conservation_test import check_flow_conservation
+from te.algorithms.sub_algorithms.paths import TShortestPaths
 from te.algorithms.statistics.helpers import record_cpu_runtime, record_return_value
-from . import DistributedADMMSolverParams, DistributedADMMControllerRPCParams
+from . import PathBasedDistributedADMMSolverParams, PathBasedDistributedADMMControllerRPCParams
 from .controller_backends import get_backend, ControllerCommunicationBackendBase
-
-from te.algorithms.sub_algorithms.mlu_base import ControllerMLUSolver, ControllerMLUException
-from te.algorithms.sub_algorithms.gurobi_mlu import GurobiMLU, GurobiMLUParams
-from te.algorithms.sub_algorithms.pdlp_mlu import PDLPMLU, PDLPMLUParams
-# from te.algorithms.sub_algorithms.relaxed_mlu import RelaxedMLU, RelaxedMLUSolverParams
 
 
 class ControllerNode(TrafficEngineeringLP):
-    def __init__(self, graph: nx.DiGraph, traffic: TrafficMatrixBase, solver_params: DistributedADMMSolverParams,
-                 rpc_params: DistributedADMMControllerRPCParams) -> None:
+    def __init__(self, graph: nx.DiGraph, traffic: TrafficMatrixBase, 
+                 solver_params: PathBasedDistributedADMMSolverParams,
+                 rpc_params: PathBasedDistributedADMMControllerRPCParams) -> None:
         super().__init__()
         self._graph = graph
         self._M = get_graph_M_matrix(graph)
-        self._symbolic_M = get_symbolic_graph_M_matrix(graph)
         self._traffic = traffic
         self._solver_params = solver_params
         self._rpc_params = rpc_params
         self._rng = np.random.default_rng(seed=solver_params.Seed)
         self._commodity_list = traffic_to_commodity(self._traffic)
 
-        self._NULL_M: CPUArray = None
-        self._NNT_M: CPUArray = None
-        
         self._T: Optional[int] = None
         self._NUM_EDGES: Optional[int] = None
-        self._M_MASK: Optional[BooleanCPUArray] = None
 
-        self._capacities: Optional[CPUArray] = None
+        self._env: gurobipy.Env = None
+
+        self._model_controller: Optional[gurobipy.Model] = None
+        self._objective_controller: Optional[gurobipy.QuadExpr] = None
+
+        self._capacities: Optional[DoublePrecisionCPUArray] = None
         self._c_norm: Optional[float] = None
-        self._alpha: Optional[float] = None
 
-        self._mlu_solver: Optional[ControllerMLUSolver] = None
+        # Path configurations
+        self._path_object: Optional[TShortestPaths] = None
+        # Real-time demands
+        # In an online setting, these will be moved completely into the worker nodes
+        self._D_k: Optional[CPUArray] = None
 
         self._X_ek: Optional[CPUArray] = None
-        self._X_ek_start: Optional[CPUArray] = None
-        self._Z_e_start: Optional[CPUArray] = None
-        self._X_ek_sum_e: Optional[CPUArray] = None
+        self._Z_e: Optional[gurobipy.tupledict] = None
+        self._utility: Optional[gurobipy.Var] = None
         self._r_e: Optional[CPUArray] = None
 
-        self._P_bar_t: Optional[CPUArray] = None
-        self._Y_bar_t: Optional[CPUArray] = None
-        self._u_t: Optional[CPUArray] = None
+        self._utility_bound_constraints: Tuple[gurobipy.Constr, gurobipy.Constr] = None
+        """Gives the dual variables `v_neg` and `v_pos`"""
+        self._capacity_constraints: List[gurobipy.Constr] = None
+        """Gives the dual variables `tau_e`, a vector of length `n`"""
+
+        self._P_bar_e: Optional[CPUArray] = None
+        self._X_bar_e: Optional[CPUArray] = None
+        self._u_e: Optional[CPUArray] = None
 
         self._backend: Optional[ControllerCommunicationBackendBase] = None
 
@@ -81,15 +85,17 @@ class ControllerNode(TrafficEngineeringLP):
         signal.signal(signal.SIGINT, self.stop)
         signal.signal(signal.SIGTERM, self.die)
     
+    @record_cpu_runtime('Initialization')
     def initialize(self):
-        # First, set the initial feasible solutions.
-        # We will do this before spawning the backend, since if we use `gRPC`, 
-        # this function may invoke `fork` which causes `gRPC` to spam warnings.
-        self._set_initial_feasible_solution()
+        # First, load all path configurations
+        self._path_object = TShortestPaths.load(graph=self._graph, T=self._solver_params.NumberOfPathsPerCommodity,
+                                                topo_name=self._solver_params.TopologyName)
+        # Set the demands
+        # TODO: Fix this, it should invoke CPU_ARRAY!
+        self._D_k: np.ndarray = np.array([commodity.demand for commodity in self._commodity_list])
         # Now, create the backend
         self._backend = get_backend(self._rpc_params)
         # Initialize the algorithm
-        self._set_NULL_M()
         self._initialize_variables_and_residuals()
         # Report what we are dealing with
         self._report_problem_size()
@@ -113,7 +119,7 @@ class ControllerNode(TrafficEngineeringLP):
 
     @property
     def alg_name(self) -> str:
-        return 'Distributed Unregulated ADMM'
+        return 'Path Based Distributed Unregulated ADMM'
 
     @property
     def graph(self) -> nx.DiGraph:
@@ -133,7 +139,7 @@ class ControllerNode(TrafficEngineeringLP):
 
     @property
     def objective_value(self) -> float:
-        return self._mlu_solver.current_u
+        return self._utility.X
     
     @property
     def objective_trace(self) -> Optional[TrafficEngineeringLPObjectiveTrace]:
@@ -147,66 +153,23 @@ class ControllerNode(TrafficEngineeringLP):
     def assignments(self) -> np.ndarray:
         assert self._X_ek is not None
         return self._X_ek
-
-    @record_cpu_runtime('Feasible-Assignment')
-    def _set_initial_feasible_solution(self):
-        self._X_ek_start = get_feasible_flow_assignment(self._graph, self._commodity_list)
-        self._Z_e_start = np.sum(self._X_ek_start, axis=1)
-        
-        # TODO: Are these safe?
-        # if self._T is not None:
-        #     T = self._T
-        #     NUM_EDGES = self._NUM_EDGES
-        #     self._r_e = cpu_zeros((NUM_EDGES,))
-        #     self._u_t = cpu_zeros((T,))
-    
-    def _set_NULL_M(self):
-        M = self._M
-        assert len(M.shape) == 2
-        m, n = M.shape
-        assert m < n
-        N = cpu_array(get_adjacency_null_space(M))
-        # N = cpu_array(get_sparse_null_space(self._symbolic_M))
-        T = N.shape[1]
-        self._NULL_M = N
-        self._NNT_M = N @ N.T
-        self._T = T
-        self._NUM_EDGES = n
-        self._M_MASK = get_commodity_in_out_mask(self.graph, self.commodity_list)
     
     def _get_Z_value(self) -> CPUArray:
-        return self._mlu_solver.current_Z
+        try:
+            return cpu_array([self._Z_e[e].X for e in range(self._NUM_EDGES)])
+        except AttributeError:
+            return cpu_zeros((self._NUM_EDGES,))
     
     def _initialize_variables_and_residuals(self):
-        T = self._T
-        NUM_EDGES = self._NUM_EDGES
+        NUM_EDGES = self.graph.number_of_edges()
+        self._NUM_EDGES = NUM_EDGES
         self._capacities = cpu_double_array([item[-1] for item in self._graph.edges(data='capacity')])
         self._c_norm = np.linalg.norm(self._capacities)
-        self._alpha = self._c_norm * np.sqrt(NUM_EDGES)
         self._r_e = cpu_zeros((NUM_EDGES,))
-        self._u_t = cpu_zeros((T,))
-        self._P_bar_t = cpu_zeros((T,))
-        self._Y_bar_t = cpu_zeros((T,))
-        self._X_ek = cpu_array(self._X_ek_start)
-        self._X_ek_sum_e = cpu_array(self._Z_e_start)
-
-        # self._mlu_solver = GurobiMLU(NUM_EDGES, self._capacities, GurobiMLUParams(
-        #     Rho=self._solver_params.Rho,
-        #     Alpha=self._alpha,
-        #     GurobiParams=self._solver_params
-        # ))
-        self._mlu_solver = PDLPMLU(NUM_EDGES, self._capacities, PDLPMLUParams(
-            Threads=1, Presolve=False,
-            ConvTol=self._solver_params.BigGamma,
-            Rho=self._solver_params.Rho,
-            Alpha=self._alpha
-        ))
-        # self._mlu_solver = RelaxedMLU(NUM_EDGES, self._capacities, RelaxedMLUSolverParams(
-        #     Rho=self._solver_params.Rho,
-        #     Alpha=self._alpha,
-        #     Gamma=1e-2,
-        #     GDIters=100
-        # ))
+        self._u_e = cpu_zeros((NUM_EDGES,))
+        self._X_bar_e = cpu_zeros((NUM_EDGES,))
+        self._P_bar_e = cpu_zeros((NUM_EDGES,))
+        self._X_ek_sum_e = cpu_zeros((NUM_EDGES,))
     
     def are_network_nodes_ready(self) -> bool:
         return self._backend.are_network_nodes_ready()
@@ -236,95 +199,128 @@ class ControllerNode(TrafficEngineeringLP):
         raise NotImplementedError
         
     def _make_variables(self):
-        assert self._mlu_solver is not None
-        self._mlu_solver._make_variables()
+        assert self._model_controller is None
         
-    
-    def _get_F(self) -> np.ndarray:
-        return self._get_Z_value() - self._Z_e_start - self._r_e
+        NUM_EDGES = self._NUM_EDGES
+
+        ENV = gurobipy.Env()
+        ENV.setParam('OutputFlag', 0)
+        ENV.start()
+        self._env = ENV
+
+        PARAMS = self._solver_params
+        # TODO: Get back `BigGamma` for the solver parameters ...
+        MODEL_CONTROLLER: gurobipy.Model = \
+            make_model('PathBasedDistributedTE_Controller', params=PARAMS, env=ENV, BarConvTol=1e-6)
+        
+        # self._Z_e = MODEL_CONTROLLER.addVars(NUM_EDGES, lb=0.0, vtype=GRB.CONTINUOUS, name='Z_E')
+        self._Z_e = MODEL_CONTROLLER.addVars(NUM_EDGES, lb=float('-inf'), vtype=GRB.CONTINUOUS, name='Z_E')
+        # self._utility = MODEL_CONTROLLER.addVar(lb=0.0, ub=1.0, vtype=GRB.CONTINUOUS, name='U')
+        self._utility = MODEL_CONTROLLER.addVar(lb=float('-inf'), vtype=GRB.CONTINUOUS, name='U')
+
+        self._model_controller = MODEL_CONTROLLER
     
     def _set_X_ek(self):
-        self._X_ek = self._backend.get_X_ek(basis=self._NULL_M, initial_feasible_solution=self._X_ek_start)
+        self._X_ek = self._backend.get_X_ek(alpha=self._path_object.alpha, demands=self._D_k)
     
     def _add_constraints(self):
-        assert self._mlu_solver is not None
-        self._mlu_solver._add_constraints()
+        assert self._model_controller is not None
+
+        GRAPH = self._graph
+        Z_E = self._Z_e
+        UTILITY = self._utility
+        MODEL_CONTROLLER = self._model_controller
+
+        # Utilization bound constraints
+        u_low = MODEL_CONTROLLER.addConstr(UTILITY >= 0)
+        u_high = MODEL_CONTROLLER.addConstr(-UTILITY >= -1)
+        self._utility_bound_constraints = (u_low, u_high)
+
+        capacity_constraints: List[gurobipy.Constr] = []
+        for e, (_, _, c_e) in enumerate(GRAPH.edges.data('capacity')):
+            capacity_constraints.append(MODEL_CONTROLLER.addConstr(UTILITY * c_e >= Z_E[e]))
+        self._capacity_constraints = capacity_constraints
+    
+    def _get_X_ek_sum_e(self) -> CPUArray:
+        return len(self._commodity_list) * self._X_bar_e
     
     @record_cpu_runtime('Controller-Update')
     def _update_controller_objective(self):
-        assert self._mlu_solver is not None
-        X_EK_SUM_E = self._X_ek_sum_e
+        NUM_EDGES = self._NUM_EDGES
+        UTILITY = self._utility
+        Z_E = self._Z_e
+        X_EK_SUM_E = self._get_X_ek_sum_e()
         R_E = self._r_e
-        self._mlu_solver.update_F_m(X_EK_SUM_E + R_E)
+        RHO = self._solver_params.Rho
+        MODEL_CONTROLLER = self._model_controller
+        BIG_GAMMA = self._c_norm * np.sqrt(NUM_EDGES)
+        
+        OBJECTIVE_CONTROLLER = gurobipy.QuadExpr()
+        OBJECTIVE_CONTROLLER.addTerms(BIG_GAMMA, UTILITY)
+        for e in range(NUM_EDGES):
+            OBJECTIVE_CONTROLLER += (RHO/2) * (X_EK_SUM_E[e] - Z_E[e] + R_E[e]) ** 2
+        MODEL_CONTROLLER.setObjective(OBJECTIVE_CONTROLLER, GRB.MINIMIZE)
+        self._objective_controller = OBJECTIVE_CONTROLLER
     
     def _add_objective(self):
-        assert self._mlu_solver is not None
-        self._mlu_solver._add_objective()
+        assert self._model_controller is not None
+
+        self._update_controller_objective()
 
     @record_return_value('QP-Runtime')
     @record_cpu_runtime('Network-Update')
     def _do_network_update(self, epoch: int):
-        if self._solver_params.NumberOfLocalUpdates > 0:
-            max_run, self._Y_bar_t = self._backend.do_network_update(epoch, self._get_F())
-        else:
-            max_run, self._Y_bar_t = self._backend.do_network_update(epoch)
+        max_run, self._X_bar_e = self._backend.do_network_update(epoch)
         return max_run
     
     def _update_P_bar(self):
-        assert self._mlu_solver is not None
+        assert self._model_controller is not None
 
         K = len(self._commodity_list)
         ETA = self._solver_params.Eta
         RHO = self._solver_params.Rho
-        U_T = self._u_t
-        Y_BAR_T = self._Y_bar_t
-        F_E = self._get_F()
-        NULL_M = self._NULL_M
-        # P_BAR_T = (NULL_M.T @ F_E + (ETA/RHO) * (U_T + Y_BAR_T)) / (K + (ETA/RHO))
-        # TODO: See https://github.com/USC-NSL/DistributedTE/issues/29
-        P_BAR_T = (NULL_M.T @ F_E / K + (ETA/RHO) * (U_T + Y_BAR_T)) / (1 + (ETA/RHO))
-        self._P_bar_t = P_BAR_T
+        R_E = self._r_e
+        U_E = self._u_e
+        X_BAR_E = self._X_bar_e
+        Z_E = self._get_Z_value()
+        P_BAR_E = (Z_E - R_E + (ETA/RHO) * (X_BAR_E + U_E)) / (K + (ETA/RHO))
+        self._P_bar_e = P_BAR_E
     
-    def _update_u_t(self):
-        assert self._mlu_solver is not None
+    def _update_u_e(self):
+        assert self._model_controller is not None
 
-        U_T = self._u_t
-        Y_BAR_T = self._Y_bar_t
-        P_BAR_T = self._P_bar_t
+        U_E = self._u_e
+        X_BAR_E = self._X_bar_e
+        P_BAR_E = self._P_bar_e
 
-        self._u_t = U_T + (Y_BAR_T - P_BAR_T)
+        self._u_e = U_E + (X_BAR_E - P_BAR_E)
     
     @record_cpu_runtime('Update-Reconvene')
     def _reconvene_network_updates(self) -> bool:
         self._update_P_bar()
-        self._update_u_t()
+        self._update_u_e()
         self._backend.reconvene_network_updates(
-            P_bar_t=self._P_bar_t,
-            Y_bar_t=self._Y_bar_t,
-            u_t=self._u_t
+            P_bar_e=self._P_bar_e,
+            X_bar_e=self._X_bar_e,
+            u_e=self._u_e
         )
-        return norm_in_consensus(self._P_bar_t, self._Y_bar_t, 5e-4)
-    
-    @record_cpu_runtime('Update-X-EK-SUM')
-    def _update_X_ek_sum(self):
-        self._X_ek_sum_e = self._Z_e_start + len(self._commodity_list) * self._NULL_M @ self._Y_bar_t
-    
-    def _reset_u_t(self):
-        self._u_t = cpu_zeros((self._NULL_M.shape[1],))
-        self._backend.reset_inner_dual_variable()
+        return norm_in_consensus(self._X_bar_e, self._P_bar_e, 5e-4)
     
     @record_cpu_runtime('Update-Re')
     def _update_r_e(self):
-        assert self._mlu_solver is not None
+        assert self._model_controller is not None
 
         R_E = self._r_e
         Z_E = self._get_Z_value()
-        X_EK_SUM_E = self._X_ek_sum_e
+        X_EK_SUM_E = self._get_X_ek_sum_e()
         self._r_e = R_E + (X_EK_SUM_E - Z_E)
 
     def close(self):
         self._backend.close()
-        self._mlu_solver.close()
+        if self._model_controller:
+            self._model_controller.close()
+        if self._env:
+            self._env.close()
     
     def make_lp(self):
         t_start = time.time()
@@ -335,47 +331,52 @@ class ControllerNode(TrafficEngineeringLP):
         print(f"Built model in {str(np.round(time.time() - t_start, 2))} seconds.")
         self._backend.initialize_worker_nodes(
             self._solver_params,
-            self._NULL_M, 
-            self._X_ek_start,
-            self._M_MASK
+            self._path_object.alpha,
+            self._path_object.beta,
+            self._D_k
         )
         self._backend.set_active_commodity_count(len(self._commodity_list))
     
     def reset(self, with_params: False):
-        self._mlu_solver.reset(with_params)
+        self._model_controller.reset()
+        if with_params:
+            self._model_controller.resetParams()
+    
+    def check_stopping_criterion(self):
+        raise NotImplementedError
     
     @record_cpu_runtime('Solve')
     def solve(self, params: Optional[int] = None) -> float:
         self.check_result = None
-        MODEL_CONTROLLER = self._mlu_solver
+        MODEL_CONTROLLER = self._model_controller
         PARAMS = self._solver_params
         EPOCHS = params if params is not None else PARAMS.NumberOfEpochs
         SHIFT = 0 if params is None else PARAMS.NumberOfEpochs // 2
 
         try:
             t = time.time()
-            self._update_controller_objective()
-            MODEL_CONTROLLER.solve()
+            optimize_or_scream(MODEL_CONTROLLER)
             self._update_r_e()
             for epoch in ShortTQDM(range(EPOCHS)):
             # for epoch in range(EPOCHS):
-                # self._reset_u_t()
                 for i in reversed(range(PARAMS.NumberOfNetworkUpdates)):
                     self._do_network_update(epoch + SHIFT)
                     if i > 0 and self._reconvene_network_updates():
                         break
                 self._reconvene_network_updates()
-                self._update_X_ek_sum()
                 self._update_controller_objective()
-                MODEL_CONTROLLER.solve()
+                optimize_or_scream(MODEL_CONTROLLER)
                 self._update_r_e()
 
-                self._objective_trace.append(float(self.objective_value), float(get_solution_maximum_utilization(self._X_ek_sum_e, self._graph)))
+                self._objective_trace.append(
+                    self._utility.X, 
+                    get_solution_maximum_utilization(self._get_X_ek_sum_e(), self._graph)
+                )
                 # self.check_stopping_criterion()
             self._set_X_ek()
             return time.time() - t
-        except ControllerMLUException as e:
-            print(f'MLU solver failed: {e}')
+        except GurobiError as e:
+            print(f'Error code {e.errno}: {e}')
             return -1
         except SolutionInterrupted:
             self._set_X_ek()
@@ -385,17 +386,17 @@ class ControllerNode(TrafficEngineeringLP):
 
     def check(self, eval_params: TrafficEngineeringLPEvaluationParams):
         # Are outer ADMM pairs in consensus?
-        X_EK_SUM_E = self._X_ek_sum_e
+        X_EK_SUM_E = self._get_X_ek_sum_e()
         Z_E = self._get_Z_value()
         outer_admm_consensus_test(X_EK_SUM_E, Z_E, eval_params=eval_params)
         
         # Are inner ADMM pairs in consensus?
-        Y_BAR_T = self._Y_bar_t
-        P_BAR_T = self._P_bar_t
-        inner_admm_consensus_test(Y_BAR_T, P_BAR_T, eval_params=eval_params)
+        X_BAR_E = self._X_bar_e
+        P_BAR_E = self._P_bar_e
+        inner_admm_consensus_test(X_BAR_E, P_BAR_E, eval_params=eval_params)
         
         # Now, check flow conservation ...
-        X_EK = self._X_ek
+        X_EK = self.assignments
         unsat_ratio, unsat_commodities = check_flow_conservation(
             X_EK, self._graph, self._commodity_list, eval_params=eval_params)
         congested_ratio, congested_links = check_capacity_constraint(
@@ -433,14 +434,7 @@ class ControllerNode(TrafficEngineeringLP):
         return ls
     
     def update_traffic_matrix(self, tm):
-        # First, record the matrix and the new commodities
-        self._traffic = tm
-        self._commodity_list = traffic_to_commodity(self._traffic)
-        # Get a new feasible solution (if the matrix did not change too much),
-        # then this also will not change too much.
-        self._set_initial_feasible_solution()
-        # Send it to the backend
-        self._backend.update_demands(self._X_ek_start)
+        raise NotImplementedError
     
     def initialize_to(self, solution: EdgeBasedMinimizeMaximumUtilitySolution):
         raise NotImplementedError
@@ -449,5 +443,4 @@ class ControllerNode(TrafficEngineeringLP):
         raise NotImplementedError
     
     def add_solution_elements(self, solution: EdgeBasedMinimizeMaximumUtilitySolution):
-        solution.add_solution_element(self.objective_value, name='utility')
-        solution.add_solution_element(self._X_ek, name='assignments')
+        raise NotImplementedError

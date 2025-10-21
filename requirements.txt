@@ -10,3 +10,4 @@ scipy>=1.10.0
 seaborn==0.11.2
 tqdm==4.66.4
 sympy>=1.13.1
+ortools>=9.12.4544

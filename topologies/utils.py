@@ -16,6 +16,8 @@ from topologies import (
 )
 from te.traffic_models.base import TrafficMatrixBase, Commodity
 from te.traffic_models.models import UniformTrafficMatrix, UniformTrafficMatrixParams
+from utils.logging import as_warning
+# from numba.typed import Dict
 
 
 TOPOLGOY_ZOO_PATH = os.path.join(TOPOLOGIES_PATH, TOPOLOGY_ZOO_DIR_NAME)
@@ -60,16 +62,21 @@ def load_zoo_topology(name: str, seed: Optional[int] = None) -> nx.DiGraph:
     self_loops = list(nx.selfloop_edges(g))
     if len(self_loops) > 0:
         g.remove_edges_from(self_loops)
-        print(f"Removing {len(self_loops)} self-loop edges")
+        print(as_warning(f"Removing {len(self_loops)} self-loop edges"))
         
     # Remove isolated nodes (some topologies have it, like "US Signal")
     isolateds = list(nx.isolates(g))
     if len(isolateds) > 0:
         g.remove_nodes_from(isolateds)
         g = nx.relabel_nodes(g, {n: i for i, n in enumerate(g.nodes())})
-        print(f"Removing {len(isolateds)} isolated nodes")
+        print(as_warning(f"Removing {len(isolateds)} isolated nodes"))
 
-    return g.to_directed()
+    new_g = nx.Graph(g)
+    
+    if new_g.number_of_edges() != g.number_of_edges():
+        print(as_warning(f"Removing {g.number_of_edges() - new_g.number_of_edges()} parallel edges"))
+
+    return new_g.to_directed()
 
 
 def _get_graph_list_to_join(n_nodes: int, num: int = 1, seed: Optional[int] = None) -> List[nx.DiGraph]:
@@ -186,6 +193,31 @@ def get_in_edge_mapping(graph: nx.DiGraph):
                 if v == dst:
                     mapping[v].append([pred_v, i])
 
+    return mapping
+
+
+def get_node_out_array(graph: nx.DiGraph) -> Dict[int, np.ndarray]:
+    """Returns a mapping from node index to an array of out-going edge indices"""
+    mapping: Dict[int, np.ndarray] = Dict()
+    indexing = get_edge_indexing(graph)
+    
+    for v in range(graph.number_of_nodes()):
+        mapping[v] = np.zeros(shape=(graph.out_degree(v),), dtype=np.int32)
+        for i, anc_v in enumerate(graph.successors(v)):
+            mapping[v][i] = indexing[(v, anc_v)]
+    print(mapping)
+    return mapping
+
+
+def get_node_in_array(graph: nx.DiGraph) -> Dict[int, np.ndarray]:
+    """Returns a mapping from node index to an array of incoming edge indices"""
+    mapping: Dict[int, np.ndarray] = Dict()
+    indexing = get_edge_indexing(graph)
+    
+    for v in range(graph.number_of_nodes()):
+        mapping[v] = np.zeros(shape=(graph.in_degree(v),), dtype=np.int32)
+        for i, pred_v in enumerate(graph.predecessors(v)):
+            mapping[v][i] = indexing[(pred_v, v)]
     return mapping
 
 
@@ -390,6 +422,7 @@ def get_sparse_null_space(symbolic_M_matrix: sp.Matrix) -> np.ndarray:
     return np.hstack([np.array(base.tolist(), dtype=np.float64) for base in orthonormal_basis])
 
 
+@DeprecationWarning
 def get_feasible_flow_assignment(graph: nx.DiGraph, commodities: List[Commodity]):
     N = len(graph.edges())
     K = len(commodities)
@@ -406,6 +439,17 @@ def get_feasible_flow_assignment(graph: nx.DiGraph, commodities: List[Commodity]
             X_KE[EDGE_INDEXING[edge], k] = DEMAND
     return X_KE
 
+def get_commodity_in_out_mask(graph: nx.DiGraph, commodities: List[Commodity], 
+                              edge_indexing: Optional[Dict[Tuple[int, int], int]] = None) -> np.ndarray:
+    if edge_indexing is None:
+        edge_indexing = get_edge_indexing(graph)
+    mask = np.zeros(dtype=bool, shape=(graph.number_of_edges(), len(commodities)))
+    for k, commodity in enumerate(commodities):
+        for edge in graph.out_edges(nbunch=commodity.destination, data=False):
+            mask[edge_indexing[edge], k] = True
+        for edge in graph.in_edges(nbunch=commodity.source, data=False):
+            mask[edge_indexing[edge], k] = True
+    return mask
 
 # def get_feasible_flow_assignment_gpu(graph: nx.DiGraph, commodities: List[Commodity]):
 #     N = len(graph.edges())

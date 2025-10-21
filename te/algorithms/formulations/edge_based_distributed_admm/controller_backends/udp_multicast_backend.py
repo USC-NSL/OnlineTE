@@ -6,13 +6,14 @@ import numpy as np
 from typing import List, ClassVar, Optional, Tuple, Any
 from dataclasses import dataclass
 from utils.exceptions import SolutionInterrupted
-from te.algorithms.array_utils.cpu_utils import CPUArray
+from te.algorithms.array_utils.cpu_utils import CPUArray, BooleanCPUArray
 from .. import DistributedADMMControllerRPCParams, DistributedADMMSolverParams
 from .base import (ControllerCommunicationBackendBase, controller_communication_backend,
                    controller_communication_backend_params)
 from ..utils import (serialized_message_to_array, array_to_serialized_message,
                      chunk_big_array, async_rebuild_chunked_array,
                      GRPC_ARRAY_STREAM_MAX_LEN)
+from utils.logging import as_warning
 
 import protos.distributed_lp.distributed_lp_pb2 as distributed_lp_messages
 from protos.distributed_lp.distributed_lp_pb2_grpc import DistributedADMMSolverStub
@@ -27,7 +28,8 @@ class MulticastControllerBackendParams(DistributedADMMControllerRPCParams):
     HostName: str = socket.gethostname()
     TTL: int = 2
     ScatterPort: int = 12000
-    Timeout: float = 5
+    Timeout: float = 1
+    UpdateCopyCount: int = 3
     
     def __post_init__(self):
         self.left_column_share = 0.2
@@ -79,6 +81,38 @@ class TLVRPCMessages:
 
 @controller_communication_backend
 class MulticastBackend(ControllerCommunicationBackendBase):
+    """
+    Implements the UDP multicast backend for screaming and receiving updates from worker nodes.
+    Our updates are small, but come at high frequency; We can also assume that the network is
+    somewhat stable.
+    
+    These facts combined, make this backend _MUCH_ more efficient that gRPC. The only real
+    price payed here is that since this is plain IP multicast, it is unreliable and we can
+    get packet loss.
+
+    Assuming packet loss is _rare_, our best effort solution is to make this backend idempotent
+    and thus just retry if things go south. To this end, this backend expects messages to have
+    a transaction ID (`xid`) field (in particular `NetworkUpdateRequest` and `UpdateMessage`
+    have a `xid` field).
+    
+    This backend maintains a local `xid` value that starts from 0 (it can be accessed by
+    `MulticastBackend.current_xid`). The procedure for using and updating this value is as
+    follows:
+        
+    - When `do_network_update` is called, the current XID is stamped on the request and
+    sent out. The workers implicitly ACK the request by giving a `NetworkUpdateResponse`
+    message. If not all make it, we timeout and send the update again.
+    A worker thus must not accept an update if the `xid` value stamped on the update
+    is not larger than its own, and upon seeing a new `xid`, the worker must update its
+    own `xid` value to match that.
+    As the controller algorithm is synchronous, we will _NOT_ move on until all workers
+    have responded.
+        
+    - When `reconvene_network_updates` is called, we increment our `xid` and then we 
+    send out multiple copies of our update instead of just one (we pace them so that 
+    it is not a sudden burst).
+    We _hope_ that at least one copy reaches each node, as the author is lazy.
+    """
     def __init__(self, rpc_params: DistributedADMMControllerRPCParams):
         super().__init__()
         self._rpc_params = rpc_params
@@ -149,10 +183,11 @@ class MulticastBackend(ControllerCommunicationBackendBase):
         return self._event_loop.run_until_complete(self._are_network_nodes_ready())
 
     async def _initialize_worker_nodes(self, solver_params: DistributedADMMSolverParams, basis: CPUArray, 
-                                       initial_feasible_solution: CPUArray):
+                                       initial_feasible_solution: CPUArray, in_out_mask: Optional[BooleanCPUArray] = None):
         NUM_WORKERS = self.number_of_nodes
         NULL_M = basis
         X_EK_START_CHUNKS = np.array_split(initial_feasible_solution, NUM_WORKERS, axis=1)
+        MASK_EK_CHUNKS = None if in_out_mask is None else np.array_split(in_out_mask, NUM_WORKERS, axis=1)
         WORKERS = self._worker_stubs
 
         # Update solver parameters
@@ -170,11 +205,18 @@ class MulticastBackend(ControllerCommunicationBackendBase):
             stub.SetNullSpaceBasis(chunk_big_array(NULL_M, GRPC_ARRAY_STREAM_MAX_LEN))
             for stub in WORKERS
         ])
+
+        # If it exists, send the mask as well
+        if MASK_EK_CHUNKS is not None:
+            await asyncio.gather(*[
+                stub.SetCommodityInOutMask(chunk_big_array(MASK_EK_CHUNKS[i], GRPC_ARRAY_STREAM_MAX_LEN, dtype=bool)) 
+                for i, stub in enumerate(WORKERS)
+            ])
     
     def initialize_worker_nodes(self, solver_params: DistributedADMMSolverParams, basis: CPUArray, 
-                                initial_feasible_solution: CPUArray):
-        self._event_loop.run_until_complete(self._initialize_worker_nodes(solver_params, basis, initial_feasible_solution))
-
+                                initial_feasible_solution: CPUArray, in_out_mask: Optional[BooleanCPUArray] = None):
+        self._event_loop.run_until_complete(self._initialize_worker_nodes(solver_params, basis, initial_feasible_solution, in_out_mask))
+    
     async def _update_demands(self, updated_feasible_solution: CPUArray):
         X_EK_START_CHUNKS = np.array_split(updated_feasible_solution, self.number_of_nodes, axis=1)
         WORKERS = self._worker_stubs
@@ -206,6 +248,7 @@ class MulticastBackend(ControllerCommunicationBackendBase):
         return self._event_loop.run_until_complete(self._get_X_ek_sum())
     
     def do_network_update(self, epoch: int, F_e: Optional[CPUArray] = None):
+        self.update_xid()
         message = distributed_lp_messages.NetworkUpdateRequest(epoch=epoch, xid=self.current_xid, 
                                                                F_e=array_to_serialized_message(F_e))
         packet = TLVRPCMessages.serialize_do_inner_loop(message)
@@ -216,25 +259,29 @@ class MulticastBackend(ControllerCommunicationBackendBase):
             try:
                 # TODO: For now, assume the response fits in a single packet, but that may not be the case ...
                 res = distributed_lp_messages.NetworkUpdateResponse.FromString(
-                    self._scatter_socket.recv(10240))
+                    self._scatter_socket.recv(40960))
                 responses[res.worker_id] = res
                 remaining_workers -= 1
             except socket.timeout:
-                pass
+                # This could be a lost packet ...
+                # Since the update is idempotent, we can just send it again
+                print(as_warning(f"Timeout on network gather ({remaining_workers}/{self.number_of_nodes} workers remaining)"))
+                self._scatter_socket.sendto(packet, self.SCATTER_ADDRESS)
         if not self.is_alive:
             raise SolutionInterrupted
         runtimes, serialized_y_bar_chunks = zip(*list([(res.runtime_ns, res.means) for res in responses]))
         return max(runtimes), np.mean([serialized_message_to_array(chunk) for chunk in serialized_y_bar_chunks], axis=0)
     
     def reconvene_network_updates(self, P_bar_t: CPUArray, Y_bar_t: CPUArray, u_t: CPUArray):
+        self.update_xid()
         message = distributed_lp_messages.UpdateMessage(
             P_bar_t = array_to_serialized_message(P_bar_t),
             Y_bar_t = array_to_serialized_message(Y_bar_t),
             u_t = array_to_serialized_message(u_t),
             xid = self.current_xid
         )
-        self._scatter_socket.sendto(TLVRPCMessages.serialize_update_network_nodes(message), self.SCATTER_ADDRESS)
-        self.update_xid()
+        for _ in range(self._rpc_params.UpdateCopyCount):
+            self._scatter_socket.sendto(TLVRPCMessages.serialize_update_network_nodes(message), self.SCATTER_ADDRESS)
 
     async def _close_node(self, worker_id: int):
         try:

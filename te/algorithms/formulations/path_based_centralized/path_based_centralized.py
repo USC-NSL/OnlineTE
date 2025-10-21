@@ -4,37 +4,46 @@ import networkx as nx
 from typing import List, Tuple, Optional
 from collections import defaultdict
 from gurobipy import GRB, GurobiError
-from te.algorithms.base import (TrafficEngineeringLP, SolverParams, GurobiSolverParams, TrafficEngineeringLPSolution, 
+from te.algorithms.base import (TrafficEngineeringLP, SolverParams, TrafficEngineeringLPSolution, 
                                 TrafficEngineeringLPCheckResult, TrafficEngineeringLPEvaluationParams)
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
 from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
 from te.algorithms.sub_algorithms.link_capacity_test import check_capacity_constraint
 from te.algorithms.sub_algorithms.flow_conservation_test import check_flow_conservation
+from te.algorithms.sub_algorithms.paths import TShortestPaths, path_based_to_edge_based
 from te.algorithms.utils import make_model
-from utils.logging import as_info, as_fail, ShortTQDMEnumerate
+from utils.logging import as_info, as_fail, ShortTQDMEnumerate, ShortTQDM
+
+from . import CentralizedPathBasedSolverParams
 
 
-class CentralizedEdgeBasedLP(TrafficEngineeringLP):
-    def __init__(self, graph: nx.DiGraph, traffic: TrafficMatrixBase, solver_params: GurobiSolverParams) -> None:
+class CentralizedPathBasedLP(TrafficEngineeringLP):
+    def __init__(self, graph: nx.DiGraph, traffic: TrafficMatrixBase, solver_params: CentralizedPathBasedSolverParams) -> None:
         super().__init__()
         self._graph = graph
         self._traffic = traffic
-        self._solver_params: GurobiSolverParams = solver_params
-        self._env: gurobipy.Env = None
-        self._model: gurobipy.Model = None
-        self._flows: gurobipy.tupledict = None
-        self._utility: gurobipy.Var = None
-        self._objective: gurobipy.LinExpr = None
+        self._solver_params: CentralizedPathBasedSolverParams = solver_params
+        self._env: Optional[gurobipy.Env] = None
+        self._model: Optional[gurobipy.Model] = None
+        self._Y_tk: Optional[gurobipy.tupledict] = None
+        self._utility: Optional[gurobipy.Var] = None
+        self._objective: Optional[gurobipy.LinExpr] = None
         self._commodity_list: List[Commodity] = traffic_to_commodity(self._traffic)
-        self._demand_constraints: List[Tuple[gurobipy.Constr, gurobipy.Constr]] = None
-        self._capacity_constraints: gurobipy.tupledict = None
-        self._X_ek: np.ndarray = None
+        self._X_ek: Optional[np.ndarray] = None
+
+        self._path_object: Optional[TShortestPaths] = None
+        self._demands: np.ndarray = np.array([commodity.demand for commodity in self._commodity_list])
         
         self._report_problem_size()
+        self._initialize()
+    
+    def _initialize(self):
+        self._path_object = TShortestPaths.load(graph=self._graph, T=self._solver_params.NumberOfPathsPerCommodity,
+                                                topo_name=self._solver_params.TopologyName)
     
     @property
     def alg_name(self) -> str:
-        return 'Centralized'
+        return 'Centralized-Path'
     
     @property
     def graph(self) -> nx.DiGraph:
@@ -75,123 +84,81 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
         print(as_info(f"Number of commodities: {K}"))
 
     def initialize_to(self, solution: EdgeBasedMinimizeMaximumUtilitySolution):
-        assert self._model is not None and self._flows is not None
-        solution.initiate_model_from_basis(self._model)
+        raise NotImplementedError
 
     def _set_X_ek(self):
         K = len(self._commodity_list)
-        N = len(self._graph.edges)
-        FLOWS = self._flows
-        X_EK = np.ndarray(shape=(N, K))
+        T = self._solver_params.NumberOfPathsPerCommodity
+        ASSIGNMENTS = self._Y_tk
+        DEMANDS = self._demands
+        Y_TK = np.ndarray(shape=(T, K))
+        ALPHA_K = self._path_object.alpha
         for k in range(K):
-            for e in range(N):
-                X_EK[e, k] = FLOWS[(e, k)].X
-        self._X_ek = X_EK
+            for t in range(T):
+                Y_TK[t, k] = ASSIGNMENTS[(t, k)].X
+        self._X_ek = path_based_to_edge_based(Y_TK, ALPHA_K, DEMANDS)
     
     def _make_variables(self):
-        assert self._model is None and self._flows is None
-
-        """
-        As per our formulation, the commodity matrix is of the form X_{ke},
-        where each column is the split of a commodity `k` over the set of 
-        edges in the graph.
-        For `N` edges and `K` commodities, `X` would be a `N x K` matrix, where
-        `X[e]` gives the flow of each commodity on edge `e`.
-        """
+        assert self._model is None and self._Y_tk is None
 
         K = len(self._commodity_list)
-        N = len(self._graph.edges)
+        T = self._solver_params.NumberOfPathsPerCommodity
         
         ENV = gurobipy.Env()
         ENV.start()
         self._env = ENV
-        MODEL = make_model(name='EdgeBasedTE', params=self._solver_params, env=ENV)
+        MODEL = make_model(name='PathBasedTE', params=self._solver_params, env=ENV)
         self._model = MODEL
 
-        # This implicitly encodes the condition for `X_{ke} >= 0`
-        print(as_info("Adding commodity assignment variables"))
-        self._flows = MODEL.addVars(N, K, lb=0.0, vtype=GRB.CONTINUOUS, name='X')
-        # Link utilization upper bound, may not be important based on what we need
-        self._utility = MODEL.addVar(lb=0.0, ub=1.0, vtype=GRB.CONTINUOUS, name='U')
+        print(as_info("Adding tunnel assignment variables"))
+        self._Y_tk = MODEL.addVars(T, K, lb=0.0, vtype=GRB.CONTINUOUS, name='Y')
+        # self._utility = MODEL.addVar(lb=0.0, ub=1.0, vtype=GRB.CONTINUOUS, name='U')
+        # TODO: Keep the upper bound?
+        self._utility = MODEL.addVar(lb=0.0, vtype=GRB.CONTINUOUS, name='U')
     
     def _add_constraints(self):
-        assert self._model is not None and self._flows is not None
+        assert self._model is not None and self._Y_tk is not None
 
-        K = len(self._commodity_list)
+        T = self._solver_params.NumberOfPathsPerCommodity
         MODEL = self._model
         GRAPH = self._graph
-        FLOWS = self._flows
+        Y_TK = self._Y_tk
+        ALPHA_K = self._path_object.alpha
+        BETA_K = self._path_object.beta
         UTILITY = self._utility
         COMMODITIES = self._commodity_list
+        K = len(COMMODITIES)
 
         # Capacity constraint
         print(as_info("Adding capacity constraints"))
         capacity_constraints: List[gurobipy.Constr] = []
         for e, (_, _, c_e) in ShortTQDMEnumerate(GRAPH.edges.data('capacity')):
             total_flow = gurobipy.LinExpr()
-            for k in range(K):
-                total_flow.addTerms(1, FLOWS[(e, k)])
+            for k, commodity in enumerate(COMMODITIES):
+                D_K = commodity.demand
+                for t in range(T):
+                    if ALPHA_K[k, e, t]:
+                        total_flow.addTerms(D_K, Y_TK[(t, k)])
             capacity_constraints.append(MODEL.addConstr(total_flow <= UTILITY * c_e))
         self._capacity_constraints = capacity_constraints
 
-        """
-        We use the expanded version of the constraint `MX_k = b_k.d_k`, which needs
-        that for each node `v`, we have:
-
-            - `sum(flow_in[k]) == sum(flow_out[k])` if the node is transit for `k`.
-            - `sum(flow_out[k]) - sum(flow_in[k]) == +d_k` if the node is `src_k`.
-            - `sum(flow_out[k]) - sum(flow_in[k]) == -d_k` if the node is `dst_k`.
+        # Demand constraint
+        print(as_info("Adding demand constraints"))
+        for k in ShortTQDM(range(K)):
+            total_assignment = gurobipy.LinExpr()
+            for t in range(T):
+                total_assignment.addTerms(1, Y_TK[(t, k)])
+            MODEL.addConstr(total_assignment - 1 == 0)
         
-        Now, the above combined with the capacity constraint may not be feasible at
-        all, thus, we should probably relax the constraint such that the demand at
-        the destination is less than or equal to `d_k` instead.
-        With this:
-
-            - `sum(flow_out[k]) == sum(flow_in[k])` if the node is transit for `k`.
-            - `sum(flow_out[k]) - sum(flow_in[k]) <= +d_k` if the node is `src_k`.
-
-        And instead, we force conservation from source to destination by:
-        
-                `sum(flow_out[src_k][k]) == sum(flow_in[dst_k][k])`
-        
-        We use the second form to make sure that the problem is always feasible.
-        """
-
-        demand_constraints = []
-        print(as_info("Adding demand/flow-conservation constraints"))
-        for k, commodity in ShortTQDMEnumerate(COMMODITIES):
-            SOURCE = commodity.source
-            DESTINATION = commodity.destination
-            DEMAND = commodity.demand
-
-            flow_out = defaultdict(gurobipy.LinExpr)
-            flow_in = defaultdict(gurobipy.LinExpr)
-            for e, edge in enumerate(GRAPH.edges()):
-                flow_out[edge[0]].addTerms(1, FLOWS[(e, k)])
-                flow_in[edge[1]].addTerms(1, FLOWS[(e, k)])
-                if edge[0] == DESTINATION:
-                    MODEL.addConstr(FLOWS[(e, k)] == 0)
-                if edge[1] == SOURCE:
-                    MODEL.addConstr(FLOWS[(e, k)] == 0)
-            
-            source_constraint = None
-            destination_constraint = None
-            for v in GRAPH.nodes():
-                if v == SOURCE:
-                    # Demand constraint from source
-                    source_constraint = MODEL.addConstr(flow_out[v] - flow_in[v] == DEMAND)
-                elif v == DESTINATION:
-                    # Demand constraint in destination
-                    destination_constraint = MODEL.addConstr(flow_in[v] - flow_out[v] == DEMAND)
-                else:
-                    # Flow conservation in transit
-                    MODEL.addConstr(flow_out[v] == flow_in[v])
-            demand_constraints.append((source_constraint, destination_constraint))
-        self._demand_constraints = demand_constraints
+        # Number of paths constraint
+        print(as_info("Adding path availability constraints"))
+        for k in ShortTQDM(range(K)):
+            for t in range(BETA_K[k], T):
+                MODEL.addConstr(Y_TK[(t, k)] == 0)
 
     def _add_objective(self):
         assert self._model is not None and \
-                self._flows is not None and \
+                self._Y_tk is not None and \
                 self._objective is None
         
         MODEL = self._model
@@ -272,21 +239,7 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
         return ls
 
     def update_traffic_matrix(self, tm: TrafficMatrixBase):
-        # First, record the new commodity list
-        COMMODITIES = traffic_to_commodity(tm)
-        self._commodity_list = COMMODITIES
-
-        # Now, update demand constraints
-        for constraints, commodity in zip(self._demand_constraints, COMMODITIES):
-            DEMAND = commodity.demand
-            source_constraint, destination_constraint = constraints
-            source_constraint.RHS = DEMAND
-            destination_constraint.RHS = DEMAND
-        
-        # Record the new TM
-        self._traffic = tm
+        raise NotImplementedError
     
     def add_solution_elements(self, solution: TrafficEngineeringLPSolution):
-        solution.add_solution_element(self._utility, 'utility')
-        solution.add_solution_element(self._flows, 'assignments')
-        # solution.add_solution_element(self._capacity_constraints, 'capacity_constraints')
+        raise NotImplementedError

@@ -3,7 +3,7 @@ import asyncio
 import numpy as np
 from typing import List, ClassVar, Optional
 from dataclasses import dataclass
-from te.algorithms.array_utils.cpu_utils import CPUArray
+from te.algorithms.array_utils.cpu_utils import CPUArray, BooleanCPUArray
 from .. import DistributedADMMControllerRPCParams, DistributedADMMSolverParams
 from .base import (ControllerCommunicationBackendBase, controller_communication_backend,
                    controller_communication_backend_params)
@@ -83,10 +83,11 @@ class AsynchronousgRPCBackend(ControllerCommunicationBackendBase):
         return self._event_loop.run_until_complete(self._are_network_nodes_ready())
 
     async def _initialize_worker_nodes(self, solver_params: DistributedADMMSolverParams, basis: CPUArray, 
-                                       initial_feasible_solution: CPUArray):
+                                       initial_feasible_solution: CPUArray, in_out_mask: Optional[BooleanCPUArray] = None):
         NUM_WORKERS = self.number_of_nodes
         NULL_M = basis
         X_EK_START_CHUNKS = np.array_split(initial_feasible_solution, NUM_WORKERS, axis=1)
+        MASK_EK_CHUNKS = None if in_out_mask is None else np.array_split(in_out_mask, NUM_WORKERS, axis=1)
         WORKERS = self._worker_stubs
 
         # Update solver parameters
@@ -104,10 +105,17 @@ class AsynchronousgRPCBackend(ControllerCommunicationBackendBase):
             stub.SetNullSpaceBasis(chunk_big_array(NULL_M, GRPC_ARRAY_STREAM_MAX_LEN))
             for stub in WORKERS
         ])
+
+        # If it exists, send the mask as well
+        if MASK_EK_CHUNKS is not None:
+            await asyncio.gather(*[
+                stub.SetCommodityInOutMask(chunk_big_array(MASK_EK_CHUNKS[i], GRPC_ARRAY_STREAM_MAX_LEN, dtype=bool)) 
+                for i, stub in enumerate(WORKERS)
+            ])
     
     def initialize_worker_nodes(self, solver_params: DistributedADMMSolverParams, basis: CPUArray, 
-                                initial_feasible_solution: CPUArray):
-        self._event_loop.run_until_complete(self._initialize_worker_nodes(solver_params, basis, initial_feasible_solution))
+                                initial_feasible_solution: CPUArray, in_out_mask: Optional[BooleanCPUArray] = None):
+        self._event_loop.run_until_complete(self._initialize_worker_nodes(solver_params, basis, initial_feasible_solution, in_out_mask))
     
     async def _update_demands(self, updated_feasible_solution: CPUArray):
         X_EK_START_CHUNKS = np.array_split(updated_feasible_solution, self.number_of_nodes, axis=1)
@@ -129,6 +137,27 @@ class AsynchronousgRPCBackend(ControllerCommunicationBackendBase):
 
     def get_X_ek(self, basis: CPUArray, initial_feasible_solution: CPUArray):
         return self._event_loop.run_until_complete(self._get_X_ek(basis, initial_feasible_solution))
+
+    # DEBUG
+    async def _get_Y_tk(self):
+        chunks = await asyncio.gather(*[
+            async_rebuild_chunked_array(stub.RequestChunk(Empty()))
+            for stub in self._worker_stubs
+        ])
+        return np.hstack(list(chunks))
+    # DEBUG
+    def get_Y_tk(self):
+        return self._event_loop.run_until_complete(self._get_Y_tk())
+    # DEBUG
+    async def _get_Lambda_ek(self):
+        chunks = await asyncio.gather(*[
+            async_rebuild_chunked_array(stub.DebugRequestLambda(Empty()))
+            for stub in self._worker_stubs
+        ])
+        return np.hstack(list(chunks))
+    # DEBUG
+    def get_Lambda_ek(self):
+        return self._event_loop.run_until_complete(self._get_Lambda_ek())
     
     async def _get_X_ek_sum(self):
         serialized_chunks = await asyncio.gather(*[
@@ -190,3 +219,9 @@ class AsynchronousgRPCBackend(ControllerCommunicationBackendBase):
     
     def set_active_commodity_count(self, K: int):
         self._event_loop.run_until_complete(self._set_active_commodity_count(K))
+
+    async def _reset_inner_dual_variable(self):
+        await asyncio.gather(*[stub.ResetInnerDualVariable(Empty()) for stub in self._worker_stubs])
+
+    def reset_inner_dual_variable(self):
+        self._event_loop.run_until_complete(self._reset_inner_dual_variable())

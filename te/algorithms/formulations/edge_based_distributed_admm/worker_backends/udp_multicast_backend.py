@@ -1,6 +1,5 @@
 import grpc
 import socket
-import asyncio
 import threading
 import protos.distributed_lp.distributed_lp_pb2 as distributed_lp_messages
 from typing import Optional, Iterator
@@ -11,6 +10,7 @@ from ..utils import (serialized_message_to_array, array_to_serialized_message,
                      rebuild_chunked_array, chunk_big_array, get_optional_field,
                      GRPC_ARRAY_STREAM_MAX_LEN)
 from ..controller_backends.udp_multicast_backend import TLVRPCMessages
+from utils.logging import as_warning
 
 import protos.array.array_pb2 as array_messages
 from protos.distributed_lp.distributed_lp_pb2_grpc import DistributedADMMSolverServicer, add_DistributedADMMSolverServicer_to_server
@@ -91,14 +91,19 @@ class MulticastBackend(WorkerNodeCommunicationBackendBase):
         try:
             while self.is_alive:
                 try:
-                    packet, addr = self._gather_socket.recvfrom(10240)
+                    packet, addr = self._gather_socket.recvfrom(40960)
                     buffer += packet
                     update = TLVRPCMessages.get_packet_rpc_message(buffer)
                     if update is not None:
                         update_type, consumed_length, request = update
+                        if self.current_xid == None:
+                            self._xid = request.xid
+                        elif self.current_xid >= request.xid:
+                            buffer = buffer[consumed_length:]
+                            continue
+                        else:
+                            self._xid = request.xid
                         if update_type == TLVRPCMessages.DoInnerLoops:
-                            if self.current_xid == None:
-                                self._xid = request.xid
                             F_e = serialized_message_to_array(get_optional_field(request, 'F_e'))
                             runtime, means = self.do_inner_loop_update(request.epoch, F_e)
                             response = distributed_lp_messages.NetworkUpdateResponse(
@@ -113,7 +118,6 @@ class MulticastBackend(WorkerNodeCommunicationBackendBase):
                                 serialized_message_to_array(request.P_bar_t),
                                 serialized_message_to_array(request.Y_bar_t)
                             )
-                            self.update_xid()
                         else:
                             raise ValueError(f'Unexpected update type: {update_type}')
                         buffer = buffer[consumed_length:]
@@ -143,6 +147,10 @@ class NetworkWorkerNodeListener(DistributedADMMSolverServicer):
 
     def SetNullSpaceBasis(self, request_iterator: Iterator[array_messages.Chunk], context):
         self._backend.set_null_space_basis(rebuild_chunked_array(request_iterator))
+        return Empty()
+
+    def SetCommodityInOutMask(self, request_iterator: Iterator[array_messages.Chunk], context):
+        self._backend.set_commodity_in_out_mask(rebuild_chunked_array(request_iterator))
         return Empty()
     
     def DoNetworkUpdate(self, request: distributed_lp_messages.NetworkUpdateRequest, context):

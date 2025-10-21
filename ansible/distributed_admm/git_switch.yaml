@@ -1,0 +1,12 @@
+- name: Switch branch
+  hosts: controller_group:workers_group
+  gather_facts: false
+  remote_user: aghavidel
+  tasks:
+
+  - name: Switch branch
+    ansible.builtin.git:
+      repo: https://{{access_token}}@github.com/USC-NSL/DistributedTE.git
+      force: true
+      dest: /home/aghavidel/DistributedTE
+      version: "{{branch}}"

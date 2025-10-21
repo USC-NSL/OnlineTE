@@ -1,21 +1,23 @@
 import grpc
-import protos.distributed_lp.distributed_lp_pb2 as distributed_lp_messages
+import protos.path_based_distributed_lp.path_based_distributed_lp_pb2 as distributed_lp_messages
 from typing import Optional, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from .base import WorkerNodeCommunicationBackendBase, worker_node_communication_backend
-from .. import DistributedADMMSolverParams, DistributedADMMWorkerRPCParams
-from ..utils import (serialized_message_to_array, array_to_serialized_message,
-                     rebuild_chunked_array, chunk_big_array, get_optional_field,
-                     GRPC_ARRAY_STREAM_MAX_LEN)
+from te.algorithms.formulations.edge_based_distributed_admm.utils import (
+    serialized_message_to_array, array_to_serialized_message,
+    rebuild_chunked_array, chunk_big_array, 
+    GRPC_ARRAY_STREAM_MAX_LEN)
+from .. import PathBasedDistributedADMMSolverParams, PathBasedDistributedADMMWorkerRPCParams
 
 import protos.array.array_pb2 as array_messages
-from protos.distributed_lp.distributed_lp_pb2_grpc import DistributedADMMSolverServicer, add_DistributedADMMSolverServicer_to_server
+from protos.path_based_distributed_lp.path_based_distributed_lp_pb2_grpc import (
+    PathBasedDistributedADMMSolverServicer, add_PathBasedDistributedADMMSolverServicer_to_server)
 from google.protobuf.empty_pb2 import Empty
 
 
 @worker_node_communication_backend
 class SynchronousgRPCBackend(WorkerNodeCommunicationBackendBase):
-    def __init__(self, rpc_params: DistributedADMMWorkerRPCParams):
+    def __init__(self, rpc_params: PathBasedDistributedADMMWorkerRPCParams):
         super().__init__()
         self._rpc_params = rpc_params
 
@@ -39,7 +41,7 @@ class SynchronousgRPCBackend(WorkerNodeCommunicationBackendBase):
         PORT = RPC_PARAMS.Port
         self._server = grpc.server(thread_pool=ThreadPoolExecutor(max_workers=RPC_PARAMS.NumThreads))
         self._listener = NetworkWorkerNodeListener(self)
-        add_DistributedADMMSolverServicer_to_server(self._listener, self._server)
+        add_PathBasedDistributedADMMSolverServicer_to_server(self._listener, self._server)
         addr = ":".join([IP, str(PORT)])
         self._server.add_insecure_port(addr)
     
@@ -66,50 +68,44 @@ class SynchronousgRPCBackend(WorkerNodeCommunicationBackendBase):
             self._server.stop(1)
 
 
-class NetworkWorkerNodeListener(DistributedADMMSolverServicer):
+class NetworkWorkerNodeListener(PathBasedDistributedADMMSolverServicer):
     def __init__(self, backend: SynchronousgRPCBackend):
         super().__init__()
         self._backend = backend
         self._id = backend.worker_id
     
-    def SetInitialFeasibleSolution(self, request_iterator: Iterator[array_messages.Chunk], context):
-        self._backend.set_initial_feasible_solution(rebuild_chunked_array(request_iterator))
+    def SetAlpha(self, request_iterator: Iterator[array_messages.Chunk], context):
+        self._backend.set_alpha(rebuild_chunked_array(request_iterator))
         return Empty()
-
-    def SetNullSpaceBasis(self, request_iterator: Iterator[array_messages.Chunk], context):
-        self._backend.set_null_space_basis(rebuild_chunked_array(request_iterator))
+    def SetBeta(self, request_iterator: Iterator[array_messages.Chunk], context):
+        self._backend.set_beta(rebuild_chunked_array(request_iterator))
         return Empty()
-    
-    def SetCommodityInOutMask(self, request_iterator: Iterator[array_messages.Chunk], context):
-        self._backend.set_commodity_in_out_mask(rebuild_chunked_array(request_iterator))
+    def SetDemands(self, request_iterator: Iterator[array_messages.Chunk], context):
+        self._backend.set_demands(rebuild_chunked_array(request_iterator))
         return Empty()
     
     def DoNetworkUpdate(self, request: distributed_lp_messages.NetworkUpdateRequest, context):
-        F_e = serialized_message_to_array(get_optional_field(request, 'F_e'))
-        runtime, means = self._backend.do_inner_loop_update(request.epoch, F_e)
+        runtime, means = self._backend.do_inner_loop_update(request.epoch)
         return distributed_lp_messages.NetworkUpdateResponse(
             runtime_ns=runtime, means=array_to_serialized_message(means)
         )
     
     def UpdateWorkerNode(self, request: distributed_lp_messages.UpdateMessage, context):
         self._backend.update_cached_values(
-            serialized_message_to_array(request.u_t),
-            serialized_message_to_array(request.P_bar_t),
-            serialized_message_to_array(request.Y_bar_t)
+            serialized_message_to_array(request.X_bar_e),
+            serialized_message_to_array(request.P_bar_e),
+            serialized_message_to_array(request.u_e)
         )
         return Empty()
     
     def RequestChunk(self, request, context):
         return chunk_big_array(self._backend.report_chunk(), GRPC_ARRAY_STREAM_MAX_LEN)
     
-    def RequestAggregate(self, request, context):
-        return array_to_serialized_message(self._backend.report_aggregate())
-    
     def QueryState(self, request, context):
         return distributed_lp_messages.State(ready=self._backend.is_alive)
     
     def SetSolverParameters(self, request: distributed_lp_messages.SolverParameters, context):
-        new_params = DistributedADMMSolverParams()
+        new_params = PathBasedDistributedADMMSolverParams()
         for field in new_params.child_fields.keys():
             setattr(new_params, field, getattr(request, field))
         self._backend.set_solver_parameters(new_params)
@@ -123,9 +119,3 @@ class NetworkWorkerNodeListener(DistributedADMMSolverServicer):
         self._backend.set_active_commodity_count(request.TotalNumberOfCommodities)
         return Empty()
     
-    def ResetInnerDualVariable(self, request, context):
-        self._backend.reset_inner_dual_variable()
-        return Empty()
-    
-    def DebugRequestLambda(self, request, context):
-        return chunk_big_array(self._backend.debug_request_lambda(), GRPC_ARRAY_STREAM_MAX_LEN)

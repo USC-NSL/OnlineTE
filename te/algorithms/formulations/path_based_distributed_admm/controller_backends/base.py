@@ -1,9 +1,9 @@
 import signal
-from typing import Dict, Type, Tuple, Optional
+from typing import Dict, Type, Tuple
 from abc import ABC, abstractmethod
-from te.algorithms.array_utils.cpu_utils import CPUArray, BooleanCPUArray
+from te.algorithms.array_utils.cpu_utils import CPUArray, BooleanCPUArray, IntegerCPUArray
 from te.algorithms.base import SolverParams
-from .. import DistributedADMMControllerRPCParams
+from .. import PathBasedDistributedADMMControllerRPCParams
 
 
 class ControllerCommunicationBackendBase(ABC):
@@ -65,28 +65,23 @@ class ControllerCommunicationBackendBase(ABC):
         """Check if all network nodes are ready"""
 
     @abstractmethod
-    def initialize_worker_nodes(self, solver_params: SolverParams, basis: CPUArray, initial_feasible_solution: CPUArray,
-                                in_out_mask: Optional[BooleanCPUArray] = None):
-        """Initialize worker nodes with solver parameters and initial feasible solution (X_ek_0)"""
+    def initialize_worker_nodes(self, solver_params: SolverParams, alpha: BooleanCPUArray, beta: IntegerCPUArray, demands: CPUArray):
+        """Initialize worker nodes with solver parameters and path configurations (i.e. alpha_ket, beta_k, D_k)"""
 
     @abstractmethod
-    def update_demands(self, updated_feasible_solution: CPUArray):
-        """Update the initial feasible solution (X_ek_0)"""
+    def update_demands(self, updated_demands: CPUArray):
+        """Update D_k"""
     
     @abstractmethod
-    def get_X_ek(self, basis: CPUArray, initial_feasible_solution: CPUArray) -> CPUArray:
+    def get_X_ek(self, alpha: BooleanCPUArray, demands: CPUArray) -> CPUArray:
         """Get the final solution array (X_ek)"""
     
     @abstractmethod
-    def get_X_ek_sum(self) -> CPUArray:
-        """Get the total flow over each edge"""
-    
-    @abstractmethod
-    def do_network_update(self, epoch: int, F_e: Optional[CPUArray] = None) -> Tuple[int, CPUArray]:
+    def do_network_update(self, epoch: int) -> Tuple[int, CPUArray]:
         """Do network update for a given epoch and return the aggregate"""
     
     @abstractmethod
-    def reconvene_network_updates(self, P_bar_t: CPUArray, Y_bar_t: CPUArray, u_t: CPUArray):
+    def reconvene_network_updates(self, X_bar_e: CPUArray, P_bar_e: CPUArray, u_e: CPUArray):
         """Finalize network updates for a single inner ADMM iteration"""
     
     @abstractmethod
@@ -110,7 +105,7 @@ class ControllerCommunicationBackendBase(ABC):
 
 
 _BACKENDS: Dict[str, Type[ControllerCommunicationBackendBase]] = dict()
-_PARAMS: Dict[str, Type[DistributedADMMControllerRPCParams]] = dict()
+_PARAMS: Dict[str, Type[PathBasedDistributedADMMControllerRPCParams]] = dict()
 
 
 def controller_communication_backend(cls: Type[ControllerCommunicationBackendBase]) -> ControllerCommunicationBackendBase:
@@ -124,11 +119,11 @@ def controller_communication_backend(cls: Type[ControllerCommunicationBackendBas
     return cls
 
 
-def controller_communication_backend_params(cls: Type[DistributedADMMControllerRPCParams]) -> DistributedADMMControllerRPCParams:
+def controller_communication_backend_params(cls: Type[PathBasedDistributedADMMControllerRPCParams]) -> PathBasedDistributedADMMControllerRPCParams:
     """Decorator that registers any communication backend parameters for simple use"""
     global _PARAMS
 
-    assert issubclass(cls, DistributedADMMControllerRPCParams)
+    assert issubclass(cls, PathBasedDistributedADMMControllerRPCParams)
     tpe = cls.Backend
     assert tpe not in _PARAMS
     _PARAMS[tpe] = cls

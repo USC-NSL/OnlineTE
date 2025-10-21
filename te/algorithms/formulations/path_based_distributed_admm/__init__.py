@@ -10,28 +10,22 @@ warnings.filterwarnings("error")
 
 
 @dataclass
-class DistributedADMMSolverParams(GurobiSolverParams):
-    NumberOfEpochs: Optional[int] = 100
-    NumberOfNetworkUpdates: int = 3
-    NumberOfLocalUpdates: int = 0
-    Rho: float = 8.0
-    Eta: float = 0.5
+class PathBasedDistributedADMMSolverParams(GurobiSolverParams):
+    NumberOfPathsPerCommodity: int = 16
+    TopologyName: Optional[str] = None
+    NumberOfEpochs: Optional[int] = 50
+    NumberOfNetworkUpdates: int = 2
+    Rho: float = 1.0
+    Eta: float = 8.0
     Gamma: float = 1.0
-    Kappa: float = 0.01
-    QPIterations: int = 2
-    QPMethod: Literal['PGD', 'ADMM'] = 'PGD'
-    BigGamma: float = 1e-7
+    Kappa: float = 0.2
+    QPIterations: int = 4
     Precision: Literal['double', 'single', 'half'] = SINGLE_PRECISION
     Seed: int = te.constants.DEFAULT_SEED
 
-    def __post_init__(self):
-        # We override `BarConvTol` to be the same value as `BigGamma`
-        self.ConvTol = self.BigGamma
-        self._left_column_share = 0.5
-
 
 @dataclass
-class DistributedADMMWorkerRPCParams(SolverParams):
+class PathBasedDistributedADMMWorkerRPCParams(SolverParams):
     IP: str = "localhost"
     Port: int = 13000
     NumThreads: int = 1
@@ -44,7 +38,7 @@ class DistributedADMMWorkerRPCParams(SolverParams):
 
 
 @dataclass
-class DistributedADMMControllerRPCParams(SolverParams):
+class PathBasedDistributedADMMControllerRPCParams(SolverParams):
     AddressList: Tuple[Tuple[str, int]] = (("localhost", 13000),)
     NumWorkers: int = 2
     Backend: ClassVar[str] = ""

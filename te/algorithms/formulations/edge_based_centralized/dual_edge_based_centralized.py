@@ -4,6 +4,7 @@ import networkx as nx
 from typing import List, Tuple, Optional
 from collections import defaultdict
 from gurobipy import GRB, GurobiError
+from topologies.utils import get_graph_M_matrix
 from te.algorithms.base import (TrafficEngineeringLP, SolverParams, GurobiSolverParams, TrafficEngineeringLPSolution, 
                                 TrafficEngineeringLPCheckResult, TrafficEngineeringLPEvaluationParams)
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
@@ -11,13 +12,20 @@ from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
 from te.algorithms.sub_algorithms.link_capacity_test import check_capacity_constraint
 from te.algorithms.sub_algorithms.flow_conservation_test import check_flow_conservation
 from te.algorithms.utils import make_model
-from utils.logging import as_info, as_fail, ShortTQDMEnumerate
+from utils.logging import as_info, as_fail, as_success, as_warning, ShortTQDM, ShortTQDMEnumerate
 
 
-class CentralizedEdgeBasedLP(TrafficEngineeringLP):
+class DualCentralizedEdgeBasedLP(TrafficEngineeringLP):
+    """
+    Similar to `CentralizedEdgeBasedLP`, but it also cleanly returns all the dual variables
+    and explicitly checks the dual infesibility.
+    This is mostly used for debug, but the output solution can be helpful for exact warm starts.
+    """
     def __init__(self, graph: nx.DiGraph, traffic: TrafficMatrixBase, solver_params: GurobiSolverParams) -> None:
         super().__init__()
         self._graph = graph
+        self._M: np.ndarray = get_graph_M_matrix(graph)
+        self._c_e: np.ndarray = np.array([item[-1] for item in graph.edges.data('capacity')])
         self._traffic = traffic
         self._solver_params: GurobiSolverParams = solver_params
         self._env: gurobipy.Env = None
@@ -26,8 +34,14 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
         self._utility: gurobipy.Var = None
         self._objective: gurobipy.LinExpr = None
         self._commodity_list: List[Commodity] = traffic_to_commodity(self._traffic)
-        self._demand_constraints: List[Tuple[gurobipy.Constr, gurobipy.Constr]] = None
-        self._capacity_constraints: gurobipy.tupledict = None
+        self._utility_bound_constraints: Tuple[gurobipy.Constr, gurobipy.Constr] = None
+        """Gives the dual variables `v_neg` and `v_pos`"""
+        self._flow_bound_constraints: List[List[gurobipy.Constr]] = None
+        """Gives the dual variables `lambda_ek`, same shape as `X_ek`"""
+        self._demand_constraints: List[List[gurobipy.Constr]] = None
+        """Gives the dual variables `r_mk`, a matrix of shape `m x K`"""
+        self._capacity_constraints: List[gurobipy.Constr] = None
+        """Gives the dual variables `tau_e`, a vector of length `n`"""
         self._X_ek: np.ndarray = None
         
         self._report_problem_size()
@@ -90,30 +104,19 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
     
     def _make_variables(self):
         assert self._model is None and self._flows is None
-
-        """
-        As per our formulation, the commodity matrix is of the form X_{ke},
-        where each column is the split of a commodity `k` over the set of 
-        edges in the graph.
-        For `N` edges and `K` commodities, `X` would be a `N x K` matrix, where
-        `X[e]` gives the flow of each commodity on edge `e`.
-        """
-
         K = len(self._commodity_list)
         N = len(self._graph.edges)
         
         ENV = gurobipy.Env()
         ENV.start()
         self._env = ENV
-        MODEL = make_model(name='EdgeBasedTE', params=self._solver_params, env=ENV)
+        MODEL = make_model(name='DualCheckingEdgeBasedTE', params=self._solver_params, env=ENV)
         self._model = MODEL
 
-        # This implicitly encodes the condition for `X_{ke} >= 0`
         print(as_info("Adding commodity assignment variables"))
-        self._flows = MODEL.addVars(N, K, lb=0.0, vtype=GRB.CONTINUOUS, name='X')
-        # Link utilization upper bound, may not be important based on what we need
-        self._utility = MODEL.addVar(lb=0.0, ub=1.0, vtype=GRB.CONTINUOUS, name='U')
-    
+        self._flows = MODEL.addVars(N, K, lb=float('-inf'), vtype=GRB.CONTINUOUS, name='X')
+        self._utility = MODEL.addVar(lb=float('-inf'), vtype=GRB.CONTINUOUS, name='U')
+
     def _add_constraints(self):
         assert self._model is not None and self._flows is not None
 
@@ -124,6 +127,28 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
         UTILITY = self._utility
         COMMODITIES = self._commodity_list
 
+        # Utilization bound constraints
+        u_low = MODEL.addConstr(UTILITY >= 0)
+        u_high = MODEL.addConstr(-UTILITY >= -1)
+        self._utility_bound_constraints = (u_low, u_high)
+
+        # Flow bound constraints
+        print(as_info("Adding flow bound constraints"))
+        bounds = []
+        for e, edge in ShortTQDMEnumerate(self._graph.edges()):
+            ls = []
+            for k, commodity in enumerate(self._commodity_list):
+                SOURCE = commodity.source
+                DESTINATION = commodity.destination
+                if edge[0] == DESTINATION:
+                    ls.append(MODEL.addConstr(self._flows[(e, k)] == 0))
+                elif edge[1] == SOURCE:
+                    ls.append(MODEL.addConstr(self._flows[(e, k)] == 0))
+                else:
+                    ls.append(MODEL.addConstr(self._flows[(e, k)] >= 0 ))
+            bounds.append(ls)
+        self._flow_bound_constraints = bounds
+
         # Capacity constraint
         print(as_info("Adding capacity constraints"))
         capacity_constraints: List[gurobipy.Constr] = []
@@ -131,62 +156,28 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
             total_flow = gurobipy.LinExpr()
             for k in range(K):
                 total_flow.addTerms(1, FLOWS[(e, k)])
-            capacity_constraints.append(MODEL.addConstr(total_flow <= UTILITY * c_e))
+            capacity_constraints.append(MODEL.addConstr(UTILITY * c_e >= total_flow))
         self._capacity_constraints = capacity_constraints
 
-        """
-        We use the expanded version of the constraint `MX_k = b_k.d_k`, which needs
-        that for each node `v`, we have:
-
-            - `sum(flow_in[k]) == sum(flow_out[k])` if the node is transit for `k`.
-            - `sum(flow_out[k]) - sum(flow_in[k]) == +d_k` if the node is `src_k`.
-            - `sum(flow_out[k]) - sum(flow_in[k]) == -d_k` if the node is `dst_k`.
-        
-        Now, the above combined with the capacity constraint may not be feasible at
-        all, thus, we should probably relax the constraint such that the demand at
-        the destination is less than or equal to `d_k` instead.
-        With this:
-
-            - `sum(flow_out[k]) == sum(flow_in[k])` if the node is transit for `k`.
-            - `sum(flow_out[k]) - sum(flow_in[k]) <= +d_k` if the node is `src_k`.
-
-        And instead, we force conservation from source to destination by:
-        
-                `sum(flow_out[src_k][k]) == sum(flow_in[dst_k][k])`
-        
-        We use the second form to make sure that the problem is always feasible.
-        """
-
         demand_constraints = []
+        M = self._M
         print(as_info("Adding demand/flow-conservation constraints"))
-        for k, commodity in ShortTQDMEnumerate(COMMODITIES):
-            SOURCE = commodity.source
-            DESTINATION = commodity.destination
-            DEMAND = commodity.demand
-
-            flow_out = defaultdict(gurobipy.LinExpr)
-            flow_in = defaultdict(gurobipy.LinExpr)
-            for e, edge in enumerate(GRAPH.edges()):
-                flow_out[edge[0]].addTerms(1, FLOWS[(e, k)])
-                flow_in[edge[1]].addTerms(1, FLOWS[(e, k)])
-                if edge[0] == DESTINATION:
-                    MODEL.addConstr(FLOWS[(e, k)] == 0)
-                if edge[1] == SOURCE:
-                    MODEL.addConstr(FLOWS[(e, k)] == 0)
-            
-            source_constraint = None
-            destination_constraint = None
-            for v in GRAPH.nodes():
-                if v == SOURCE:
-                    # Demand constraint from source
-                    source_constraint = MODEL.addConstr(flow_out[v] - flow_in[v] == DEMAND)
-                elif v == DESTINATION:
-                    # Demand constraint in destination
-                    destination_constraint = MODEL.addConstr(flow_in[v] - flow_out[v] == DEMAND)
+        for v in ShortTQDM(range(self._graph.number_of_nodes())):
+            ls = []
+            for k, commodity in enumerate(COMMODITIES):
+                if v == commodity.source:
+                    B_vk = commodity.demand
+                elif v == commodity.destination:
+                    B_vk = -commodity.demand
                 else:
-                    # Flow conservation in transit
-                    MODEL.addConstr(flow_out[v] == flow_in[v])
-            demand_constraints.append((source_constraint, destination_constraint))
+                    B_vk = 0
+                
+                expr = gurobipy.LinExpr()
+                for e in range(self._graph.number_of_edges()):
+                    if M[v, e] != 0:
+                        expr.addTerms(M[v, e], FLOWS[(e, k)])
+                ls.append(MODEL.addConstr(expr == B_vk))
+            demand_constraints.append(ls)
         self._demand_constraints = demand_constraints
 
     def _add_objective(self):
@@ -245,6 +236,63 @@ class CentralizedEdgeBasedLP(TrafficEngineeringLP):
             unsat_commodities=unsat_commodities,
             congested_links=congested_links
         )
+
+        M_MAT = self._M
+        C_E = self._c_e
+        N = self.graph.number_of_edges()
+        M = self.graph.number_of_nodes()
+        K = len(self._commodity_list)
+        COMMODITIES = self._commodity_list
+
+        v_minus = self._utility_bound_constraints[0].BarPi
+        v_plus = self._utility_bound_constraints[1].BarPi 
+
+        tau_e = np.array([const.BarPi for const in self._capacity_constraints])
+
+        lambda_ek = np.zeros(shape=(N, K))
+        for e in range(N):
+            for k in range(K):
+                lambda_ek[e, k] = self._flow_bound_constraints[e][k].BarPi
+        
+        r_vk = np.zeros(shape=(M, K))
+        for v in range(M):
+            for k in range(K):
+                r_vk[v, k] = self._demand_constraints[v][k].BarPi
+
+        dual_inf_1 = 1 - v_minus + v_plus - np.dot(tau_e, C_E)
+        dual_inf_2 = np.zeros(shape=(N, K))
+        for e in range(N):
+            for k in range(K):
+                dual_inf_2[e, k] = tau_e[e] - lambda_ek[e, k] - np.dot(M_MAT[:, e], r_vk[:, k])
+
+        dual_feasible_1 = abs(dual_inf_1) < self._solver_params.FeasibilityTol
+        dual_inf_2 = np.linalg.norm(dual_inf_2)
+        dual_feasible_2 = abs(dual_inf_2) < self._solver_params.FeasibilityTol
+        if dual_feasible_1 and dual_feasible_2:
+            print(as_success('Dual Feasibility Holds'))
+        else:
+            print(as_fail('Solution Is Dual Infeasible'))
+            if not dual_feasible_1:
+                print(as_warning(f'Dual Infeasibility I: {dual_inf_1}'))
+            if not dual_feasible_2:
+                print(as_warning(f'Dual Infeasibility II: {dual_inf_2}'))
+        
+        holder = 0
+        for v in range(self._graph.number_of_nodes()):
+            for k, commodity in enumerate(COMMODITIES):
+                if v == commodity.source:
+                    holder += r_vk[v, k] * commodity.demand
+                elif v == commodity.destination:
+                    holder -= r_vk[v, k] * commodity.demand
+                else:
+                    pass
+        dual_objective = -v_plus + holder
+        dual_objective_gap = abs(dual_objective - self._model.ObjBound) / self._model.ObjBound
+        if dual_objective_gap < self._solver_params.ConvTol:
+            print(as_success('Dual Objective Convergance Holds'))
+        else:
+            print(as_fail('Dual Objective Convergance Does Not Hold'))
+            print(as_warning(f'Dual Objective Gap: {dual_objective_gap}'))
     
     def get_solution_commodity_list(self) -> List[Tuple[Commodity, Commodity]]:
         assert self._X_ek is not None

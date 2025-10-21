@@ -6,7 +6,7 @@ import numpy as np
 from typing import Optional, Tuple
 from utils.logging import as_warning
 from te.algorithms.array_utils import set_global_precision
-from te.algorithms.array_utils.cpu_utils import CPUArray, cpu_zeros, cpu_array, set_cpu_float_precision
+from te.algorithms.array_utils.cpu_utils import CPUArray, BooleanCPUArray, cpu_zeros, cpu_array, set_cpu_float_precision
 from . import DistributedADMMSolverParams, DistributedADMMWorkerRPCParams
 from .worker_backends.base import WorkerNodeCommunicationBackendBase
 from .worker_backends.synchronous_grpc_backend import SynchronousgRPCBackend
@@ -28,6 +28,7 @@ class NetworkWorkerNode:
         self._CHUNK_LEN: Optional[int] = None
         self._NULL_M: Optional[CPUArray] = None
         self._NNT_M: Optional[CPUArray] = None
+        self._MASK_M_chunk: Optional[BooleanCPUArray] = None
         self._X_ek_start_chunk: Optional[CPUArray] = None
         self._Y_bar_t_cached: Optional[CPUArray] = None
         self._P_bar_t_cached: Optional[CPUArray] = None
@@ -63,16 +64,19 @@ class NetworkWorkerNode:
 
     def initialize(self):
         if self._rpc_params.Multicast:
-            self._backend: WorkerNodeCommunicationBackendBase = MulticastBackend(rpc_params)
+            self._backend: WorkerNodeCommunicationBackendBase = MulticastBackend(self._rpc_params)
         else:
-            self._backend: WorkerNodeCommunicationBackendBase = SynchronousgRPCBackend(rpc_params)
+            self._backend: WorkerNodeCommunicationBackendBase = SynchronousgRPCBackend(self._rpc_params)
         self._backend.set_initial_feasible_solution = self.set_initial_feasible_solution
         self._backend.set_null_space_basis = self.set_null_space_basis
+        self._backend.set_commodity_in_out_mask = self.set_commodity_in_out_mask
         self._backend.set_solver_parameters = self.set_solver_parameters
         self._backend.update_cached_values = self.update_cached_values
         self._backend.report_chunk = self.report_chunk
         self._backend.report_aggregate = self.report_aggregate
         self._backend.set_active_commodity_count = self.set_active_commodity_count
+        self._backend.reset_inner_dual_variable = self.reset_inner_dual_variable
+        # self._backend.debug_request_lambda = self.debug_request_lambda
         self._backend.start()
     
     def wait(self):
@@ -81,6 +85,11 @@ class NetworkWorkerNode:
     def set_initial_feasible_solution(self, X: CPUArray):
         self._X_ek_start_chunk = X
         self._NUM_EDGES, self._CHUNK_LEN = self._X_ek_start_chunk.shape
+        
+        # TODO: Is this safe?
+        # if self._NULL_M is not None:
+        #     T = self._NULL_M.shape[1]
+        #     self._u_t_cached = cpu_zeros((T,))
     
     def set_null_space_basis(self, NULL_M: CPUArray):
         self._NULL_M = NULL_M
@@ -100,6 +109,12 @@ class NetworkWorkerNode:
         elif self._solver_params.QPMethod == 'ADMM':
             self._S_ek_chunk = np.copy(self._X_ek_start_chunk)
             self._t_ek_chunk = cpu_zeros(self._X_ek_start_chunk.shape)
+    
+    def set_commodity_in_out_mask(self, MASK_M: BooleanCPUArray):
+        self._MASK_M_chunk = MASK_M
+        N, K = MASK_M.shape
+        assert self._NUM_EDGES == N
+        assert self._CHUNK_LEN == K
 
     def _get_current_C(self) -> CPUArray:
         Y_TK = self._Y_tk_chunk
@@ -127,6 +142,7 @@ class NetworkWorkerNode:
         NULL_M = self._NULL_M
         NNT_M = self._NNT_M
         X_EK_START_CHUNK = self._X_ek_start_chunk
+        M_MASK_CHUNK = self._MASK_M_chunk
         LAMBDA_EK_CHUNK = self._lambda_ek_chunk
         C_TK_CHUNK = self._get_current_C()
         
@@ -135,7 +151,7 @@ class NetworkWorkerNode:
         while True:
             self._lambda_ek_chunk, self._Y_tk_chunk = \
                 do_plain_pgd_with_step_reduction(LAMBDA_EK_CHUNK, X_EK_START_CHUNK, NNT_M, NULL_M, C_TK_CHUNK, GAMMA, 
-                                                 PGD_ITERS, KAPPA, epoch)
+                                                 PGD_ITERS, KAPPA, epoch, M_MASK_CHUNK)
             means = np.mean(self._Y_tk_chunk, axis=1)
             if F_e is not None and local_iters < LOCAL_ITERS:
                 self.do_local_update(F_e, means)
@@ -175,6 +191,10 @@ class NetworkWorkerNode:
     
     def set_active_commodity_count(self, K: int):
         self._K = K
+    
+    def reset_inner_dual_variable(self):
+        self._u_t = cpu_zeros((self._T,))
+        self._u_t_cached = cpu_zeros((self._T,))
 
     def update_cached_values(self, u_t: CPUArray, P_bar_t: CPUArray, Y_bar_t: CPUArray):
         self._u_t_cached = u_t
@@ -185,7 +205,11 @@ class NetworkWorkerNode:
         return cpu_array(self._Y_tk_chunk)
     
     def report_aggregate(self) -> CPUArray:
+        # return np.sum(np.multiply(self._X_ek_start_chunk + self._NULL_M @ self._Y_tk_chunk, self._MASK_M_chunk), axis=1)
         return np.sum(self._X_ek_start_chunk + self._NULL_M @ self._Y_tk_chunk, axis=1)
+    
+    def debug_request_lambda(self) -> CPUArray:
+        return cpu_array(self._lambda_ek_chunk)
     
     def close(self):
         self._backend.close()
