@@ -12,64 +12,18 @@ import te.constants
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 from typing import Optional, Type
-from utils.exceptions import SolutionInterrupted
-from utils.logging import (as_bold, as_fail, as_info, as_warning, method_to_str, 
-                           str_round, log_section_title, log_subsection_title)
+from utils.logging import as_info, as_warning, str_round, log_section_title, log_subsection_title
 from te.traffic_models.base import TrafficMatrixBase
-from te.algorithms.base import TrafficEngineeringLP, SolverParams, GurobiSolverParams, TrafficEngineeringLPEvaluationParams
+from te.algorithms.base import TrafficEngineeringLP, SolverParams, TrafficEngineeringLPEvaluationParams
 from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution, EdgeBasedMinimizeMaximumUtilitySolutionParams
 from te.algorithms.statistics.base import stringify_collected_stats
 
 
-def make_model(name: str, params: SolverParams, env: Optional[gurobipy.Env], verbose: bool = True, **kwargs):
-    assert issubclass(params.__class__, GurobiSolverParams)
-    model = gurobipy.Model(name=name, env=env)
-    model.Params.Method = params.Method
-    model.Params.Crossover = params.Crossover
-    model.Params.NumericFocus = params.NumericFocus
-
-    # We set _both_ of these to the same value to make sure that both
-    # Barrier and Simplex converge to within the same tolerance.
-    model.Params.BarConvTol = params.ConvTol
-    model.Params.OptimalityTol = params.ConvTol
-
-    model.Params.FeasibilityTol = params.FeasibilityTol
-    model.Params.LogFile = params.LogFile
-    model.Params.Presolve = params.Presolve
-
-    model.Params.Threads = params.Threads
-
-    if len(kwargs) > 0:
-        for k, v in kwargs.items():
-            setattr(model.Params, k, v)
-
-    if verbose:
-        print(as_info(as_bold(
-            "Created Gurobi Model With:\n"
-            f"\tMethod: {method_to_str[params.Method]}\n"
-            f"\tSimplex Optimality Tolerance (OptimalityTol): {model.Params.OptimalityTol}\n"
-            f"\tBarrier Optimality Tolerance (BarConvTol): {model.Params.BarConvTol}\n"
-            f"\tCosntraint Feasibility Tolerance (FeasibilityTol): {model.Params.FeasibilityTol}\n"
-        )))
-    
-    if model.Params.OptimalityTol != model.Params.BarConvTol:
-        print(as_warning(f'Simplex and Barrier have different convergence tolerances. Make sure this is actualy intended to be!!'))
-
-    return model
-
-
-def optimize_or_scream(model: gurobipy.Model):
-    """Solve a Gurobi model. Throw an error if the model ends up in any non-optimal state"""
-    model.optimize()
-    if model.Status != gurobipy.GRB.OPTIMAL:
-        if model.Status == gurobipy.GRB.INTERRUPTED:
-            raise SolutionInterrupted
-        else:
-            raise RuntimeError(as_fail(f"Optimizing model {model.ModelName} returned non-optimal status: {model.Status}"))
-
 
 def get_solution_confusion_matrix(lp: TrafficEngineeringLP, eval_params: TrafficEngineeringLPEvaluationParams):
-    """Check how many of the demands are not satisfied and report the solution"""
+    """
+    Plot the solution and output the objective trace.
+    """
     def write_traces(_lp: TrafficEngineeringLP):
         solver_params = _lp.params
         objective_trace = _lp.objective_trace

@@ -33,13 +33,6 @@ def list_round(values: List, digits: int) -> List[str]:
     return [str_round(value, digits) for value in values]
 
 
-method_to_str = {
-    gurobipy.GRB.METHOD_BARRIER: "BARRIER",
-    gurobipy.GRB.METHOD_PRIMAL: "PRIMAL-SIMPLEX",
-    gurobipy.GRB.METHOD_DUAL: "DUAL-SIMPLEX"
-}
-
-
 LINE_SEPARATOR_LENGTH = 82
 
 def log_section_title(title: str) -> str:

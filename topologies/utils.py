@@ -198,7 +198,7 @@ def get_in_edge_mapping(graph: nx.DiGraph):
 
 def get_node_out_array(graph: nx.DiGraph) -> Dict[int, np.ndarray]:
     """Returns a mapping from node index to an array of out-going edge indices"""
-    mapping: Dict[int, np.ndarray] = Dict()
+    mapping: Dict[int, np.ndarray] = dict()
     indexing = get_edge_indexing(graph)
     
     for v in range(graph.number_of_nodes()):
@@ -211,7 +211,7 @@ def get_node_out_array(graph: nx.DiGraph) -> Dict[int, np.ndarray]:
 
 def get_node_in_array(graph: nx.DiGraph) -> Dict[int, np.ndarray]:
     """Returns a mapping from node index to an array of incoming edge indices"""
-    mapping: Dict[int, np.ndarray] = Dict()
+    mapping: Dict[int, np.ndarray] = dict()
     indexing = get_edge_indexing(graph)
     
     for v in range(graph.number_of_nodes()):

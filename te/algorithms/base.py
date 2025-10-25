@@ -5,13 +5,12 @@ import networkx as nx
 import te.constants
 import dataclasses
 import matplotlib.pyplot as plt
-from multiprocessing import cpu_count
 from typing import List, Optional, Tuple, Dict, Union, Any, Set
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from te.algorithms import SOLUTION_DIR
 from utils.logging import LINE_SEPARATOR_LENGTH, as_success, as_fail
-from te.traffic_models.base import TrafficMatrixBase, Commodity
+from te.traffic_models.base import TrafficMatrixBase, TrafficMatrixConverterParamsBase, Commodity
 
 
 TE_SOLUTION_POSTFIX = '.tesol'
@@ -133,6 +132,8 @@ class SolverParams(ABC):
             return cls._list_or_tuple_to_str(value)
         elif value is None:
             return "None"
+        elif dataclasses.is_dataclass(value):
+            return f"<{value.__class__.__name__}>"
         raise ValueError(f'Unexpected instance: {type(value)}')
     
     def _field_to_string(self, key: str, value: Any):
@@ -192,49 +193,6 @@ class SolutionElementBase(ABC):
     
     def __str__(self) -> str:
         return f'{self.name}@{self.type()}:\n{self.str_value}'
-
-
-@dataclass
-class GurobiSolverParams(SolverParams):
-    """
-    Solver parameters for Gurobi.
-
-    Attributes
-    ----------
-    Method: int
-        The Gurobi solver method to be used (values should be clones of `GRB` enums)
-    Crossover: int
-        Whether to use Simplex crossover after finishing Barrier iterations. Since
-        Gurobi epxects `int`s, we use `int` instead of `bool`.
-    NumericFocus: int
-        How careful should Gurobi be about numerical errors. See Gurobi docs for
-        how to set them. We have noted that Dual Simplex in particular might need
-        to have this with a higher value when solving MLU on large topologies.
-    ConvTol: float
-        Objective convergence tolerance (used for _ALL_ algorithms, not just Barrier).
-    FeasibilityTol: float
-        Constraint violation tolerance. 
-    Presolve: int
-        Whether to allow for Gurobi to apply presolve to the model. In our experience,
-        with Barrier in particular, it is not worth it and it is much better to go
-        directly to the solver.
-    Threads: int
-        Number of threads to use for Barrier/Concurrent solver. Simplex methods do
-        not benefit from multiple threads.
-    LogFile:
-        Output log file for Gurobi.
-    """
-    Method: int = te.constants.DEFAULT_SOLVER_METHOD
-    Crossover: int = te.constants.DEFAULT_CROSSOVER
-    NumericFocus: int = te.constants.DEFAULT_NUMERIC_FOCUS
-    ConvTol: float = te.constants.DEFAULT_OPTIMALITY_TOLERANCE
-    FeasibilityTol: float = te.constants.DEFAULT_FEASIBILITY_TOLERANCE
-    Presolve: int = te.constants.DEFAULT_PRESOLVE
-    Threads: int = min(cpu_count(), 32)
-    LogFile: str = te.constants.DEFAULT_GUROBI_LOG_FILE
-
-    def __post_init__(self):
-        self.left_column_share = 0.5
 
 
 @dataclass
@@ -311,6 +269,48 @@ class TrafficEngineeringLPEvaluationParams(SolverParams):
         copy = dataclasses.replace(self)
         for k, v in kwargs.items:
             setattr(copy, k, v)
+
+
+@dataclass
+class TrafficEngineeringLPWarmStartParams(SolverParams):
+    """
+    A dataclass for keeping data about TM converters for warm-starting.
+
+    Attributes
+    ----------
+    ConverterSeed: int
+        The RNG seed that _may_ be used by the TM converter
+    WarmIters: int
+        Number of warm-start iterations. A warm-start iteration includes a
+        converstion of the current TM and solving the problem again
+    ConverterParams: type[TrafficMatrixConverterParamsBase]
+        Parameters to pass to the TM converter
+    """
+    ConverterSeed: int
+    ConverterParams: type[TrafficMatrixConverterParamsBase]
+    WarmIters: int
+
+    def __post_init__(self):
+        self.left_column_share = 0.5
+
+
+@dataclass
+class TrafficEngineeringLPSolutionParams(SolverParams):
+    """
+    A dataclass for keeping data about solutions.
+
+    Attributes
+    ----------
+    Name: str
+        The name _prefix_ of the solution file.
+    Path: Optional[str]
+        The output path for the solution.
+    """
+    Name: str
+    Path: Optional[str]
+
+    def __post_init__(self):
+        self.left_column_share = 0.5
 
 
 @dataclass
