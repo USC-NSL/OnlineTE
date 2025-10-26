@@ -1,13 +1,13 @@
 import grpc
 import numpy as np
-from typing import List, ClassVar
+from typing import List, Optional
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, wait
 from utils.logging import as_info
-from te.algorithms.array_utils.cpu_utils import CPUArray
-from .. import DistributedADMMControllerRPCParams, DistributedADMMSolverParams
-from .base import (ControllerCommunicationBackendBase, controller_communication_backend, 
-                   controller_communication_backend_params)
+from te.algorithms.array_utils.cpu_utils import CPUArray, BooleanCPUArray
+from .. import SynchADMMSolverParams
+from ... import ControllerRPCParams
+from ..base import ControllerCommunicationBackendBase
 from ..utils import (serialized_message_to_array, array_to_serialized_message,
                      chunk_big_array, rebuild_chunked_array,
                      GRPC_ARRAY_STREAM_MAX_LEN)
@@ -17,20 +17,16 @@ from protos.distributed_lp.distributed_lp_pb2_grpc import DistributedADMMSolverS
 from google.protobuf.empty_pb2 import Empty
 
 
-@controller_communication_backend_params
 @dataclass
-class SynchronousgRPCControllerBackendParams(DistributedADMMControllerRPCParams):
-    Backend: ClassVar[str] = 'gRPC-synchronous'
+class SynchronousgRPCControllerBackendParams(ControllerRPCParams):
     NumThreads: int = 1
     
     def __post_init__(self):
         self.left_column_share = 0.2
 
 
-@controller_communication_backend
-class SynchronousgRPCBackend(ControllerCommunicationBackendBase):
-    def __init__(self, rpc_params: DistributedADMMControllerRPCParams):
-        super().__init__()
+class SynchronousgRPCControllerBackend(ControllerCommunicationBackendBase):
+    def __init__(self, rpc_params: SynchronousgRPCControllerBackendParams):
         self._rpc_params = rpc_params
 
         self._worker_channels: List[grpc.Channel] = [
@@ -45,7 +41,7 @@ class SynchronousgRPCBackend(ControllerCommunicationBackendBase):
     
     @classmethod
     def backend_name(self) -> str:
-        return SynchronousgRPCControllerBackendParams.Backend
+        return "gRPC-synchronous"
     
     @property
     def number_of_nodes(self) -> int:
@@ -53,6 +49,7 @@ class SynchronousgRPCBackend(ControllerCommunicationBackendBase):
 
     def start(self):
         self.is_alive = True
+        self.killed = False
     
     def stop(self):
         self.is_alive = False
@@ -74,11 +71,12 @@ class SynchronousgRPCBackend(ControllerCommunicationBackendBase):
             self.is_node_ready, range(self.number_of_nodes)
         ))
     
-    def initialize_worker_nodes(self, solver_params: DistributedADMMSolverParams, basis: CPUArray, 
-                                initial_feasible_solution: CPUArray):
+    def initialize_worker_nodes(self, solver_params: SynchADMMSolverParams, basis: CPUArray, 
+                                initial_feasible_solution: CPUArray, in_out_mask: Optional[BooleanCPUArray] = None):
         NUM_WORKERS = self.number_of_nodes
         NULL_M = basis
         X_EK_START_CHUNKS = np.array_split(initial_feasible_solution, NUM_WORKERS, axis=1)
+        MASK_EK_CHUNKS = None if in_out_mask is None else np.array_split(in_out_mask, NUM_WORKERS, axis=1)
         WORKERS = self._worker_stubs
 
         # Update solver parameters
@@ -101,6 +99,14 @@ class SynchronousgRPCBackend(ControllerCommunicationBackendBase):
                                                chunk_big_array(NULL_M, GRPC_ARRAY_STREAM_MAX_LEN))
                 for stub in WORKERS
         ]) 
+
+        # If it exists, send the mask as well
+        if MASK_EK_CHUNKS is not None:
+            wait([
+                self._broadcast_thread_pool.submit(
+                    stub.SetCommodityInOutMask, chunk_big_array(MASK_EK_CHUNKS[i], GRPC_ARRAY_STREAM_MAX_LEN, dtype=bool) 
+                ) for i, stub in enumerate(WORKERS)
+            ])
 
     def update_demands(self, updated_feasible_solution: CPUArray):
         X_EK_START_CHUNKS = np.array_split(updated_feasible_solution, self.number_of_nodes, axis=1)

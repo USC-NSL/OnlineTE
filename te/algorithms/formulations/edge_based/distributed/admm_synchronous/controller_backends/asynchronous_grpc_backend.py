@@ -1,12 +1,12 @@
 import grpc
 import asyncio
 import numpy as np
-from typing import List, ClassVar, Optional
+from typing import List, Optional
 from dataclasses import dataclass
 from te.algorithms.array_utils.cpu_utils import CPUArray, BooleanCPUArray
-from .. import DistributedADMMControllerRPCParams, DistributedADMMSolverParams
-from .base import (ControllerCommunicationBackendBase, controller_communication_backend,
-                   controller_communication_backend_params)
+from .. import SynchADMMSolverParams
+from ... import ControllerRPCParams
+from ..base import ControllerCommunicationBackendBase
 from ..utils import (serialized_message_to_array, array_to_serialized_message,
                      chunk_big_array, async_rebuild_chunked_array,
                      GRPC_ARRAY_STREAM_MAX_LEN)
@@ -16,20 +16,16 @@ from protos.distributed_lp.distributed_lp_pb2_grpc import DistributedADMMSolverS
 from google.protobuf.empty_pb2 import Empty
 
 
-@controller_communication_backend_params
 @dataclass
-class AsynchronousgRPCControllerBackendParams(DistributedADMMControllerRPCParams):
-    Backend: ClassVar[str] = 'gRPC-asynchronous'
+class AsynchronousgRPCControllerBackendParams(ControllerRPCParams):
     Timeout: float = 5
     
     def __post_init__(self):
         self.left_column_share = 0.2
 
 
-@controller_communication_backend
-class AsynchronousgRPCBackend(ControllerCommunicationBackendBase):
-    def __init__(self, rpc_params: DistributedADMMControllerRPCParams):
-        super().__init__()
+class AsynchronousgRPCControllerBackend(ControllerCommunicationBackendBase):
+    def __init__(self, rpc_params: AsynchronousgRPCControllerBackendParams):
         self._rpc_params = rpc_params
 
         self._worker_channels: List[grpc.Channel] = [
@@ -43,6 +39,7 @@ class AsynchronousgRPCBackend(ControllerCommunicationBackendBase):
     
     def start(self):
         self.is_alive = True
+        self.killed = False
     
     def stop(self):
         self.is_alive = False
@@ -58,7 +55,7 @@ class AsynchronousgRPCBackend(ControllerCommunicationBackendBase):
     
     @classmethod
     def backend_name(self) -> str:
-        return AsynchronousgRPCControllerBackendParams.Backend
+        return "gRPC-asynchronous"
     
     @property
     def number_of_nodes(self) -> int:
@@ -82,7 +79,7 @@ class AsynchronousgRPCBackend(ControllerCommunicationBackendBase):
             return None
         return self._event_loop.run_until_complete(self._are_network_nodes_ready())
 
-    async def _initialize_worker_nodes(self, solver_params: DistributedADMMSolverParams, basis: CPUArray, 
+    async def _initialize_worker_nodes(self, solver_params: SynchADMMSolverParams, basis: CPUArray, 
                                        initial_feasible_solution: CPUArray, in_out_mask: Optional[BooleanCPUArray] = None):
         NUM_WORKERS = self.number_of_nodes
         NULL_M = basis
@@ -113,7 +110,7 @@ class AsynchronousgRPCBackend(ControllerCommunicationBackendBase):
                 for i, stub in enumerate(WORKERS)
             ])
     
-    def initialize_worker_nodes(self, solver_params: DistributedADMMSolverParams, basis: CPUArray, 
+    def initialize_worker_nodes(self, solver_params: SynchADMMSolverParams, basis: CPUArray, 
                                 initial_feasible_solution: CPUArray, in_out_mask: Optional[BooleanCPUArray] = None):
         self._event_loop.run_until_complete(self._initialize_worker_nodes(solver_params, basis, initial_feasible_solution, in_out_mask))
     
@@ -137,27 +134,6 @@ class AsynchronousgRPCBackend(ControllerCommunicationBackendBase):
 
     def get_X_ek(self, basis: CPUArray, initial_feasible_solution: CPUArray):
         return self._event_loop.run_until_complete(self._get_X_ek(basis, initial_feasible_solution))
-
-    # DEBUG
-    async def _get_Y_tk(self):
-        chunks = await asyncio.gather(*[
-            async_rebuild_chunked_array(stub.RequestChunk(Empty()))
-            for stub in self._worker_stubs
-        ])
-        return np.hstack(list(chunks))
-    # DEBUG
-    def get_Y_tk(self):
-        return self._event_loop.run_until_complete(self._get_Y_tk())
-    # DEBUG
-    async def _get_Lambda_ek(self):
-        chunks = await asyncio.gather(*[
-            async_rebuild_chunked_array(stub.DebugRequestLambda(Empty()))
-            for stub in self._worker_stubs
-        ])
-        return np.hstack(list(chunks))
-    # DEBUG
-    def get_Lambda_ek(self):
-        return self._event_loop.run_until_complete(self._get_Lambda_ek())
     
     async def _get_X_ek_sum(self):
         serialized_chunks = await asyncio.gather(*[
@@ -183,11 +159,6 @@ class AsynchronousgRPCBackend(ControllerCommunicationBackendBase):
         await asyncio.gather(*[
             stub.UpdateWorkerNode(message) for stub in self._worker_stubs
         ])
-        # TODO: Why not make this completely asynchronous?
-        # async def _wait(stub, message):
-        #     await stub.UpdateWorkerNode(message)
-        # for stub in self._worker_stubs:
-        #     self._event_loop.create_task(_wait(stub, message))
     
     def reconvene_network_updates(self, P_bar_t: CPUArray, Y_bar_t: CPUArray, u_t: CPUArray):
         message = distributed_lp_messages.UpdateMessage(
@@ -219,9 +190,3 @@ class AsynchronousgRPCBackend(ControllerCommunicationBackendBase):
     
     def set_active_commodity_count(self, K: int):
         self._event_loop.run_until_complete(self._set_active_commodity_count(K))
-
-    async def _reset_inner_dual_variable(self):
-        await asyncio.gather(*[stub.ResetInnerDualVariable(Empty()) for stub in self._worker_stubs])
-
-    def reset_inner_dual_variable(self):
-        self._event_loop.run_until_complete(self._reset_inner_dual_variable())

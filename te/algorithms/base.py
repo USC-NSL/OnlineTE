@@ -1,5 +1,6 @@
 import os
 import pickle
+import inspect
 import numpy as np
 import networkx as nx
 import te.constants
@@ -101,9 +102,13 @@ class SolverParams(ABC):
                 assert issubclass(ancestor_class, SolverParams)
             if i == level:
                 ancestor_fields = ancestor_class.field_names()
-        child_dict = dataclasses.asdict(self)
+        child_dict = self.__dict__.copy()
         for key in ancestor_fields:
             child_dict.pop(key)
+        keys = list(child_dict.keys())
+        for key in keys:
+            if key.startswith('_'):
+                child_dict.pop(key, None)
         return child_dict
     
     @classmethod
@@ -134,9 +139,12 @@ class SolverParams(ABC):
             return "None"
         elif dataclasses.is_dataclass(value):
             return f"<{value.__class__.__name__}>"
+        elif inspect.isclass(value):
+            return f"[{value.__class__.__name__}]"
         raise ValueError(f'Unexpected instance: {type(value)}')
     
     def _field_to_string(self, key: str, value: Any):
+        # print(f"Looking at key: {key} with value {value} and type {type(value)}")
         value_str = self._param_to_str(value)
         if isinstance(value_str, str):
             return self.PRINT_FORMAT.format(

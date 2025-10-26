@@ -3,13 +3,13 @@ import socket
 import struct
 import asyncio
 import numpy as np
-from typing import List, ClassVar, Optional, Tuple, Any
+from typing import List, Optional, Tuple, Any
 from dataclasses import dataclass
 from utils.exceptions import SolutionInterrupted
 from te.algorithms.array_utils.cpu_utils import CPUArray, BooleanCPUArray
-from .. import DistributedADMMControllerRPCParams, DistributedADMMSolverParams
-from .base import (ControllerCommunicationBackendBase, controller_communication_backend,
-                   controller_communication_backend_params)
+from .. import SynchADMMSolverParams
+from ... import ControllerRPCParams
+from ..base import ControllerCommunicationBackendBase
 from ..utils import (serialized_message_to_array, array_to_serialized_message,
                      chunk_big_array, async_rebuild_chunked_array,
                      GRPC_ARRAY_STREAM_MAX_LEN)
@@ -20,10 +20,8 @@ from protos.distributed_lp.distributed_lp_pb2_grpc import DistributedADMMSolverS
 from google.protobuf.empty_pb2 import Empty
 
 
-@controller_communication_backend_params
 @dataclass
-class MulticastControllerBackendParams(DistributedADMMControllerRPCParams):
-    Backend: ClassVar[str] = 'multicast'
+class MulticastControllerBackendParams(ControllerRPCParams):
     ScatterAddress: str = '224.0.0.10'
     HostName: str = socket.gethostname()
     TTL: int = 2
@@ -79,8 +77,7 @@ class TLVRPCMessages:
         return header + body
 
 
-@controller_communication_backend
-class MulticastBackend(ControllerCommunicationBackendBase):
+class MulticastControllerBackend(ControllerCommunicationBackendBase):
     """
     Implements the UDP multicast backend for screaming and receiving updates from worker nodes.
     Our updates are small, but come at high frequency; We can also assume that the network is
@@ -96,7 +93,7 @@ class MulticastBackend(ControllerCommunicationBackendBase):
     have a `xid` field).
     
     This backend maintains a local `xid` value that starts from 0 (it can be accessed by
-    `MulticastBackend.current_xid`). The procedure for using and updating this value is as
+    `MulticastControllerBackend.current_xid`). The procedure for using and updating this value is as
     follows:
         
     - When `do_network_update` is called, the current XID is stamped on the request and
@@ -113,8 +110,7 @@ class MulticastBackend(ControllerCommunicationBackendBase):
     it is not a sudden burst).
     We _hope_ that at least one copy reaches each node, as the author is lazy.
     """
-    def __init__(self, rpc_params: DistributedADMMControllerRPCParams):
-        super().__init__()
+    def __init__(self, rpc_params: MulticastControllerBackendParams):
         self._rpc_params = rpc_params
 
         self._worker_channels: List[grpc.Channel] = [
@@ -137,7 +133,7 @@ class MulticastBackend(ControllerCommunicationBackendBase):
     
     @classmethod
     def backend_name(self) -> str:
-        return MulticastControllerBackendParams.Backend
+        return "multicast"
     
     @property
     def number_of_nodes(self) -> int:
@@ -152,6 +148,7 @@ class MulticastBackend(ControllerCommunicationBackendBase):
 
     def start(self):
         self.is_alive = True
+        self.killed = False
     
     def stop(self):
         self.is_alive = False
@@ -182,7 +179,7 @@ class MulticastBackend(ControllerCommunicationBackendBase):
             return False
         return self._event_loop.run_until_complete(self._are_network_nodes_ready())
 
-    async def _initialize_worker_nodes(self, solver_params: DistributedADMMSolverParams, basis: CPUArray, 
+    async def _initialize_worker_nodes(self, solver_params: SynchADMMSolverParams, basis: CPUArray, 
                                        initial_feasible_solution: CPUArray, in_out_mask: Optional[BooleanCPUArray] = None):
         NUM_WORKERS = self.number_of_nodes
         NULL_M = basis
@@ -213,7 +210,7 @@ class MulticastBackend(ControllerCommunicationBackendBase):
                 for i, stub in enumerate(WORKERS)
             ])
     
-    def initialize_worker_nodes(self, solver_params: DistributedADMMSolverParams, basis: CPUArray, 
+    def initialize_worker_nodes(self, solver_params: SynchADMMSolverParams, basis: CPUArray, 
                                 initial_feasible_solution: CPUArray, in_out_mask: Optional[BooleanCPUArray] = None):
         self._event_loop.run_until_complete(self._initialize_worker_nodes(solver_params, basis, initial_feasible_solution, in_out_mask))
     

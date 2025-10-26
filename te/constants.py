@@ -20,7 +20,7 @@ When generating baseline solutions, one shortcut we can use is to use Barrier in
 with crossover explicitly enabled. This gives us a solution much faster.
 """
 
-DEFAULT_OPTIMALITY_TOLERANCE = 1e-2
+DEFAULT_OPTIMALITY_TOLERANCE = 1e-3
 """
 Solutions don't need to be too accurate, since we have to simplify them later anyway.
 Thus, we relax barrier convergence tolerance, and stop within 1 percent of the optimal.

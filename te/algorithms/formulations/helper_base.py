@@ -4,13 +4,23 @@ from typing import Optional, Tuple
 from te.traffic_models.converters import SampledConverter, SampledTrafficMatrixConverterParams
 from te.algorithms.base import (SolverParams, TrafficEngineeringLP, TrafficEngineeringLPEvaluationParams, 
                                 TrafficEngineeringLPSolutionParams, TrafficEngineeringLPWarmStartParams)
-from te.algorithms.utils import get_solution_confusion_matrix, get_solution_maximum_utilization
+from te.algorithms.utils import get_solution_confusion_matrix, get_solution_maximum_utilization, stringify_collected_stats
 from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolutionParams, EdgeBasedMinimizeMaximumUtilitySolution
 from topologies.utils import get_uniform_tm_problem_with_capacity_heuristic
-from utils.logging import as_info, log_subsection_title, log_section_title, str_round
+from utils.logging import as_info, as_fail, log_subsection_title, log_section_title, str_round
 
 
-def mlu_solve_and_check(lp: type[TrafficEngineeringLP], eval_params: type[TrafficEngineeringLPEvaluationParams]):
+def mlu_solve_and_check(lp: TrafficEngineeringLP, eval_params: TrafficEngineeringLPEvaluationParams):
+    """
+    Helper method that receives the LP object and the evaluation parameters and solves the MLU problem.
+
+    Arguments
+    ---------
+    lp: type[TrafficEngineeringLP]
+        The full LP object that we can use to solve the problem
+    eval_params: type[TrafficEngineeringLPEvaluationParams]
+        TE evaluation parameters.
+    """
     t = lp.solve()
     if t > -1:
         print(as_info(log_subsection_title("CHECKING SOLUTION")))
@@ -19,17 +29,36 @@ def mlu_solve_and_check(lp: type[TrafficEngineeringLP], eval_params: type[Traffi
         print(as_info(f"Solved in {str_round(t, 2)} seconds"))
         print(as_info(f"Final objective value: {str_round(lp.objective_value, 4)}"))
         print(as_info(f"Actual utilization: {str_round(get_solution_maximum_utilization(lp.assignments, lp.graph), 4)}"))
+    else:
+        print(as_fail("MLU problem couldn't be solved as expected"))
 
 
 def mlu_helper(
     cls: type[TrafficEngineeringLP],
     solver_params: SolverParams, 
-    eval_params: type[TrafficEngineeringLPEvaluationParams],
+    eval_params: TrafficEngineeringLPEvaluationParams,
     warmstart_params: Optional[TrafficEngineeringLPWarmStartParams] = None,
     solution_params: Optional[TrafficEngineeringLPSolutionParams] = None
 ):
+    """
+    A helper for quickly creating and solving MLU problems.
+    
+    Arguments
+    ---------
+    cls: type[TrafficEngineeringLP]
+        The TE LP _class_ to use
+    solver_params: SolverParams
+        The solver parameters for the given `cls` (it will not check if the two match
+        though, you may or may not get an exception if there is a mismatch between the
+        solver class and the parameters)
+    eval_params: TrafficEngineeringLPEvaluationParams
+        The set of evaluation parameters to use
+    warmstart_params: Optional[TrafficEngineeringLPWarmStartParams]
+        Optional set of warm-start parameters
+    solution_params: Optional[TrafficEngineeringLPSolutionParams]
+        Optional set of solution output parameters
+    """
     c, graph, tm = get_uniform_tm_problem_with_capacity_heuristic(eval_params.TopologyName, eval_params.Seed, scale_factor=eval_params.ScaleFactor)
-    print(as_info(f"Network link capacity is: {str(round(c, 2))}"))
 
     if eval_params.SaveSol:
         mlu_solution_params = EdgeBasedMinimizeMaximumUtilitySolutionParams(
@@ -55,6 +84,8 @@ def mlu_helper(
         print(as_info(log_section_title("MLU PROBLEM")))
         converter = None
     
+    print(as_info(f"Network link capacity is: {str(round(c, 2))}"))
+    
     with contextlib.closing(cls(graph, tm, solver_params)) as lp:
         print(as_info(f"Solving With: {lp.alg_name}"))
         print(as_info(f"Evaluating With Parameters:\n{eval_params}"))
@@ -69,7 +100,7 @@ def mlu_helper(
                 solution = EdgeBasedMinimizeMaximumUtilitySolution(params=mlu_solution_params)
                 lp.add_solution_elements(solution)
                 solution.dump_elements()
-                solution.dump(name=mlu_solution_params.SolName)
+                solution.dump(name=mlu_solution_params.Name)
             else:
                 raise NotImplementedError('Will not save solution for warm-tests for now ... (takes too much space!)')
         
@@ -82,9 +113,67 @@ def mlu_helper(
                 mlu_solve_and_check(lp, eval_params)
         
         get_solution_confusion_matrix(lp, eval_params)
+        
+        stats = stringify_collected_stats()
+        if stats is not None:
+            print(as_info(stats))
 
 
 def mlu_argparser(prog_name: str) -> argparse.ArgumentParser:
+    """
+    Helper utility for building the argument parser of an MLU problem.
+
+    Arguments
+    ---------
+    prog_name: str
+        Problem name to see when `help` is issued.
+    
+    Returns
+    -------
+    parser: argparse.ArgumentParser
+        A partially completed argument parser. The fields that it contains 
+        are described below.
+
+    General Parameters
+    ------------------
+    `topo`: str
+        The topology name
+    `tm-seed`: int
+        The RNG seed used to generate the TM
+    Runtime Parameters
+    ------------------
+    `feas-tol`: float
+        Contraint feasibility absolute tolerance
+    `conv-tol`: float
+        Objective value relative convergance tolerance
+    `scale-factor`: float
+        Link capacity scaling factor
+    `report-unsat`: bool
+        Whether or not to output the details of unsatisfied demands or
+        congested links.
+    Warm-Start Parameters
+    ---------------------
+    `converter-seed`: int
+        RNG seed for the TM converter
+    `warm-iters`: int
+        Number of warm-start iterations
+    Sampled TM Converter Parameters
+    -------------------------------
+    `delta-max`: float
+        Maximum value of change to a single pertrubed demand
+    `delta-min`: float
+        Minimum value of change to a single perturbed demand
+    `num-samples`: int
+        Number of samples to perturb for each iteration
+    Solution Output Parameters
+    --------------------------
+    `save-sol`: bool
+        Whether or not to save the solution output
+    `path-sol`: str
+        Path to the directory to output the solution
+    `name-sol`: str
+        Name of teh output solution file
+    """
     parser = argparse.ArgumentParser(prog_name)
     
     # Topology name and TM seed are _ALWAYS_ needed
@@ -93,8 +182,8 @@ def mlu_argparser(prog_name: str) -> argparse.ArgumentParser:
 
     # These runtime parameters are also always needed
     runtime_params_group = parser.add_argument_group('Runtime Parameters')
-    runtime_params_group.add_argument('--feas-tol', help='Feasibility tolerance', type=float, default=1e-6)
-    runtime_params_group.add_argument('--conv-tol', help='Optimality tolerance', type=float, default=1e-2)
+    runtime_params_group.add_argument('--feas-tol', help='Feasibility tolerance', type=float, default=1e-3)
+    runtime_params_group.add_argument('--conv-tol', help='Optimality tolerance', type=float, default=1e-3)
     runtime_params_group.add_argument('--scale-factor', type=float, default=10.0, 
                                       help='Link capacity scaling factor.')
     runtime_params_group.add_argument('--report-unsat', action='store_true', 
@@ -127,6 +216,25 @@ def mlu_parse_args(parser: argparse.ArgumentParser) -> Tuple[
     Optional[TrafficEngineeringLPSolutionParams],
     Optional[TrafficEngineeringLPWarmStartParams],
     argparse.Namespace]:
+    """
+    Parse all the default arguments needed for the MLU problem.
+
+    Arguments
+    ---------
+    parser: `argparse.ArgumentParser`
+        The argument parser (assumed produced with `mlu_argparser`)
+    
+    Returns
+    -------
+    eval_params: TrafficEngineeringLPEvaluationParams
+        The TE problem evaluation parameters
+    solution_params: Optional[TrafficEngineeringLPSolutionParams]
+        Solution output parameters
+    warmstart_params: Optional[TrafficEngineeringLPWarmStartParams]
+        Warm-start parameters
+    args: argparse.Namespace
+        The namespace object of parsed arguments to further process
+    """
     args = parser.parse_args()
     eval_params = TrafficEngineeringLPEvaluationParams(
         TopologyName=args.topo, 

@@ -5,7 +5,6 @@ import "array.proto";
 
 service DistributedADMMSolver {
     rpc SetInitialFeasibleSolution(stream Chunk) returns (google.protobuf.Empty) {}
-    // rpc InitializeWorkerNode(InitMessage) returns (google.protobuf.Empty) {}
     rpc SetNullSpaceBasis(stream Chunk) returns (google.protobuf.Empty) {}
     rpc SetCommodityInOutMask(stream Chunk) returns (google.protobuf.Empty) {}
     rpc DoNetworkUpdate(NetworkUpdateRequest) returns (NetworkUpdateResponse) {}
@@ -17,9 +16,6 @@ service DistributedADMMSolver {
     rpc SetSolverParameters(SolverParameters) returns (google.protobuf.Empty) {}
     rpc SetActiveCommodityCount(ActiveCommodityCount) returns (google.protobuf.Empty) {}
     rpc Close(google.protobuf.Empty) returns (google.protobuf.Empty) {}
-
-    // DEBUG
-    rpc DebugRequestLambda(google.protobuf.Empty) returns (stream Chunk) {}
 }
 
 message InitMessage {
@@ -56,17 +52,15 @@ message State {
 message SolverParameters {
     int32 NumberOfEpochs = 1;
     int32 NumberOfNetworkUpdates = 2;
-    int32 NumberOfLocalUpdates = 3;
-    float Rho = 4;
-    float Eta = 5;
-    float Gamma = 6;
-    float Kappa = 7;
-    int32 QPIterations = 8;
-    string QPMethod = 9;
-    int32 NumWorkers = 10;
-    string Precision = 11;
-    float BigGamma = 12;
-    int32 Seed = 13;
+    float Rho = 3;
+    float Eta = 4;
+    float Gamma = 5;
+    float Kappa = 6;
+    int32 PGDIterations = 7;
+    int32 NumWorkers = 8;
+    string Precision = 9;
+    float ConvTol = 10;
+    int32 TMSeed = 11;
 }
 
 message ActiveCommodityCount {

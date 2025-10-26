@@ -5,8 +5,9 @@ import networkx as nx
 import asyncio.exceptions
 from collections import defaultdict
 from typing import List, Tuple, Optional
-from te.algorithms.base import (TrafficEngineeringLP, SolverParams, TrafficEngineeringLPCheckResult, TrafficEngineeringLPEvaluationParams, 
-                                TrafficEngineeringLPObjectiveTrace)
+from ..base import ControllerNodeBase
+from te.algorithms.base import (SolverParams, TrafficEngineeringLPCheckResult, 
+                                TrafficEngineeringLPEvaluationParams, TrafficEngineeringLPObjectiveTrace)
 from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
 from topologies.utils import get_graph_M_matrix, get_adjacency_null_space, get_commodity_in_out_mask
@@ -23,26 +24,22 @@ from te.algorithms.sub_algorithms.admm_consensus_test import outer_admm_consensu
 from te.algorithms.sub_algorithms.link_capacity_test import check_capacity_constraint
 from te.algorithms.sub_algorithms.flow_conservation_test import check_flow_conservation
 from te.algorithms.statistics.helpers import record_cpu_runtime, record_return_value
-from . import DistributedADMMSolverParams, DistributedADMMControllerRPCParams
-from .controller_backends import get_backend, ControllerCommunicationBackendBase
-
-from te.algorithms.sub_algorithms.mlu_base import ControllerMLUSolver, ControllerMLUException
-from te.algorithms.sub_algorithms.gurobi_mlu import GurobiMLU, GurobiMLUParams
-from te.algorithms.sub_algorithms.pdlp_mlu import PDLPMLU, PDLPMLUParams
-# from te.algorithms.sub_algorithms.relaxed_mlu import RelaxedMLU, RelaxedMLUSolverParams
+from . import SynchADMMSolverParams
+from .. import ControllerRPCParams
+from .base import SynchADMMControllerBackendBase
+from ..base import ControllerNodeParams
+from te.algorithms.sub_algorithms.mlu_backends.base import ControllerMLUSolver, ControllerMLUException
 
 
-class ControllerNode(TrafficEngineeringLP):
-    def __init__(self, graph: nx.DiGraph, traffic: TrafficMatrixBase, solver_params: DistributedADMMSolverParams,
-                 rpc_params: DistributedADMMControllerRPCParams) -> None:
-        super().__init__()
-        self._graph = graph
-        self._M = get_graph_M_matrix(graph)
-        self._symbolic_M = get_symbolic_graph_M_matrix(graph)
-        self._traffic = traffic
-        self._solver_params = solver_params
-        self._rpc_params = rpc_params
-        self._rng = np.random.default_rng(seed=solver_params.Seed)
+class SynchADMMControllerNode(ControllerNodeBase):
+    def __init__(self, params: ControllerNodeParams) -> None:
+        self._graph = params.graph
+        self._M = get_graph_M_matrix(params.graph)
+        self._symbolic_M = get_symbolic_graph_M_matrix(params.graph)
+        self._traffic = params.traffic
+        self._solver_params = params.solver_params
+        self._rpc_params = params.rpc_params
+        self._rng = np.random.default_rng(seed=params.solver_params.TMSeed)
         self._commodity_list = traffic_to_commodity(self._traffic)
 
         self._NULL_M: CPUArray = None
@@ -56,6 +53,8 @@ class ControllerNode(TrafficEngineeringLP):
         self._c_norm: Optional[float] = None
         self._alpha: Optional[float] = None
 
+        self._mlu_solver_cls: type[ControllerMLUSolver] = params.mlu_backend
+        self._mlu_params: SolverParams = params.mlu_params
         self._mlu_solver: Optional[ControllerMLUSolver] = None
 
         self._X_ek: Optional[CPUArray] = None
@@ -68,13 +67,15 @@ class ControllerNode(TrafficEngineeringLP):
         self._Y_bar_t: Optional[CPUArray] = None
         self._u_t: Optional[CPUArray] = None
 
-        self._backend: Optional[ControllerCommunicationBackendBase] = None
+        self._backend: SynchADMMControllerBackendBase = params.communication_backend(params.rpc_params)
+        self._backend.start()
 
-        self._objective_trace: TrafficEngineeringLPObjectiveTrace = TrafficEngineeringLPObjectiveTrace(['Perceived Utilization', 'Actual Utilization'])
+        self._objective_trace: TrafficEngineeringLPObjectiveTrace = \
+            TrafficEngineeringLPObjectiveTrace(['Perceived Utilization', 'Actual Utilization'])
         self._objective_gap_trace = []
 
         # These we call right now, as opposed to doing them under `initialize`
-        set_global_precision(solver_params.Precision)
+        set_global_precision(params.solver_params.Precision)
         set_cpu_float_precision()
 
         self._die_on_next_int = False
@@ -86,15 +87,11 @@ class ControllerNode(TrafficEngineeringLP):
         # We will do this before spawning the backend, since if we use `gRPC`, 
         # this function may invoke `fork` which causes `gRPC` to spam warnings.
         self._set_initial_feasible_solution()
-        # Now, create the backend
-        self._backend = get_backend(self._rpc_params)
         # Initialize the algorithm
         self._set_NULL_M()
         self._initialize_variables_and_residuals()
         # Report what we are dealing with
         self._report_problem_size()
-        # Now, start the backend
-        self._backend.start()
     
     def stop(self, _, __):
         if self._die_on_next_int:
@@ -113,7 +110,7 @@ class ControllerNode(TrafficEngineeringLP):
 
     @property
     def alg_name(self) -> str:
-        return 'Distributed Unregulated ADMM'
+        return 'Distributed Synchronous ADMM'
 
     @property
     def graph(self) -> nx.DiGraph:
@@ -152,13 +149,6 @@ class ControllerNode(TrafficEngineeringLP):
     def _set_initial_feasible_solution(self):
         self._X_ek_start = get_feasible_flow_assignment(self._graph, self._commodity_list)
         self._Z_e_start = np.sum(self._X_ek_start, axis=1)
-        
-        # TODO: Are these safe?
-        # if self._T is not None:
-        #     T = self._T
-        #     NUM_EDGES = self._NUM_EDGES
-        #     self._r_e = cpu_zeros((NUM_EDGES,))
-        #     self._u_t = cpu_zeros((T,))
     
     def _set_NULL_M(self):
         M = self._M
@@ -166,7 +156,6 @@ class ControllerNode(TrafficEngineeringLP):
         m, n = M.shape
         assert m < n
         N = cpu_array(get_adjacency_null_space(M))
-        # N = cpu_array(get_sparse_null_space(self._symbolic_M))
         T = N.shape[1]
         self._NULL_M = N
         self._NNT_M = N @ N.T
@@ -189,24 +178,14 @@ class ControllerNode(TrafficEngineeringLP):
         self._Y_bar_t = cpu_zeros((T,))
         self._X_ek = cpu_array(self._X_ek_start)
         self._X_ek_sum_e = cpu_array(self._Z_e_start)
-
-        # self._mlu_solver = GurobiMLU(NUM_EDGES, self._capacities, GurobiMLUParams(
-        #     Rho=self._solver_params.Rho,
-        #     Alpha=self._alpha,
-        #     GurobiParams=self._solver_params
-        # ))
-        self._mlu_solver = PDLPMLU(NUM_EDGES, self._capacities, PDLPMLUParams(
-            Threads=1, Presolve=False,
-            ConvTol=self._solver_params.BigGamma,
-            Rho=self._solver_params.Rho,
-            Alpha=self._alpha
-        ))
-        # self._mlu_solver = RelaxedMLU(NUM_EDGES, self._capacities, RelaxedMLUSolverParams(
-        #     Rho=self._solver_params.Rho,
-        #     Alpha=self._alpha,
-        #     Gamma=1e-2,
-        #     GDIters=100
-        # ))
+        # The objective convergance tolerance for the MLU problem _MUST_ stricter than the
+        # tolerance for the distributed algorithm itself.
+        assert self._solver_params.ConvTol >= self._mlu_params.ConvTol, \
+            f"{self._solver_params.ConvTol} < {self._mlu_params.ConvTol}"
+        # TODO: Find a better way to handle `Rho` and `Alpha` here ...
+        self._mlu_params._Rho = self._solver_params.Rho
+        self._mlu_params._Alpha = self._alpha
+        self._mlu_solver = self._mlu_solver_cls(NUM_EDGES, self._capacities, self._mlu_params)
     
     def are_network_nodes_ready(self) -> bool:
         return self._backend.are_network_nodes_ready()
@@ -261,13 +240,10 @@ class ControllerNode(TrafficEngineeringLP):
         assert self._mlu_solver is not None
         self._mlu_solver._add_objective()
 
-    @record_return_value('QP-Runtime')
+    @record_return_value('PGD-Runtime')
     @record_cpu_runtime('Network-Update')
     def _do_network_update(self, epoch: int):
-        if self._solver_params.NumberOfLocalUpdates > 0:
-            max_run, self._Y_bar_t = self._backend.do_network_update(epoch, self._get_F())
-        else:
-            max_run, self._Y_bar_t = self._backend.do_network_update(epoch)
+        max_run, self._Y_bar_t = self._backend.do_network_update(epoch)
         return max_run
     
     def _update_P_bar(self):
@@ -309,10 +285,6 @@ class ControllerNode(TrafficEngineeringLP):
     def _update_X_ek_sum(self):
         self._X_ek_sum_e = self._Z_e_start + len(self._commodity_list) * self._NULL_M @ self._Y_bar_t
     
-    def _reset_u_t(self):
-        self._u_t = cpu_zeros((self._NULL_M.shape[1],))
-        self._backend.reset_inner_dual_variable()
-    
     @record_cpu_runtime('Update-Re')
     def _update_r_e(self):
         assert self._mlu_solver is not None
@@ -324,15 +296,16 @@ class ControllerNode(TrafficEngineeringLP):
 
     def close(self):
         self._backend.close()
-        self._mlu_solver.close()
+        if self._mlu_solver is not None:
+            self._mlu_solver.close()
     
     def make_lp(self):
+        self.initialize()
         t_start = time.time()
-        print("Starting to create the model")
         self._make_variables()
         self._add_constraints()
         self._add_objective()
-        print(f"Built model in {str(np.round(time.time() - t_start, 2))} seconds.")
+        print(as_info(f"Built model in {str(np.round(time.time() - t_start, 2))} seconds."))
         self._backend.initialize_worker_nodes(
             self._solver_params,
             self._NULL_M, 
@@ -358,8 +331,6 @@ class ControllerNode(TrafficEngineeringLP):
             MODEL_CONTROLLER.solve()
             self._update_r_e()
             for epoch in ShortTQDM(range(EPOCHS)):
-            # for epoch in range(EPOCHS):
-                # self._reset_u_t()
                 for i in reversed(range(PARAMS.NumberOfNetworkUpdates)):
                     self._do_network_update(epoch + SHIFT)
                     if i > 0 and self._reconvene_network_updates():
@@ -370,8 +341,10 @@ class ControllerNode(TrafficEngineeringLP):
                 MODEL_CONTROLLER.solve()
                 self._update_r_e()
 
-                self._objective_trace.append(float(self.objective_value), float(get_solution_maximum_utilization(self._X_ek_sum_e, self._graph)))
-                # self.check_stopping_criterion()
+                self._objective_trace.append(
+                    float(self.objective_value), 
+                    float(get_solution_maximum_utilization(self._X_ek_sum_e, self._graph))
+                )
             self._set_X_ek()
             return time.time() - t
         except ControllerMLUException as e:
