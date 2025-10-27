@@ -253,6 +253,26 @@ def do_plain_pgd_with_step_reduction(lambda_block, x_block_0, nnt, n, c_block, g
     return lambda_block, y_block
 
 
+_NESTEROV_LAST_BLOCK = None
+
+def do_nesterov_pgd(lambda_block, x_block_0, nnt, n, c_block, gamma: float, n_iter: int, 
+                    epoch: int, mask):
+    global _NESTEROV_LAST_BLOCK
+    mod = cp.get_array_module(lambda_block)
+    big_c_block = x_block_0 + n @ c_block
+    for _ in range(n_iter):
+        if _NESTEROV_LAST_BLOCK is None:
+            accelerated_lambda_block = mod.copy(lambda_block)
+        else:
+            accelerated_lambda_block = lambda_block + (epoch - 1) / (epoch + 2) * (lambda_block - _NESTEROV_LAST_BLOCK)
+        lambda_block = accelerated_lambda_block - gamma * (nnt @ accelerated_lambda_block + big_c_block)
+        correction = mod.clip(mod.multiply(lambda_block, mask), a_min=None, a_max=0)
+        lambda_block = mod.clip(lambda_block, a_min=0, a_max=None) + correction
+        _NESTEROV_LAST_BLOCK = mod.copy(lambda_block)
+    y_block = c_block + n.T @ lambda_block
+    return lambda_block, y_block
+
+
 def do_gpu_pgd_with_exact_line_search(lambda_block, x_block_0, nnt, n, c_block, n_iter: int):
     def get_step(d, grad_block):
         term1 = cp.sum(cp.multiply(d, grad_block), axis=0)

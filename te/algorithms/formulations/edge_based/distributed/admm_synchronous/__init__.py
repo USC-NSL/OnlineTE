@@ -3,7 +3,6 @@ from typing import Optional, Literal
 from dataclasses import dataclass
 from te.algorithms.base import SolverParams
 from te.algorithms.array_utils import SINGLE_PRECISION
-from te.algorithms.sub_algorithms.mlu_backends.base import ControllerMLUSolver
 
 import warnings
 warnings.filterwarnings("error")
@@ -13,7 +12,7 @@ warnings.filterwarnings("error")
 class SynchADMMSolverParams(SolverParams):
     NumberOfEpochs: Optional[int] = 100
     NumberOfNetworkUpdates: int = 3
-    Rho: float = 8.0
+    Rho: float = 1.0
     Eta: float = 0.5
     Gamma: float = 1.0
     Kappa: float = 0.01

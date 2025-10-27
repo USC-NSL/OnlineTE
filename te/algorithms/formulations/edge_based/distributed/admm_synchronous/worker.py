@@ -11,7 +11,7 @@ from ..base import WorkerNodeBase
 from . import SynchADMMSolverParams
 from .base import SynchADMMWorkerBackendBase
 from ..base import WorkerNodeParams
-from te.algorithms.sub_algorithms.pgd import do_plain_pgd_with_step_reduction
+from te.algorithms.sub_algorithms.pgd import do_plain_pgd_with_step_reduction, do_nesterov_pgd
 
 
 class SynchADMMWorkerNode(WorkerNodeBase):
@@ -123,6 +123,9 @@ class SynchADMMWorkerNode(WorkerNodeBase):
         self._lambda_ek_chunk, self._Y_tk_chunk = \
             do_plain_pgd_with_step_reduction(LAMBDA_EK_CHUNK, X_EK_START_CHUNK, NNT_M, NULL_M, C_TK_CHUNK, GAMMA, 
                                                 PGD_ITERS, KAPPA, epoch, M_MASK_CHUNK)
+        # self._lambda_ek_chunk, self._Y_tk_chunk = \
+        #     do_nesterov_pgd(LAMBDA_EK_CHUNK, X_EK_START_CHUNK, NNT_M, NULL_M, C_TK_CHUNK, GAMMA, 
+        #                     PGD_ITERS, epoch, M_MASK_CHUNK)
         means = np.mean(self._Y_tk_chunk, axis=1)
         return time.perf_counter_ns() - start, means
     

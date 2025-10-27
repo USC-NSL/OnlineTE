@@ -25,7 +25,6 @@ from te.algorithms.sub_algorithms.link_capacity_test import check_capacity_const
 from te.algorithms.sub_algorithms.flow_conservation_test import check_flow_conservation
 from te.algorithms.statistics.helpers import record_cpu_runtime, record_return_value
 from . import SynchADMMSolverParams
-from .. import ControllerRPCParams
 from .base import SynchADMMControllerBackendBase
 from ..base import ControllerNodeParams
 from te.algorithms.sub_algorithms.mlu_backends.base import ControllerMLUSolver, ControllerMLUException
@@ -37,7 +36,7 @@ class SynchADMMControllerNode(ControllerNodeBase):
         self._M = get_graph_M_matrix(params.graph)
         self._symbolic_M = get_symbolic_graph_M_matrix(params.graph)
         self._traffic = params.traffic
-        self._solver_params = params.solver_params
+        self._solver_params: SynchADMMSolverParams = params.solver_params
         self._rpc_params = params.rpc_params
         self._rng = np.random.default_rng(seed=params.solver_params.TMSeed)
         self._commodity_list = traffic_to_commodity(self._traffic)
