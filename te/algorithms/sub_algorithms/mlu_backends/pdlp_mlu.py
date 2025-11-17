@@ -1,7 +1,7 @@
 import numpy as np
 import scipy.sparse
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Tuple
 from ortools.pdlp import solve_log_pb2
 from ortools.pdlp import solvers_pb2
 from ortools.pdlp.python import pdlp
@@ -171,3 +171,27 @@ class PDLPMLU(ControllerMLUSolver):
             )
         self._last_result = result
         self._solved = True
+
+
+import argparse
+
+def pdlp_mlu_solver_params_parser(parser: argparse.ArgumentParser):
+    PDLP_MLU_PARAMS = PDLPMLUParams()
+    parser.add_argument('--threads', type=int, help='Number of threads to use for PDHG', default=PDLP_MLU_PARAMS.Threads)
+    parser.add_argument('--presolve', help='Perform presolve', action='store_true')
+    parser.add_argument('--conv-tol', help='Objective convergence tolerance', type=float, default=PDLP_MLU_PARAMS.ConvTol)
+
+
+def parse_pdlp_mlu_solver_params(
+    parser: argparse.ArgumentParser, 
+    args: Optional[argparse.Namespace] = None
+) -> Tuple[PDLPMLUParams, argparse.Namespace]:
+    if args is None:
+        args = parser.parse_args()
+    
+    PDLP_MLU_PARAMS = PDLPMLUParams()
+    PDLP_MLU_PARAMS.Threads = args.threads
+    PDLP_MLU_PARAMS.Presolve = args.presolve
+    PDLP_MLU_PARAMS.ConvTol = args.conv_tol
+
+    return PDLP_MLU_PARAMS, args

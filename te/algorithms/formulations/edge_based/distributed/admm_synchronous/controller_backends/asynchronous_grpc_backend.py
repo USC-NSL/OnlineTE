@@ -1,7 +1,7 @@
 import grpc
 import asyncio
 import numpy as np
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from dataclasses import dataclass
 from te.algorithms.array_utils.cpu_utils import CPUArray, BooleanCPUArray
 from .. import SynchADMMSolverParams

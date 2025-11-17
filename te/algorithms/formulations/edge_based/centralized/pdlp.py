@@ -322,3 +322,25 @@ class PDLPTE(TrafficEngineeringLP):
     
     def add_solution_elements(self, solution: TrafficEngineeringLPSolution):
         raise NotImplementedError
+
+
+import argparse
+
+def centralized_pdlp_solver_params_parser(parser: argparse.ArgumentParser):
+    PDLP_PARAMS = PDLPParams()
+    parser.add_argument('--threads', type=int, help='Number of threads to use for PDHG', default=PDLP_PARAMS.Threads)
+    parser.add_argument('--presolve', help='Perform presolve', action='store_true')
+
+
+def parse_centralized_pdlp_solver_params(
+    parser: argparse.ArgumentParser, 
+    args: Optional[argparse.Namespace] = None
+) -> Tuple[PDLPParams, argparse.Namespace]:
+    if args is None:
+        args = parser.parse_args()
+    PDLP_PARAMS = PDLPParams()
+    PDLP_PARAMS.Threads = args.threads
+    PDLP_PARAMS.FeasibilityTol = args.feas_tol
+    PDLP_PARAMS.ConvTol = args.conv_tol
+    PDLP_PARAMS.Presolve = args.presolve
+    return PDLP_PARAMS, args

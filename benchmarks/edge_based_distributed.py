@@ -1,48 +1,23 @@
-from te.algorithms.formulations.helper_base import edge_based_mlu_input_helper
+from te.algorithms.formulations.helper import *
+from te.algorithms.formulations.edge_based.helper import *
 from te.algorithms.sub_algorithms.mlu_backends.aggregate import *
 from te.algorithms.formulations.edge_based.distributed.aggregate import *
 
 
 if __name__ == '__main__':
+    # Problem description parser
     parser = distributed_mlu_argparser('Edge-Based Distributed TE')
-
+    # Solver params parsers
     solver_subparser = parser.add_subparsers(dest='solver', help='The solver to use', required=True)
+    synchronous_solver_params_subparser = solver_subparser.add_parser('synch', help='Options for the synchronous solver')
+    distributed_synchronous_admm_solver_params_parser(synchronous_solver_params_subparser)
 
-    SYNCH_ADMM_PARAMS = SynchADMMSolverParams()
-    synchronous_solver_params_parser = solver_subparser.add_parser('synch', help='Options for the synchronous ADMM solver')
-    synchronous_solver_params_parser.add_argument('--epochs', type=int, default=SYNCH_ADMM_PARAMS.NumberOfEpochs, 
-                                     help='Number of epochs')
-    synchronous_solver_params_parser.add_argument('--updates', type=int, default=SYNCH_ADMM_PARAMS.NumberOfNetworkUpdates, 
-                                     help='Number of consecutive network updates')
-    synchronous_solver_params_parser.add_argument('--rho', type=float, default=SYNCH_ADMM_PARAMS.Rho, 
-                                     help='Outer ADMM step size')
-    synchronous_solver_params_parser.add_argument('--eta', type=float, default=SYNCH_ADMM_PARAMS.Eta, 
-                                     help='Inner ADMM step size')
-    synchronous_solver_params_parser.add_argument('--gamma', type=float, default=SYNCH_ADMM_PARAMS.Gamma, 
-                                     help='Projected Gradient Descent step size')
-    synchronous_solver_params_parser.add_argument('--kappa', type=float, default=SYNCH_ADMM_PARAMS.Kappa, 
-                                     help='Projected Gradient Descent step size reduction factor')
-    synchronous_solver_params_parser.add_argument('--pgd-iters', type=int, default=SYNCH_ADMM_PARAMS.PGDIterations, 
-                                     help='Number of iterations for each of the inner loop PGD solvers per update')
-    synchronous_solver_params_parser.add_argument('--precision', choices=['half', 'single', 'double'], default=SYNCH_ADMM_PARAMS.Precision,
-                                     help='Floating point operation precision')
-    
-    for upto_mlu_backend_parser in add_mlu_backend_subparser(synchronous_solver_params_parser):
+    for upto_mlu_backend_parser in add_mlu_backend_subparser(synchronous_solver_params_subparser):
         add_admm_synch_communication_backend_subparser(upto_mlu_backend_parser)
 
-    num_workers, addr_list, eval_params, solution_params, warm_start_params, args = distributed_mlu_parse_args(parser)
-    problem = edge_based_mlu_input_helper(eval_params, warm_start_params, solution_params)
-
+    num_workers, addr_list, problem, args = distributed_mlu_parse_args(parser)
     if args.solver == 'synch':
-        SYNCH_ADMM_PARAMS.NumberOfEpochs = args.epochs
-        SYNCH_ADMM_PARAMS.NumberOfNetworkUpdates = args.updates
-        SYNCH_ADMM_PARAMS.Rho = args.rho
-        SYNCH_ADMM_PARAMS.Eta = args.eta
-        SYNCH_ADMM_PARAMS.Gamma = args.gamma
-        SYNCH_ADMM_PARAMS.Kappa = args.kappa
-        SYNCH_ADMM_PARAMS.PGDIterations = args.pgd_iters
-        SYNCH_ADMM_PARAMS.Precision = args.precision
-        ALGORITHM_SOLVER_PARAMS = SYNCH_ADMM_PARAMS
+        ALGORITHM_SOLVER_PARAMS, _ = parse_distributed_synchronous_admm_solver_params(synchronous_solver_params_subparser, args)
         CONTROLLER_CLS = SynchADMMControllerNode
         WORKER_CLS = SynchADMMWorkerNode
     else:

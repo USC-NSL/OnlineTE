@@ -340,3 +340,17 @@ class DualGurobiTE(TrafficEngineeringLP):
         solution.add_solution_element(self._utility, 'utility')
         solution.add_solution_element(self._flows, 'assignments')
         # solution.add_solution_element(self._capacity_constraints, 'capacity_constraints')
+
+
+import argparse
+from .gurobi import centralized_gurobi_solver_params_parser, parse_centralized_gurobi_solver_params
+
+def centralized_dual_gurobi_solver_params_parser(parser: argparse.ArgumentParser):
+    centralized_gurobi_solver_params_parser(parser)
+
+
+def parse_centralized_dual_gurobi_solver_params(
+    parser: argparse.ArgumentParser, 
+    args: Optional[argparse.Namespace] = None
+) -> Tuple[GurobiSolverParams, argparse.Namespace]:
+    return parse_centralized_gurobi_solver_params(parser, args)

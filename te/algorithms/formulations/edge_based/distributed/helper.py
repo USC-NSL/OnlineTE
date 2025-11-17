@@ -3,11 +3,12 @@ import multiprocessing
 import concurrent.futures
 import te.constants
 from dataclasses import dataclass
-from typing import Optional, List, Tuple
+from typing import List, Tuple
 from .base import *
 from te.algorithms.base import *
 from utils.logging import as_info, as_warning, log_section_title
-from te.algorithms.formulations.helper_base import solve_te_and_check, mlu_argparser, mlu_parse_args
+from te.algorithms.formulations.helper import solve_te_and_check
+from te.algorithms.formulations.edge_based.helper import *
 from te.algorithms.sub_algorithms.mlu_backends.base import ControllerMLUSolver
 
 
@@ -178,7 +179,7 @@ def hierarchical_multiprocess_mlu_helper(
 
 
 def distributed_mlu_argparser(prog_name: str) -> argparse.ArgumentParser:
-    parser = mlu_argparser(prog_name)
+    parser = mlu_problem_description_parser(prog_name)
     parser.add_argument('--num-workers', type=int, help='Number of workers to invoke', required=True)
     
     host_params_group = parser.add_argument_group('Remote Host Parameters')
@@ -192,9 +193,7 @@ def distributed_mlu_argparser(prog_name: str) -> argparse.ArgumentParser:
 
 def distributed_mlu_parse_args(parser: argparse.ArgumentParser) -> Tuple[
     int, Tuple[Tuple[str, int], ...],
-    TrafficEngineeringLPEvaluationParams, 
-    Optional[TrafficEngineeringLPSolutionParams],
-    Optional[TrafficEngineeringLPWarmStartParams],
+    TrafficEngineeringProblemDescription,
     argparse.Namespace]:
     """
     Parse all the default arguments needed for the distributed MLU problem.
@@ -214,16 +213,12 @@ def distributed_mlu_parse_args(parser: argparse.ArgumentParser) -> Tuple[
         used, each bound to port `DEFAULT_RPC_PORT`.
         
         If run locally, the ports will be incremented by one for each host.
-    eval_params: TrafficEngineeringLPEvaluationParams
-        The TE problem evaluation parameters
-    solution_params: Optional[TrafficEngineeringLPSolutionParams]
-        Solution output parameters
-    warmstart_params: Optional[TrafficEngineeringLPWarmStartParams]
-        Warm-start parameters
+    problem: TrafficEngineeringProblemDescription
+        The TE problem description
     args: argparse.Namespace
         The namespace object of parsed arguments to further process
     """
-    eval_params, solution_params, warm_start_params, args = mlu_parse_args(parser)
+    problem, args = parse_mlu_problem_description_args(parser)
     num_workers = args.num_workers
     if args.local:
         addr_list = tuple([('localhost', te.constants.DEFAULT_RPC_PORT + i + 1) for i in range(num_workers)])
@@ -235,4 +230,4 @@ def distributed_mlu_parse_args(parser: argparse.ArgumentParser) -> Tuple[
             assert len(args.hosts) == num_workers
             addr_list = tuple([(host, te.constants.DEFAULT_RPC_PORT) for host in args.hosts])
     
-    return num_workers, addr_list, eval_params, solution_params, warm_start_params, args
+    return num_workers, addr_list, problem, args

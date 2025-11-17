@@ -10,7 +10,7 @@ from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
 from te.algorithms.sub_algorithms.link_capacity_test import check_capacity_constraint
 from te.algorithms.sub_algorithms.flow_conservation_test import check_flow_conservation
 from utils.logging import as_info, as_fail, ShortTQDMEnumerate
-from . import GurobiSolverParams, make_model
+from . import GurobiSolverParams, make_model, METHOD_MAP, METHOD_MAP_REVERSE
 
 
 class GurobiTE(TrafficEngineeringLP):
@@ -290,3 +290,34 @@ class GurobiTE(TrafficEngineeringLP):
         solution.add_solution_element(self._utility, 'utility')
         solution.add_solution_element(self._flows, 'assignments')
         # solution.add_solution_element(self._capacity_constraints, 'capacity_constraints')
+
+
+import argparse
+
+def centralized_gurobi_solver_params_parser(parser: argparse.ArgumentParser):
+    GUROBI_PARAMS = GurobiSolverParams()
+    parser.add_argument('--method', help='Gurobi method to use', choices=list(METHOD_MAP.keys()), 
+                        default=METHOD_MAP_REVERSE[GUROBI_PARAMS.Method])
+    parser.add_argument('--focus', help='Gurobi numeric focus', type=int, choices=[0, 1, 2, 3], default=GUROBI_PARAMS.NumericFocus)
+    parser.add_argument('--presolve', help='Perform presolve', action='store_true')
+    parser.add_argument('--crossover', action='store_true', help='(BARRIER only) perform crossover after barrier solver ends')
+    parser.add_argument('--threads', help='(BARRIER only) Max number of threads', type=int, default=GUROBI_PARAMS.Threads)
+    parser.add_argument('--log-to', help='Log file path', default=GUROBI_PARAMS.LogFile)
+
+
+def parse_centralized_gurobi_solver_params(
+    parser: argparse.ArgumentParser, 
+    args: Optional[argparse.Namespace] = None
+) -> Tuple[GurobiSolverParams, argparse.Namespace]:
+    if args is None:
+        args = parser.parse_args()
+    GUROBI_PARAMS = GurobiSolverParams()
+    GUROBI_PARAMS.Method = METHOD_MAP[args.method]
+    GUROBI_PARAMS.NumericFocus = args.focus
+    GUROBI_PARAMS.FeasibilityTol = args.feas_tol
+    GUROBI_PARAMS.ConvTol = args.conv_tol
+    GUROBI_PARAMS.Presolve = args.presolve
+    GUROBI_PARAMS.Crossover = args.crossover
+    GUROBI_PARAMS.Threads = args.threads
+    GUROBI_PARAMS.LogFile = args.log_to
+    return GUROBI_PARAMS, args

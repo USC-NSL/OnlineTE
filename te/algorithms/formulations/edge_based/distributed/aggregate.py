@@ -1,7 +1,8 @@
 from typing import Tuple, Dict
 from te.algorithms.base import SolverParams
 from .base import DistributedSolverNodeBase
-from .admm_synchronous import SynchADMMSolverParams
+from .admm_synchronous import (SynchADMMSolverParams, parse_distributed_synchronous_admm_solver_params, 
+                               distributed_synchronous_admm_solver_params_parser)
 from .admm_synchronous.controller import SynchADMMControllerNode
 from .admm_synchronous.worker import SynchADMMWorkerNode
 from .admm_synchronous.helper import add_admm_synch_communication_backend_subparser, parse_add_admm_synch_communication_backend_params
@@ -41,6 +42,7 @@ Avaialble solvers are:
 __all__ = [
     'AVAILABLE_SOLVERS',
     'SynchADMMControllerNode', 'SynchADMMWorkerNode', 
+    'parse_distributed_synchronous_admm_solver_params', 'distributed_synchronous_admm_solver_params_parser',
     'MasterNode', 'DomainControllerNode', 'DomainWorkerNode',
     'SynchADMMSolverParams', 'HierarchicalADMMSolverParams',
     # Generic solver function
