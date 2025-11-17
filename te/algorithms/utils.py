@@ -1,4 +1,3 @@
-import gurobipy
 import contextlib
 import numpy as np
 try:
@@ -25,7 +24,7 @@ def get_solution_confusion_matrix(lp: TrafficEngineeringLP, eval_params: Traffic
     Plot the solution and output the objective trace.
     """
     def write_traces(_lp: TrafficEngineeringLP):
-        solver_params = _lp.params
+        solver_params = _lp.solver_params
         objective_trace = _lp.objective_trace
         objective_gap_trace = _lp.objective_gap_trace
         if objective_trace is None:
@@ -67,7 +66,7 @@ def get_solution_confusion_matrix(lp: TrafficEngineeringLP, eval_params: Traffic
         cm = get_cm(_lp)
         objective_trace = _lp.objective_trace
         objective_gap_trace = _lp.objective_gap_trace
-        solver_params = _lp.params
+        solver_params = _lp.solver_params
         rho_coeff_trace = None
         if hasattr(solver_params, 'UseVariableRho'):
             if solver_params.UseVariableRho:

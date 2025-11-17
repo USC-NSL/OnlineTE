@@ -5,11 +5,11 @@ from typing import List, Optional
 from dataclasses import dataclass
 from te.algorithms.array_utils.cpu_utils import CPUArray, BooleanCPUArray
 from .. import SynchADMMSolverParams
-from ... import ControllerRPCParams
-from ..base import ControllerCommunicationBackendBase
-from ..utils import (serialized_message_to_array, array_to_serialized_message,
-                     chunk_big_array, async_rebuild_chunked_array,
-                     GRPC_ARRAY_STREAM_MAX_LEN)
+from ...base import RPCParams
+from ..base import SynchADMMControllerBackendBase
+from ...utils import (serialized_message_to_array, array_to_serialized_message,
+                      chunk_big_array, async_rebuild_chunked_array,
+                      GRPC_ARRAY_STREAM_MAX_LEN)
 
 import protos.distributed_lp.distributed_lp_pb2 as distributed_lp_messages
 from protos.distributed_lp.distributed_lp_pb2_grpc import DistributedADMMSolverStub
@@ -17,20 +17,20 @@ from google.protobuf.empty_pb2 import Empty
 
 
 @dataclass
-class AsynchronousgRPCControllerBackendParams(ControllerRPCParams):
+class AsynchronousgRPCControllerBackendParams(RPCParams):
     Timeout: float = 5
     
     def __post_init__(self):
         self.left_column_share = 0.2
 
 
-class AsynchronousgRPCControllerBackend(ControllerCommunicationBackendBase):
+class AsynchronousgRPCControllerBackend(SynchADMMControllerBackendBase):
     def __init__(self, rpc_params: AsynchronousgRPCControllerBackendParams):
-        self._rpc_params = rpc_params
+        super().__init__(rpc_params)
 
         self._worker_channels: List[grpc.Channel] = [
             grpc.aio.insecure_channel(target=":".join([ip, str(port)]))
-                for ip, port in self._rpc_params.AddressList
+                for ip, port in self._rpc_params.Workers
         ]
         self._worker_stubs: List[DistributedADMMSolverStub] = [
             DistributedADMMSolverStub(ch) for ch in self._worker_channels
@@ -53,13 +53,12 @@ class AsynchronousgRPCControllerBackend(ControllerCommunicationBackendBase):
             pass
         self.killed = True
     
+    def wait(self):
+        pass
+    
     @classmethod
     def backend_name(self) -> str:
         return "gRPC-asynchronous"
-    
-    @property
-    def number_of_nodes(self) -> int:
-        return self._rpc_params.NumWorkers
 
     async def is_node_ready(self, worker_id: int) -> bool:
         if not self.is_alive:
@@ -70,18 +69,18 @@ class AsynchronousgRPCControllerBackend(ControllerCommunicationBackendBase):
         except grpc.aio._call.AioRpcError:
             return False
     
-    async def _are_network_nodes_ready(self) -> bool:
-        results = await asyncio.gather(*[self.is_node_ready(i) for i in range(self.number_of_nodes)])
+    async def _are_all_workers_reachable(self) -> bool:
+        results = await asyncio.gather(*[self.is_node_ready(i) for i in range(self.number_of_workers)])
         return all(results)
     
-    def are_network_nodes_ready(self):
+    def are_all_workers_reachable(self):
         if not self.is_alive:
             return None
-        return self._event_loop.run_until_complete(self._are_network_nodes_ready())
+        return self._event_loop.run_until_complete(self._are_all_workers_reachable())
 
     async def _initialize_worker_nodes(self, solver_params: SynchADMMSolverParams, basis: CPUArray, 
                                        initial_feasible_solution: CPUArray, in_out_mask: Optional[BooleanCPUArray] = None):
-        NUM_WORKERS = self.number_of_nodes
+        NUM_WORKERS = self.number_of_workers
         NULL_M = basis
         X_EK_START_CHUNKS = np.array_split(initial_feasible_solution, NUM_WORKERS, axis=1)
         MASK_EK_CHUNKS = None if in_out_mask is None else np.array_split(in_out_mask, NUM_WORKERS, axis=1)
@@ -115,7 +114,7 @@ class AsynchronousgRPCControllerBackend(ControllerCommunicationBackendBase):
         self._event_loop.run_until_complete(self._initialize_worker_nodes(solver_params, basis, initial_feasible_solution, in_out_mask))
     
     async def _update_demands(self, updated_feasible_solution: CPUArray):
-        X_EK_START_CHUNKS = np.array_split(updated_feasible_solution, self.number_of_nodes, axis=1)
+        X_EK_START_CHUNKS = np.array_split(updated_feasible_solution, self.number_of_workers, axis=1)
         WORKERS = self._worker_stubs
         await asyncio.gather(*[
             stub.SetInitialFeasibleSolution(chunk_big_array(X_EK_START_CHUNKS[i], GRPC_ARRAY_STREAM_MAX_LEN))
@@ -176,7 +175,7 @@ class AsynchronousgRPCControllerBackend(ControllerCommunicationBackendBase):
     
     async def aclose(self):
         await asyncio.wait(
-            [asyncio.create_task(self._close_node(i)) for i in range(self.number_of_nodes)],
+            [asyncio.create_task(self._close_node(i)) for i in range(self.number_of_workers)],
             timeout=self._rpc_params.Timeout
         )
     

@@ -1,19 +1,16 @@
 import time
-import signal
 import numpy as np
 import networkx as nx
 import asyncio.exceptions
 from collections import defaultdict
 from typing import List, Tuple, Optional
-from ..base import ControllerNodeBase
-from te.algorithms.base import (SolverParams, TrafficEngineeringLPCheckResult, 
-                                TrafficEngineeringLPEvaluationParams, TrafficEngineeringLPObjectiveTrace)
+from te.algorithms.base import *
 from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
 from topologies.utils import get_graph_M_matrix, get_adjacency_null_space, get_commodity_in_out_mask
-from topologies.utils import get_symbolic_graph_M_matrix
+# from topologies.utils import get_symbolic_graph_M_matrix
 from utils.exceptions import SolutionInterrupted
-from utils.logging import as_info, as_warning, log_subsection_separator, ShortTQDM
+from utils.logging import as_info, as_success, log_subsection_separator, ShortTQDM
 from te.algorithms.array_utils import set_global_precision
 from te.algorithms.array_utils.cpu_utils import (CPUArray, BooleanCPUArray,
                                                  cpu_array, cpu_zeros, cpu_double_array, 
@@ -26,19 +23,21 @@ from te.algorithms.sub_algorithms.flow_conservation_test import check_flow_conse
 from te.algorithms.statistics.helpers import record_cpu_runtime, record_return_value
 from . import SynchADMMSolverParams
 from .base import SynchADMMControllerBackendBase
-from ..base import ControllerNodeParams
+from ..base import DistributedSolverNodeBase, DistributedSolverNodeParams
 from te.algorithms.sub_algorithms.mlu_backends.base import ControllerMLUSolver, ControllerMLUException
 
 
-class SynchADMMControllerNode(ControllerNodeBase):
-    def __init__(self, params: ControllerNodeParams) -> None:
-        self._graph = params.graph
-        self._M = get_graph_M_matrix(params.graph)
-        self._symbolic_M = get_symbolic_graph_M_matrix(params.graph)
-        self._traffic = params.traffic
-        self._solver_params: SynchADMMSolverParams = params.solver_params
-        self._rpc_params = params.rpc_params
-        self._rng = np.random.default_rng(seed=params.solver_params.TMSeed)
+class SynchADMMControllerNode(DistributedSolverNodeBase):
+    def __init__(self, params: DistributedSolverNodeParams,
+                 mlu_cls: type[ControllerMLUSolver], mlu_params: SolverParams) -> None:
+        super().__init__(params)
+        self._graph = params.ProblemDescription.Graph
+        self._M = get_graph_M_matrix(self._graph)
+        # self._symbolic_M = get_symbolic_graph_M_matrix(self._graph)
+        self._traffic = params.ProblemDescription.TM
+        self._solver_params: SynchADMMSolverParams = params.SolverParams_
+        self._rpc_params = params.RPCParams_
+        self._rng = np.random.default_rng(seed=self._solver_params.TMSeed)
         self._commodity_list = traffic_to_commodity(self._traffic)
 
         self._NULL_M: CPUArray = None
@@ -52,8 +51,8 @@ class SynchADMMControllerNode(ControllerNodeBase):
         self._c_norm: Optional[float] = None
         self._alpha: Optional[float] = None
 
-        self._mlu_solver_cls: type[ControllerMLUSolver] = params.mlu_backend
-        self._mlu_params: SolverParams = params.mlu_params
+        self._mlu_solver_cls: type[ControllerMLUSolver] = mlu_cls
+        self._mlu_params: SolverParams = mlu_params
         self._mlu_solver: Optional[ControllerMLUSolver] = None
 
         self._X_ek: Optional[CPUArray] = None
@@ -66,22 +65,24 @@ class SynchADMMControllerNode(ControllerNodeBase):
         self._Y_bar_t: Optional[CPUArray] = None
         self._u_t: Optional[CPUArray] = None
 
-        self._backend: SynchADMMControllerBackendBase = params.communication_backend(params.rpc_params)
-        self._backend.start()
+        self.backend: SynchADMMControllerBackendBase = params.CommunicationBackendCLS(params.RPCParams_)
+        self.backend.start()
 
         self._objective_trace: TrafficEngineeringLPObjectiveTrace = \
             TrafficEngineeringLPObjectiveTrace(['Perceived Utilization', 'Actual Utilization'])
         self._objective_gap_trace = []
 
         # These we call right now, as opposed to doing them under `initialize`
-        set_global_precision(params.solver_params.Precision)
+        set_global_precision(self._solver_params.Precision)
         set_cpu_float_precision()
-
-        self._die_on_next_int = False
-        signal.signal(signal.SIGINT, self.stop)
-        signal.signal(signal.SIGTERM, self.die)
     
     def initialize(self):
+        print(as_info("Waiting for workers to become reachable"))
+        while self.backend.is_alive and not self.are_all_workers_reachable():
+            time.sleep(1)
+        if not self.backend.is_alive:
+            raise SolutionInterrupted
+        print(as_success("All worker nodes are reachable"))
         # First, set the initial feasible solutions.
         # We will do this before spawning the backend, since if we use `gRPC`, 
         # this function may invoke `fork` which causes `gRPC` to spam warnings.
@@ -91,21 +92,6 @@ class SynchADMMControllerNode(ControllerNodeBase):
         self._initialize_variables_and_residuals()
         # Report what we are dealing with
         self._report_problem_size()
-    
-    def stop(self, _, __):
-        if self._die_on_next_int:
-            signal.raise_signal(signal.SIGTERM)
-        else:
-            print(as_warning('SIGINT: Stopping solver. Invoke again to kill the process.'))
-            if self._backend:
-                self._backend.stop()
-            self._die_on_next_int = True
-            raise SolutionInterrupted
-    
-    def die(self, _, __):
-        print(as_warning('SIGTERM: Killing the solver.'))
-        if self._backend:
-            self._backend.die()
 
     @property
     def alg_name(self) -> str:
@@ -186,9 +172,6 @@ class SynchADMMControllerNode(ControllerNodeBase):
         self._mlu_params._Alpha = self._alpha
         self._mlu_solver = self._mlu_solver_cls(NUM_EDGES, self._capacities, self._mlu_params)
     
-    def are_network_nodes_ready(self) -> bool:
-        return self._backend.are_network_nodes_ready()
-    
     def _report_problem_size(self):
         M = len(self._graph.nodes)
         N = len(self._graph.edges)
@@ -222,7 +205,7 @@ class SynchADMMControllerNode(ControllerNodeBase):
         return self._get_Z_value() - self._Z_e_start - self._r_e
     
     def _set_X_ek(self):
-        self._X_ek = self._backend.get_X_ek(basis=self._NULL_M, initial_feasible_solution=self._X_ek_start)
+        self._X_ek = self.backend.get_X_ek(basis=self._NULL_M, initial_feasible_solution=self._X_ek_start)
     
     def _add_constraints(self):
         assert self._mlu_solver is not None
@@ -242,7 +225,7 @@ class SynchADMMControllerNode(ControllerNodeBase):
     @record_return_value('PGD-Runtime')
     @record_cpu_runtime('Network-Update')
     def _do_network_update(self, epoch: int):
-        max_run, self._Y_bar_t = self._backend.do_network_update(epoch)
+        max_run, self._Y_bar_t = self.backend.do_network_update(epoch)
         return max_run
     
     def _update_P_bar(self):
@@ -273,7 +256,7 @@ class SynchADMMControllerNode(ControllerNodeBase):
     def _reconvene_network_updates(self) -> bool:
         self._update_P_bar()
         self._update_u_t()
-        self._backend.reconvene_network_updates(
+        self.backend.reconvene_network_updates(
             P_bar_t=self._P_bar_t,
             Y_bar_t=self._Y_bar_t,
             u_t=self._u_t
@@ -294,7 +277,7 @@ class SynchADMMControllerNode(ControllerNodeBase):
         self._r_e = R_E + (X_EK_SUM_E - Z_E)
 
     def close(self):
-        self._backend.close()
+        self.backend.close()
         if self._mlu_solver is not None:
             self._mlu_solver.close()
     
@@ -305,13 +288,13 @@ class SynchADMMControllerNode(ControllerNodeBase):
         self._add_constraints()
         self._add_objective()
         print(as_info(f"Built model in {str(np.round(time.time() - t_start, 2))} seconds."))
-        self._backend.initialize_worker_nodes(
+        self.backend.initialize_worker_nodes(
             self._solver_params,
             self._NULL_M, 
             self._X_ek_start,
             self._M_MASK
         )
-        self._backend.set_active_commodity_count(len(self._commodity_list))
+        self.backend.set_active_commodity_count(len(self._commodity_list))
     
     def reset(self, with_params: False):
         self._mlu_solver.reset(with_params)
@@ -354,6 +337,9 @@ class SynchADMMControllerNode(ControllerNodeBase):
             return time.time() - t
         except asyncio.exceptions.CancelledError:
             return -1
+    
+    def run(self):
+        self.solve()
 
     def check(self, eval_params: TrafficEngineeringLPEvaluationParams):
         # Are outer ADMM pairs in consensus?
@@ -412,7 +398,7 @@ class SynchADMMControllerNode(ControllerNodeBase):
         # then this also will not change too much.
         self._set_initial_feasible_solution()
         # Send it to the backend
-        self._backend.update_demands(self._X_ek_start)
+        self.backend.update_demands(self._X_ek_start)
     
     def initialize_to(self, solution: EdgeBasedMinimizeMaximumUtilitySolution):
         raise NotImplementedError

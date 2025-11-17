@@ -14,7 +14,7 @@ from te.traffic_models import get_traffic_model, get_traffic_model_params, get_t
 from te.traffic_models.base import TrafficMatrixBase, TrafficMatrixConverterBase, TrafficMatrixParamsBase
 from te.algorithms.base import (
     as_te_solution_name, as_json_solution_name, as_solution_elements_name, as_simplex_basis_name, 
-    TrafficEngineeringLPSolution, TrafficEngineeringLPSolutionParams, SolutionElementBase)
+    TrafficEngineeringLP, TrafficEngineeringLPSolution, TrafficEngineeringLPSolutionParams, SolutionElementBase)
 
 
 END_TOKEN = '----'

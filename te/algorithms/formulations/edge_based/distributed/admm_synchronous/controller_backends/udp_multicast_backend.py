@@ -8,11 +8,11 @@ from dataclasses import dataclass
 from utils.exceptions import SolutionInterrupted
 from te.algorithms.array_utils.cpu_utils import CPUArray, BooleanCPUArray
 from .. import SynchADMMSolverParams
-from ... import ControllerRPCParams
-from ..base import ControllerCommunicationBackendBase
-from ..utils import (serialized_message_to_array, array_to_serialized_message,
-                     chunk_big_array, async_rebuild_chunked_array,
-                     GRPC_ARRAY_STREAM_MAX_LEN)
+from ...base import RPCParams
+from ..base import SynchADMMControllerBackendBase
+from ...utils import (serialized_message_to_array, array_to_serialized_message,
+                      chunk_big_array, async_rebuild_chunked_array,
+                      GRPC_ARRAY_STREAM_MAX_LEN)
 from utils.logging import as_warning
 
 import protos.distributed_lp.distributed_lp_pb2 as distributed_lp_messages
@@ -21,7 +21,7 @@ from google.protobuf.empty_pb2 import Empty
 
 
 @dataclass
-class MulticastControllerBackendParams(ControllerRPCParams):
+class MulticastControllerBackendParams(RPCParams):
     ScatterAddress: str = '224.0.0.10'
     HostName: str = socket.gethostname()
     TTL: int = 2
@@ -77,7 +77,7 @@ class TLVRPCMessages:
         return header + body
 
 
-class MulticastControllerBackend(ControllerCommunicationBackendBase):
+class MulticastControllerBackend(SynchADMMControllerBackendBase):
     """
     Implements the UDP multicast backend for screaming and receiving updates from worker nodes.
     Our updates are small, but come at high frequency; We can also assume that the network is
@@ -115,7 +115,7 @@ class MulticastControllerBackend(ControllerCommunicationBackendBase):
 
         self._worker_channels: List[grpc.Channel] = [
             grpc.aio.insecure_channel(target=":".join([ip, str(port)]))
-                for ip, port in self._rpc_params.AddressList
+                for ip, port in self._rpc_params.Workers
         ]
         self._worker_stubs: List[DistributedADMMSolverStub] = [
             DistributedADMMSolverStub(ch) for ch in self._worker_channels
@@ -137,7 +137,7 @@ class MulticastControllerBackend(ControllerCommunicationBackendBase):
     
     @property
     def number_of_nodes(self) -> int:
-        return self._rpc_params.NumWorkers
+        return self.number_of_workers
     
     @property
     def current_xid(self) -> int:

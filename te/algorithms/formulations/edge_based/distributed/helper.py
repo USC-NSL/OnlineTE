@@ -1,140 +1,143 @@
-import time
 import argparse
-import contextlib
 import multiprocessing
 import concurrent.futures
+import te.constants
 from dataclasses import dataclass
-from typing import Optional, List, Tuple, Union
-from te.traffic_models.converters import SampledConverter
-from . import ControllerRPCParams, WorkerRPCParams, DEFAULT_RPC_PORT
-from .base import (WorkerNodeBase, ControllerNodeBase, WorkerCommunicationBackendBase, ControllerCommunicationBackendBase, 
-                   ControllerNodeParams, WorkerNodeParams)
-from te.algorithms.base import (SolverParams, TrafficEngineeringLPEvaluationParams, 
-                                TrafficEngineeringLPSolutionParams, TrafficEngineeringLPWarmStartParams)
-from te.algorithms.utils import get_solution_confusion_matrix, stringify_collected_stats
-from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolutionParams, EdgeBasedMinimizeMaximumUtilitySolution
-from topologies.utils import get_uniform_tm_problem_with_capacity_heuristic
-from utils.logging import as_info, as_warning, as_success, log_subsection_title, log_section_title
-from te.algorithms.formulations.helper_base import mlu_solve_and_check, mlu_argparser, mlu_parse_args
+from typing import Optional, List, Tuple
+from .base import *
+from te.algorithms.base import *
+from utils.logging import as_warning, log_section_title
+from te.algorithms.formulations.helper_base import solve_te_and_check, mlu_argparser, mlu_parse_args
 from te.algorithms.sub_algorithms.mlu_backends.base import ControllerMLUSolver
 
 
 @dataclass
-class DistributedMLUHelperParams:
-    ControllerCLS: type[ControllerNodeBase]
+class DistributedMLUHelperParams(DistributedSolverNodeParams):
+    """
+    Helper Dataclass for a distributed MLU solver.
+    Adds attributes for MLU solver backend and its parameters to the usual
+    `DistributedSolverNodeParams` class.
+    """
+    MasterCLS: type[TrafficEngineeringLP]
     MLUCLS: type[ControllerMLUSolver]
-    ControllerBackendCLS: type[ControllerCommunicationBackendBase]
-    AlgorithmSolverParams: SolverParams
     MLUParams: SolverParams
-    ControllerRPCParams: ControllerRPCParams
-    EvalParams: TrafficEngineeringLPEvaluationParams
-    WarmstartParams: Optional[TrafficEngineeringLPWarmStartParams]
-    SolutionParams: Optional[TrafficEngineeringLPSolutionParams]
 
 
 @dataclass
-class MultiprocessMLUHelperParams(DistributedMLUHelperParams):
-    WorkerCLS: type[WorkerNodeBase]
-    WorkerBackendCLS: type[WorkerCommunicationBackendBase]
-    WorkerRPCParamList: List[WorkerRPCParams]
+class SingleControllerMultiprocessMLUHelperParams(DistributedMLUHelperParams):
+    """
+    Helper Dataclass for a multi-process MLU solver with a single controller.
+    In this setting, individual processes are spawned, where exactly one of
+    them runs the cetnral controller node, and all other processes are worker
+    nodes that interact with the controller.
+    Worker nodes are distinguished using their RPC parameters.
+    """
+    WorkerCLS: type[DistributedSolverNodeBase]
+    WorkerBackendCLS: type[CommunicationBackendBase]
+    WorkerRPCParamList: List[RPCParams]
 
 
-def multiprocess_mlu_helper(params: MultiprocessMLUHelperParams):
-    assert params.ControllerRPCParams.NumWorkers == len(params.WorkerRPCParamList)
+@dataclass
+class HierarchicalMLUHelperParams(DistributedSolverNodeParams):
+    """
+    Helper Dataclass for a hierarchical MLU solver, where domain
+    controllers interact with a master node in a peer-to-peer fashion.
+    Very similar to `DistributedMLUHelperParams`, but accepts a list
+    of integers, that define how large each domain partition is.
+    """
+    MasterCLS: type[TrafficEngineeringLP]
+    MLUCLS: type[ControllerMLUSolver]
+    MLUParams: SolverParams
+    DomainPartitions: List[int]
+
+
+@dataclass
+class HierarchicalMultiprocessMLUHelperParams(HierarchicalMLUHelperParams):
+    """
+    Helper Dataclass for a multi-process, hierarchical MLU solver.
+    Similar to `SingleControllerMultiprocessMLUHelperParams`, we accept extra
+    parameters to spawn processes that implement domain worker nodes, but we also
+    accept parameters for spawning domain controller nodes as well.
+    """
+    DomainCLS: type[DistributedSolverNodeBase]
+    DomainBackendCLS: type[CommunicationBackendBase]
+    DomainControllerRPCParamList: List[RPCParams]
+    WorkerCLS: type[DistributedSolverNodeBase]
+    WorkerBackendCLS: type[CommunicationBackendBase]
+    WorkerRPCParamList: List[RPCParams]
+
+    def __post_init__(self):
+        # Number of partitions must agree with number of domains
+        assert len(self.DomainPartitions) == len(self.DomainControllerRPCParamList)
+        # Total number of nodes across partitions must agree with number of workers
+        assert len(self.WorkerRPCParamList) == sum(self.DomainPartitions)
+
+
+def distributed_mlu_helper(params: DistributedMLUHelperParams):
+    solve_te_and_check(
+        params.ProblemDescription, 
+        params.MasterCLS, 
+        params.SolverParams_,
+        params.MLUCLS,
+        params.MLUParams
+    )
+
+
+def single_controller_multiprocess_mlu_helper(params: SingleControllerMultiprocessMLUHelperParams):
+    num_workers = len(params.RPCParams_.Workers)
+    # Number of workers that we want to spawn must match the number of workers
+    # controlled by our controller node.
+    assert len(params.WorkerRPCParamList) == num_workers
     print(as_warning(log_section_title("LOCAL EXPERIMENT")))
     with concurrent.futures.ProcessPoolExecutor(
-        max_workers=params.ControllerRPCParams.NumWorkers, 
+        max_workers=num_workers, 
         mp_context=multiprocessing.get_context(method='spawn')
     ) as network_pool:
+        # Worker nodes need no problem description and solver inputs, the
+        # central controller will tell them all they need.
         for worker_rpc_params in params.WorkerRPCParamList:
-            network_pool.submit(params.WorkerCLS.spawn_and_wait, WorkerNodeParams(
-                communication_backend=params.WorkerBackendCLS,
-                rpc_params=worker_rpc_params
-            ))
+            network_pool.submit(
+                params.WorkerCLS.spawn_and_run, 
+                DistributedSolverNodeParams(
+                    CommunicationBackendCLS=params.WorkerBackendCLS,
+                    RPCParams_=worker_rpc_params
+                )
+            )
         distributed_mlu_helper(params)
 
 
-def distributed_mlu_helper(params: Union[DistributedMLUHelperParams, MultiprocessMLUHelperParams]):
-    c, graph, tm = get_uniform_tm_problem_with_capacity_heuristic(
-        params.EvalParams.TopologyName, params.EvalParams.Seed, 
-        scale_factor=params.EvalParams.ScaleFactor
-    )
-
-    if params.EvalParams.SaveSol:
-        mlu_solution_params = EdgeBasedMinimizeMaximumUtilitySolutionParams(
-            seed=params.EvalParams.Seed, 
-            topology_name=params.EvalParams.TopologyName, 
-            capacity=c,
-            tm_model_name=tm.type(), 
-            tm_model_params=tm.params,
-            path=params.SolutionParams.Path, 
-            sol_name=params.SolutionParams.Name
-        )
-    else:
-        mlu_solution_params = None
-
-    if params.WarmstartParams is not None:
-        print(as_info(log_section_title("MLU PROBLEM (WITH WARM-START)")))
-        # TODO: Implement different converter passing here ...
-        converter = SampledConverter(
-            seed=params.WarmstartParams.ConverterSeed,
-            params=params.WarmstartParams.ConverterParams
-        )
-    else:
-        print(as_info(log_section_title("MLU PROBLEM")))
-        converter = None
-    
-    print(as_info(f"Network link capacity is: {str(round(c, 2))}"))
-
-    with contextlib.closing(params.ControllerCLS(ControllerNodeParams(
-        graph=graph, traffic=tm, solver_params=params.AlgorithmSolverParams,
-        mlu_backend=params.MLUCLS, mlu_params=params.MLUParams, communication_backend=params.ControllerBackendCLS,
-        rpc_params=params.ControllerRPCParams
-    ))) as lp:
-        print(as_info(f"Solving With Algorithm: {lp.alg_name}"))
-        print(as_info(f"Algorithm Parameters:\n{params.AlgorithmSolverParams}"))
-        print(as_info(f"Using MLU Backend: {params.MLUCLS.name()}"))
-        print(as_info(f"MLU Backend Parameters:\n{params.MLUParams.stringify_up_to_level(1)}"))
-        print(as_info(f"Communication Backend `{params.ControllerBackendCLS.backend_name()}` " +
-                      f"With Parameters:\n{params.ControllerRPCParams.stringify_up_to_level(1)}"))
-        print(as_info(f"Evaluating With Parameters:\n{params.EvalParams}"))
-        print(as_info("Waiting For Network Nodes ..."))
-        while True:
-            time.sleep(1)
-            ready = lp.are_network_nodes_ready()
-            if ready is True:
-                print(as_success("All Network Nodes Ready"))
-                break
-            elif ready is None:
-                print(as_warning("Aborting"))
-                return
-        print(as_info(log_subsection_title("MAKING TE LP")))
-        lp.make_lp()
-        print(as_info(log_subsection_title(f"SOLVING WITH: {lp.alg_name}")))
-        mlu_solve_and_check(lp, params.EvalParams)
-        
-        if mlu_solution_params:
-            if converter is None:
-                solution = EdgeBasedMinimizeMaximumUtilitySolution(params=mlu_solution_params)
-                lp.add_solution_elements(solution)
-                solution.dump_elements()
-                solution.dump(name=mlu_solution_params.Name)
-            else:
-                raise NotImplementedError('Will not save solution for warm-tests for now ... (takes too much space!)')
-        
-        if converter is not None:
-            converted_tm = tm
-            for i in range(params.WarmstartParams.WarmIters):
-                print(as_info(log_subsection_title(f"WARM-START ITERATION {i}")))
-                converted_tm = converter.convert(tm)
-                lp.update_traffic_matrix(converted_tm)
-                mlu_solve_and_check(lp, params.EvalParams)
-        
-        get_solution_confusion_matrix(lp, params.EvalParams)
-
-        stats = stringify_collected_stats()
-        if stats is not None:
-            print(as_info(stats))
+def hierarchical_multiprocess_mlu_helper(params: HierarchicalMultiprocessMLUHelperParams):
+    print(as_warning(log_section_title("LOCAL EXPERIMENT")))
+    NUM_DOMAIN_CONTROLLERS = len(params.DomainControllerRPCParamList)
+    NUM_DOMAIN_WORKERS = len(params.WorkerRPCParamList)
+    with concurrent.futures.ProcessPoolExecutor(
+        max_workers=NUM_DOMAIN_WORKERS, 
+        mp_context=multiprocessing.get_context(method='spawn')
+    ) as domain_worker_pool:
+        for worker_rpc_params in params.WorkerRPCParamList:
+            domain_worker_pool.submit(
+                params.WorkerCLS.spawn_and_run, 
+                DistributedSolverNodeParams(
+                    CommunicationBackendCLS=params.WorkerBackendCLS,
+                    RPCParams_=worker_rpc_params
+                )
+            )
+        with concurrent.futures.ProcessPoolExecutor(
+            max_workers=NUM_DOMAIN_CONTROLLERS,
+            mp_context=multiprocessing.get_context(method='spawn')
+        ) as domain_controller_pool:
+            # Domain controller nodes must stand-by until the master is up.
+            # As such, they will not get any extra problem description.
+            for domain_controller_rpc_params in params.DomainControllerRPCParamList:
+                domain_controller_pool.submit(
+                    params.DomainCLS.spawn_and_run, 
+                    DistributedSolverNodeParams(
+                        mlu_backend=params.MLUCLS, mlu_params=params.MLUParams,
+                        communication_backend=params.DomainBackendCLS,
+                        rpc_params=domain_controller_rpc_params
+                    )
+                )
+            distributed_mlu_helper(params)
 
 
 def distributed_mlu_argparser(prog_name: str) -> argparse.ArgumentParser:
@@ -186,13 +189,13 @@ def distributed_mlu_parse_args(parser: argparse.ArgumentParser) -> Tuple[
     eval_params, solution_params, warm_start_params, args = mlu_parse_args(parser)
     num_workers = args.num_workers
     if args.local:
-        addr_list = tuple([('localhost', DEFAULT_RPC_PORT + i) for i in range(num_workers)])
+        addr_list = tuple([('localhost', te.constants.DEFAULT_RPC_PORT + i) for i in range(num_workers)])
     else:
         if len(args.hosts) == 0:
             # Use `ni` as hosts ...
-            addr_list = tuple([(f'n{i}', DEFAULT_RPC_PORT) for i in range(num_workers)])
+            addr_list = tuple([(f'n{i}', te.constants.DEFAULT_RPC_PORT) for i in range(num_workers)])
         else:
             assert len(args.hosts) == num_workers
-            addr_list = tuple([(host, DEFAULT_RPC_PORT) for host in args.hosts])
+            addr_list = tuple([(host, te.constants.DEFAULT_RPC_PORT) for host in args.hosts])
     
     return num_workers, addr_list, eval_params, solution_params, warm_start_params, args

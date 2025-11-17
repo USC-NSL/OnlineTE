@@ -5,10 +5,10 @@ from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
 from ..base import SynchADMMWorkerBackendBase
 from .. import SynchADMMSolverParams
-from ... import WorkerRPCParams
-from ..utils import (serialized_message_to_array, array_to_serialized_message,
-                     rebuild_chunked_array, chunk_big_array, get_optional_field,
-                     GRPC_ARRAY_STREAM_MAX_LEN)
+from ...base import RPCParams
+from ...utils import (serialized_message_to_array, array_to_serialized_message,
+                      rebuild_chunked_array, chunk_big_array, get_optional_field,
+                      GRPC_ARRAY_STREAM_MAX_LEN)
 
 import protos.array.array_pb2 as array_messages
 from protos.distributed_lp.distributed_lp_pb2_grpc import DistributedADMMSolverServicer, add_DistributedADMMSolverServicer_to_server
@@ -16,7 +16,7 @@ from google.protobuf.empty_pb2 import Empty
 
 
 @dataclass
-class gRPCWorkerBackendParams(WorkerRPCParams):
+class gRPCWorkerBackendParams(RPCParams):
     NumThreads: int = 1
     
     def __post_init__(self):
@@ -25,7 +25,7 @@ class gRPCWorkerBackendParams(WorkerRPCParams):
 
 class gRPCWorkerBackend(SynchADMMWorkerBackendBase):
     def __init__(self, rpc_params: gRPCWorkerBackendParams):
-        self._rpc_params = rpc_params
+        super().__init__(rpc_params)
 
         self._server: Optional[grpc.Server] = None
         self._listener: Optional[NetworkWorkerNodeListener] = None
@@ -38,13 +38,12 @@ class gRPCWorkerBackend(SynchADMMWorkerBackendBase):
     
     @property
     def worker_id(self) -> int:
-        return self._rpc_params.WorkerID
+        return self._rpc_params.PeerIndex
 
     def _initialize_listener(self):
         assert self._server is None and self._listener is None
-        RPC_PARAMS = self._rpc_params
-        IP = RPC_PARAMS.IP
-        PORT = RPC_PARAMS.Port
+        RPC_PARAMS: gRPCWorkerBackendParams = self._rpc_params
+        IP, PORT = RPC_PARAMS.PeerIndex
         self._server = grpc.server(thread_pool=ThreadPoolExecutor(max_workers=RPC_PARAMS.NumThreads))
         self._listener = NetworkWorkerNodeListener(self)
         add_DistributedADMMSolverServicer_to_server(self._listener, self._server)

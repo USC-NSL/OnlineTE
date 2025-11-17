@@ -7,8 +7,7 @@ from . import PDLPParams
 from ortools.pdlp import solve_log_pb2
 from ortools.pdlp import solvers_pb2
 from ortools.pdlp.python import pdlp
-from te.algorithms.base import (TrafficEngineeringLP, SolverParams, TrafficEngineeringLPSolution, 
-                                TrafficEngineeringLPCheckResult, TrafficEngineeringLPEvaluationParams)
+from te.algorithms.base import *
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, traffic_to_list_of_tuples, Commodity
 from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
 from te.algorithms.sub_algorithms.link_capacity_test import check_capacity_constraint
@@ -28,12 +27,12 @@ Coefficients are kept as a sparse matrix, but bounds are dense.
 
 
 class PDLPTE(TrafficEngineeringLP):
-    def __init__(self, graph: nx.DiGraph, traffic: TrafficMatrixBase, solver_params: PDLPParams = None) -> None:
-        super().__init__()
-        self._graph = graph
-        self._traffic = traffic
+    def __init__(self, problem_description: TrafficEngineeringProblemDescription, solver_params: PDLPParams) -> None:
+        super().__init__(problem_description, solver_params)
+        self._graph = problem_description.Graph
+        self._traffic = problem_description.TM
         self._solver_params: SolverParams = solver_params
-        self._capacities = np.array([c_e for _, _, c_e in graph.edges(data='capacity')])
+        self._capacities = np.array([c_e for _, _, c_e in self._graph.edges(data='capacity')])
         self._lp: Optional[pdlp.QuadraticProgram] = None
         self._commodity_list: List[Commodity] = traffic_to_commodity(self._traffic)
         self._commodity_tuple_list: List[Commodity] = traffic_to_list_of_tuples(self._traffic)
@@ -43,8 +42,8 @@ class PDLPTE(TrafficEngineeringLP):
         self._NUM_VARIABLES: Optional[int] = None
         self._NUM_CONSTRAINTS: Optional[int] = None
         
-        self._in_indexing: Dict[int, np.ndarray] = get_node_in_array(graph)
-        self._out_indexing: Dict[int, np.ndarray] = get_node_out_array(graph)
+        self._in_indexing: Dict[int, np.ndarray] = get_node_in_array(self._graph)
+        self._out_indexing: Dict[int, np.ndarray] = get_node_out_array(self._graph)
         
         self._report_problem_size()
     
@@ -59,10 +58,6 @@ class PDLPTE(TrafficEngineeringLP):
     @property
     def traffic(self) -> TrafficMatrixBase:
         return self._traffic
-
-    @property
-    def params(self) -> SolverParams:
-        return self._solver_params
     
     @property
     def commodity_list(self) -> List[Commodity]:
@@ -280,7 +275,8 @@ class PDLPTE(TrafficEngineeringLP):
             print(as_fail(f"Error while solving: {e}"))
             return -1
 
-    def check(self, eval_params: TrafficEngineeringLPEvaluationParams):
+    def check(self):
+        eval_params = self._problem_description.EvalParams
         unsat_ratio, unsat_commodities = check_flow_conservation(
             self._X_ek, self._graph, self._commodity_list,
             eval_params

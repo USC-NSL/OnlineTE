@@ -1,16 +1,51 @@
 import argparse
 import contextlib
 from typing import Optional, Tuple
-from te.traffic_models.converters import SampledConverter, SampledTrafficMatrixConverterParams
-from te.algorithms.base import (SolverParams, TrafficEngineeringLP, TrafficEngineeringLPEvaluationParams, 
-                                TrafficEngineeringLPSolutionParams, TrafficEngineeringLPWarmStartParams)
+from te.algorithms.base import *
 from te.algorithms.utils import get_solution_confusion_matrix, get_solution_maximum_utilization, stringify_collected_stats
-from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolutionParams, EdgeBasedMinimizeMaximumUtilitySolution
+from te.traffic_models.converters import SampledConverter, SampledTrafficMatrixConverterParams
+from te.algorithms.solution import (EdgeBasedMinimizeMaximumUtilitySolutionParams, 
+                                    EdgeBasedMinimizeMaximumUtilitySolution)
 from topologies.utils import get_uniform_tm_problem_with_capacity_heuristic
 from utils.logging import as_info, as_fail, log_subsection_title, log_section_title, str_round
 
 
-def mlu_solve_and_check(lp: TrafficEngineeringLP, eval_params: TrafficEngineeringLPEvaluationParams):
+# @dataclass
+# class MLUHelperParams:
+#     """
+#     The generic dataclass for any MLU problem.
+    
+#     Arguments
+#     ---------
+#     TELPCLS: type[TrafficEngineeringLP]
+#         The class extending `TrafficEngineeringLP` that implements the TE problem.
+#     AlgorithmSolverParams: SolverParams
+#         Solver parameters for the algorithm to run. Must subclass `SolverParams`.
+#     EvalParams: TrafficEngineeringLPEvaluationParams
+#         Evaluation parameters for checking convergence, feasibility, etc.
+#     WarmstartParams: Optional[TrafficEngineeringLPWarmStartParams]
+#         Warm start parameters. Can be `None`, in which we just run the algorithm from scratch
+#         and stop when it converges.
+#     SolutionParams: Optional[TrafficEngineeringLPSolutionParams]
+#         Parameters for saving solutions. If `None`, then solutions will not be saved.
+#     """
+#     TELPCLS: type[TrafficEngineeringLP]
+#     AlgorithmSolverParams: SolverParams
+#     EvalParams: TrafficEngineeringLPEvaluationParams
+#     WarmstartParams: Optional[TrafficEngineeringLPWarmStartParams]
+#     SolutionParams: Optional[TrafficEngineeringLPSolutionParams]
+
+# @dataclass
+# class MLUProblemDescription:
+#     EvalParams: TrafficEngineeringLPEvaluationParams
+#     Graph: nx.DiGraph
+#     TM: TrafficMatrixBase
+#     Converter: Optional[TrafficMatrixConverterBase]
+#     WarmStartParams: Optional[TrafficEngineeringLPWarmStartParams]
+#     Solution: Optional[TrafficEngineeringLPSolution]
+
+
+def solve_lp_and_report(lp: TrafficEngineeringLP):
     """
     Helper method that receives the LP object and the evaluation parameters and solves the MLU problem.
 
@@ -18,60 +53,46 @@ def mlu_solve_and_check(lp: TrafficEngineeringLP, eval_params: TrafficEngineerin
     ---------
     lp: type[TrafficEngineeringLP]
         The full LP object that we can use to solve the problem
-    eval_params: type[TrafficEngineeringLPEvaluationParams]
-        TE evaluation parameters.
     """
     t = lp.solve()
     if t > -1:
         print(as_info(log_subsection_title("CHECKING SOLUTION")))
-        lp.check(eval_params)
+        lp.check()
         print(lp.check_result)
         print(as_info(f"Solved in {str_round(t, 2)} seconds"))
         print(as_info(f"Final objective value: {str_round(lp.objective_value, 4)}"))
         print(as_info(f"Actual utilization: {str_round(get_solution_maximum_utilization(lp.assignments, lp.graph), 4)}"))
     else:
-        print(as_fail("MLU problem couldn't be solved as expected"))
+        print(as_fail("TE problem couldn't be solved as expected"))
 
 
-def mlu_helper(
-    cls: type[TrafficEngineeringLP],
-    solver_params: SolverParams, 
+def edge_based_mlu_input_helper(
     eval_params: TrafficEngineeringLPEvaluationParams,
     warmstart_params: Optional[TrafficEngineeringLPWarmStartParams] = None,
     solution_params: Optional[TrafficEngineeringLPSolutionParams] = None
-):
+) -> TrafficEngineeringProblemDescription:
     """
-    A helper for quickly creating and solving MLU problems.
+    A helper for quickly creating some (Edge-Based) MLU problem and its inputs.
     
     Arguments
     ---------
-    cls: type[TrafficEngineeringLP]
-        The TE LP _class_ to use
-    solver_params: SolverParams
-        The solver parameters for the given `cls` (it will not check if the two match
-        though, you may or may not get an exception if there is a mismatch between the
-        solver class and the parameters)
     eval_params: TrafficEngineeringLPEvaluationParams
         The set of evaluation parameters to use
     warmstart_params: Optional[TrafficEngineeringLPWarmStartParams]
         Optional set of warm-start parameters
     solution_params: Optional[TrafficEngineeringLPSolutionParams]
         Optional set of solution output parameters
+    
+    Returns
+    -------
+    mlu_problem: TrafficEngineeringProblemDescription
+        Full description of some MLU problem.
     """
-    c, graph, tm = get_uniform_tm_problem_with_capacity_heuristic(eval_params.TopologyName, eval_params.Seed, scale_factor=eval_params.ScaleFactor)
-
-    if eval_params.SaveSol:
-        mlu_solution_params = EdgeBasedMinimizeMaximumUtilitySolutionParams(
-            seed=eval_params.Seed, 
-            topology_name=eval_params.TopologyName, 
-            capacity=c,
-            tm_model_name=tm.type(), 
-            tm_model_params=tm.params,
-            path=solution_params.Path, 
-            sol_name=solution_params.Name
-        )
-    else:
-        mlu_solution_params = None
+    c, graph, tm = get_uniform_tm_problem_with_capacity_heuristic(
+        eval_params.TopologyName, 
+        eval_params.Seed, 
+        scale_factor=eval_params.ScaleFactor
+    )
 
     if warmstart_params is not None:
         print(as_info(log_section_title("MLU PROBLEM (WITH WARM-START)")))
@@ -85,38 +106,28 @@ def mlu_helper(
         converter = None
     
     print(as_info(f"Network link capacity is: {str(round(c, 2))}"))
+
+    if eval_params.SaveSol:
+        if converter is None:
+            solution = EdgeBasedMinimizeMaximumUtilitySolution(
+                EdgeBasedMinimizeMaximumUtilitySolutionParams(
+                seed=eval_params.Seed, 
+                topology_name=eval_params.TopologyName, 
+                capacity=c,
+                tm_model_name=tm.type(), 
+                tm_model_params=tm.params,
+                path=solution_params.Path, 
+                sol_name=solution_params.Name
+            ))
+        else:
+            raise NotImplementedError('Will not save solution for warm-tests for now ... (takes too much space!)')
+    else:
+        solution = None
     
-    with contextlib.closing(cls(graph, tm, solver_params)) as lp:
-        print(as_info(f"Solving With: {lp.alg_name}"))
-        print(as_info(f"Evaluating With Parameters:\n{eval_params}"))
-        print(as_info(f"Solving With Parameters:\n{solver_params}"))
-        print(as_info(log_subsection_title("MAKING TE LP")))
-        lp.make_lp()
-        print(as_info(log_subsection_title(f"SOLVING WITH: {lp.alg_name}")))
-        mlu_solve_and_check(lp, eval_params)
-        
-        if mlu_solution_params:
-            if converter is None:
-                solution = EdgeBasedMinimizeMaximumUtilitySolution(params=mlu_solution_params)
-                lp.add_solution_elements(solution)
-                solution.dump_elements()
-                solution.dump(name=mlu_solution_params.Name)
-            else:
-                raise NotImplementedError('Will not save solution for warm-tests for now ... (takes too much space!)')
-        
-        if converter is not None:
-            converted_tm = tm
-            for i in range(warmstart_params.WarmIters):
-                print(as_info(log_subsection_title(f"WARM-START ITERATION {i}")))
-                converted_tm = converter.convert(tm)
-                lp.update_traffic_matrix(converted_tm)
-                mlu_solve_and_check(lp, eval_params)
-        
-        get_solution_confusion_matrix(lp, eval_params)
-        
-        stats = stringify_collected_stats()
-        if stats is not None:
-            print(as_info(stats))
+    return TrafficEngineeringProblemDescription(
+        EvalParams=eval_params, Graph=graph, TM=tm, Converter=converter, 
+        WarmStartParams=warmstart_params, Solution= solution
+    )
 
 
 def mlu_argparser(prog_name: str) -> argparse.ArgumentParser:
@@ -270,3 +281,53 @@ def mlu_parse_args(parser: argparse.ArgumentParser) -> Tuple[
         solution_params = None
     
     return eval_params, solution_params, warm_start_params, args
+
+
+def solve_te_and_check(
+    problem: TrafficEngineeringProblemDescription, 
+    solver_cls: type[TrafficEngineeringLP], 
+    solver_params: SolverParams, 
+    *args, **kwargs
+):
+    """
+    Create the TE LP instance, solve it, and finally check it.
+    
+    Arguments
+    ---------
+    problem: TrafficEngineeringProblemDescription
+        Full TE problem input and evaluation description
+    solver_cls: type[TrafficEngineeringLP]
+        TE solver class to instantiate
+    solver_params: SolverParams
+        TE solver parameters
+    args, kwargs:
+        Extra parameters to pass to `solver_cls` constructor.
+    """
+    with contextlib.closing(solver_cls(problem, solver_params, *args, **kwargs)) as lp:
+        print(as_info(f"Solving With: {lp.alg_name}"))
+        print(as_info(f"Evaluating With Parameters:\n{problem.EvalParams}"))
+        print(as_info(f"Solving With Parameters:\n{solver_params}"))
+        print(as_info(log_subsection_title("MAKING TE LP")))
+        lp.make_lp()
+        print(as_info(log_subsection_title(f"SOLVING WITH: {lp.alg_name}")))
+        solve_lp_and_report(lp)
+
+        # TODO: Handle the solution save case for warm-starts
+        
+        if problem.Solution:
+            lp.add_and_dump_lp_solutions(problem.Solution)
+        
+        if problem.Converter is not None:
+            converted_tm = problem.TM
+            for i in range(problem.WarmStartParams.WarmIters):
+                print(as_info(log_subsection_title(f"WARM-START ITERATION {i}")))
+                converted_tm = problem.Converter.convert(converted_tm)
+                lp.update_traffic_matrix(converted_tm)
+
+                solve_lp_and_report(lp)
+        
+        get_solution_confusion_matrix(lp, problem.EvalParams)
+        
+        stats = stringify_collected_stats()
+        if stats is not None:
+            print(as_info(stats))

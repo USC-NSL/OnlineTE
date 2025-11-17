@@ -1,7 +1,7 @@
 import argparse
 from typing import Optional, Tuple, List
-from .. import ControllerRPCParams, WorkerRPCParams
-from .base import ControllerCommunicationBackendBase, WorkerCommunicationBackendBase
+from ..base import RPCParams
+from .base import SynchADMMControllerBackendBase, SynchADMMWorkerBackendBase
 from .controller_backends.udp_multicast_backend import MulticastControllerBackendParams, MulticastControllerBackend
 from .controller_backends.synchronous_grpc_backend import SynchronousgRPCControllerBackendParams, SynchronousgRPCControllerBackend
 from .controller_backends.asynchronous_grpc_backend import AsynchronousgRPCControllerBackendParams, AsynchronousgRPCControllerBackend
@@ -48,10 +48,10 @@ def parse_add_admm_synch_communication_backend_params(
     args: Optional[argparse.Namespace] = None, 
     parser: Optional[argparse.ArgumentParser] = None
 ) -> Tuple[
-    ControllerRPCParams, 
-    type[ControllerCommunicationBackendBase], 
-    List[WorkerRPCParams], 
-    type[WorkerCommunicationBackendBase], 
+    RPCParams, 
+    type[SynchADMMControllerBackendBase], 
+    List[RPCParams], 
+    type[SynchADMMWorkerBackendBase], 
     argparse.Namespace
 ]:
     assert len(addr_list) == num_workers
@@ -62,8 +62,7 @@ def parse_add_admm_synch_communication_backend_params(
     
     if args.communication_backend == 'multicast':
         MULTICAST_CONTROLLER_PARAMS = MulticastControllerBackendParams()
-        MULTICAST_CONTROLLER_PARAMS.AddressList = addr_list
-        MULTICAST_CONTROLLER_PARAMS.NumWorkers = num_workers
+        MULTICAST_CONTROLLER_PARAMS.Workers = addr_list
         MULTICAST_CONTROLLER_PARAMS.ScatterAddress = args.group
         MULTICAST_CONTROLLER_PARAMS.HostName = args.host
         MULTICAST_CONTROLLER_PARAMS.TTL = args.ttl
@@ -91,8 +90,7 @@ def parse_add_admm_synch_communication_backend_params(
         return GRPC_SYNCH_CONTROLLER_PARAMS, SynchronousgRPCControllerBackend, GRPC_WORKER_PARAMS, gRPCWorkerBackend, args
     elif args.communication_backend == 'grpc-asynch':
         GRPC_ASYNCH_CONTROLLER_PARAMS = AsynchronousgRPCControllerBackendParams()
-        GRPC_ASYNCH_CONTROLLER_PARAMS.AddressList = addr_list
-        GRPC_ASYNCH_CONTROLLER_PARAMS.NumWorkers = num_workers
+        GRPC_ASYNCH_CONTROLLER_PARAMS.Workers = addr_list
         GRPC_ASYNCH_CONTROLLER_PARAMS.Timeout = args.timeout
         GRPC_WORKER_PARAMS = [
             gRPCWorkerBackendParams(

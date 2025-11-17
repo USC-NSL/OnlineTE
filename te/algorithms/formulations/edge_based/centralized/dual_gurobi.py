@@ -5,8 +5,7 @@ from typing import List, Tuple, Optional
 from collections import defaultdict
 from gurobipy import GRB, GurobiError
 from topologies.utils import get_graph_M_matrix
-from te.algorithms.base import (TrafficEngineeringLP, SolverParams, TrafficEngineeringLPSolution, 
-                                TrafficEngineeringLPCheckResult, TrafficEngineeringLPEvaluationParams)
+from te.algorithms.base import *
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
 from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
 from te.algorithms.sub_algorithms.link_capacity_test import check_capacity_constraint
@@ -21,12 +20,12 @@ class DualGurobiTE(TrafficEngineeringLP):
     and explicitly checks the dual infesibility.
     This is mostly used for debug, but the output solution can be helpful for exact warm starts.
     """
-    def __init__(self, graph: nx.DiGraph, traffic: TrafficMatrixBase, solver_params: GurobiSolverParams) -> None:
-        super().__init__()
-        self._graph = graph
-        self._M: np.ndarray = get_graph_M_matrix(graph)
-        self._c_e: np.ndarray = np.array([item[-1] for item in graph.edges.data('capacity')])
-        self._traffic = traffic
+    def __init__(self, problem_description: TrafficEngineeringProblemDescription, solver_params: GurobiSolverParams) -> None:
+        super().__init__(problem_description, solver_params)
+        self._graph = problem_description.Graph
+        self._traffic = problem_description.TM
+        self._M: np.ndarray = get_graph_M_matrix(self._graph)
+        self._c_e: np.ndarray = np.array([item[-1] for item in self._graph.edges.data('capacity')])
         self._solver_params: GurobiSolverParams = solver_params
         self._env: gurobipy.Env = None
         self._model: gurobipy.Model = None
@@ -57,10 +56,6 @@ class DualGurobiTE(TrafficEngineeringLP):
     @property
     def traffic(self) -> TrafficMatrixBase:
         return self._traffic
-
-    @property
-    def params(self) -> SolverParams:
-        return self._solver_params
     
     @property
     def commodity_list(self) -> List[Commodity]:
@@ -209,7 +204,7 @@ class DualGurobiTE(TrafficEngineeringLP):
         if params:
             self.reset(with_params=True)
             self._params = params
-            for key, value in self.params._asdict().items():
+            for key, value in self.solver_params._asdict().items():
                 self._model.setParam(key, value)
         try:
             self._model.optimize()
@@ -227,7 +222,8 @@ class DualGurobiTE(TrafficEngineeringLP):
         else:
             return getattr(constraint, 'Pi')
 
-    def check(self, eval_params: TrafficEngineeringLPEvaluationParams):
+    def check(self):
+        eval_params = self._problem_description.EvalParams
         unsat_ratio, unsat_commodities = check_flow_conservation(
             self._X_ek, self._graph, self._commodity_list,
             eval_params

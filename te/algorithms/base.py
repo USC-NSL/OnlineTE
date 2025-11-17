@@ -6,12 +6,13 @@ import networkx as nx
 import te.constants
 import dataclasses
 import matplotlib.pyplot as plt
+from itertools import count
 from typing import List, Optional, Tuple, Dict, Union, Any, Set
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from te.algorithms import SOLUTION_DIR
 from utils.logging import LINE_SEPARATOR_LENGTH, as_success, as_fail
-from te.traffic_models.base import TrafficMatrixBase, TrafficMatrixConverterParamsBase, Commodity
+from te.traffic_models.base import TrafficMatrixBase, TrafficMatrixConverterBase, TrafficMatrixConverterParamsBase, Commodity
 
 
 TE_SOLUTION_POSTFIX = '.tesol'
@@ -93,9 +94,13 @@ class SolverParams(ABC):
     
     def get_fields_up_to_level(self, level: int):
         ancestor_class = self.__class__
-        for i in range(level+1):
+        if level < 0:
+            it = count()
+        else:
+            it = range(level+1)
+        for i in it:
             ancestor_class = ancestor_class.__base__
-            if ancestor_class == ABC.__class__:
+            if ancestor_class == ABC:
                 ancestor_fields = []
                 break
             else:
@@ -113,6 +118,11 @@ class SolverParams(ABC):
     
     @classmethod
     def _list_or_tuple_to_str(cls, items: Union[List, Tuple]) -> Union[str, List[str]]:
+        if len(items) == 0:
+            if isinstance(items, list):
+                return '[]'
+            else:
+                return '()'
         example = items[0]
         if isinstance(example, (int, float, bool, str)):
             # Multiple things on a single line ...
@@ -169,13 +179,16 @@ class SolverParams(ABC):
     def __str__(self) -> str:
         return self.stringify_up_to_level(0)
     
-    def stringify_up_to_level(self, level: int):
+    def stringify_up_to_level(self, level: int) -> str:
         return '\n'.join(
             [self.line] +
             [self._field_to_string(key, value)
                 for key, value in self.get_fields_up_to_level(level).items()] +
             [self.line]
         )
+    
+    def str_all(self) -> str:
+        return self.stringify_up_to_level(-1)
 
 
 @dataclass(frozen=True)
@@ -389,8 +402,20 @@ class TrafficEngineeringLPObjectiveTrace:
 
 
 class TrafficEngineeringLPSolution(ABC):
-    def dump(self, name: str, path: str = None):
-        path = path if path is not None else os.path.join(SOLUTION_DIR, name)
+    @abstractmethod
+    def __init__(self, params: Optional[TrafficEngineeringLPSolutionParams] = None):
+        super().__init__()
+        self._params = params
+
+    @property
+    def params(self) -> TrafficEngineeringLPSolutionParams:
+        return self._params
+
+    def dump(self, name: Optional[str] = None, path: Optional[str] = None):
+        name = name if name is not None else self._params.Name
+        # TODO: This does not seem right!
+        # path = path if path is not None else os.path.join(SOLUTION_DIR, name)
+        path = path if path is not None else self._params.Path
         with open(path, 'wb') as f:
             pickle.dump(self, f)
     
@@ -413,9 +438,60 @@ class TrafficEngineeringLPSolution(ABC):
     @abstractmethod
     def get_solution_element_by_name(self, name: str) -> SolutionElementBase:
         """Get a solution element by name"""
+    
+    @abstractmethod
+    def dump_elements(self):
+        """Dump solution elements one-by-one"""
+
+
+@dataclass
+class TrafficEngineeringProblemDescription:
+    """
+    A full description of a TE problem and its required outputs.
+    This can be passed to any TE solver to get the full description of the 
+    problem; other parameters need only describe the solver properties.
+
+    Attributes
+    ----------
+    EvalParams: TrafficEngineeringLPEvaluationParams
+        Evaluation parameters, instructing the LP class about how optimal
+        the solution need be and how much infeasibility are we willing to
+        tolerate.
+    Graph: nx.DiGraph
+        The topology as a directed graph. Each edge must have a `capacity`
+        attribute as a floating point number.'
+    TM: TrafficMatrixBase
+        The traffic matrix.
+    Converter: Optional[TrafficMatrixConverterBase] = None
+        The traffic matrix converter that can change the current traffic
+        matrix into a new one to see if we can handle incremental problems.
+    WarmStartParams: Optional[TrafficEngineeringLPWarmStartParams] = None
+        Warm start parameters (e.g. how many TM conversion rounds must
+        be done).
+    Solution: Optional[TrafficEngineeringLPSolution] = None
+        The TE solution object used to add and save solution elements.
+    """
+    EvalParams: TrafficEngineeringLPEvaluationParams
+    Graph: nx.DiGraph
+    TM: TrafficMatrixBase
+    Converter: Optional[TrafficMatrixConverterBase] = None
+    WarmStartParams: Optional[TrafficEngineeringLPWarmStartParams] = None
+    Solution: Optional[TrafficEngineeringLPSolution] = None
 
 
 class TrafficEngineeringLP(ABC):
+    @abstractmethod
+    def __init__(self, problem_description: TrafficEngineeringProblemDescription, 
+                 solver_params: SolverParams):
+        super().__init__()
+        self._problem_description = problem_description
+        self._solver_params = solver_params
+
+    @property
+    def problem_description(self) -> TrafficEngineeringProblemDescription:
+        """TE problem description object"""
+        return self._problem_description
+
     @property
     @abstractmethod
     def alg_name(cls) -> str:
@@ -437,9 +513,9 @@ class TrafficEngineeringLP(ABC):
         """List of input commodities"""
 
     @property
-    @abstractmethod
-    def params(self) -> SolverParams:
+    def solver_params(self) -> SolverParams:
         """Solver parameters"""
+        return self._solver_params
 
     @property
     @abstractmethod
@@ -519,11 +595,10 @@ class TrafficEngineeringLP(ABC):
         """
 
     @abstractmethod
-    def check(self, eval_params: TrafficEngineeringLPEvaluationParams):
+    def check(self):
         """
         Performs sanity checks on the current solution and cache the summary of the checks.
         This result should be stored in the `check_result` property.
-        The properties of `eval_params` determines how strict the checks are.
         """
 
     @abstractmethod
@@ -543,3 +618,17 @@ class TrafficEngineeringLP(ABC):
         """
         Add solution elements to a given TE solution instance
         """
+
+    def add_and_dump_lp_solutions(self, solution: TrafficEngineeringLPSolution):
+        self.add_solution_elements()
+        solution.dump_elements()
+        solution.dump()
+
+
+__all__ = [
+    'SolverParams', 'TrafficEngineeringLPEvaluationParams',
+    'TrafficEngineeringLPWarmStartParams', 'TrafficEngineeringLPSolutionParams',
+    'TrafficEngineeringLPCheckResult', 'TrafficEngineeringLPSolution',
+    'TrafficEngineeringProblemDescription', 'TrafficEngineeringLP',
+    'TrafficEngineeringLPObjectiveTrace'
+]

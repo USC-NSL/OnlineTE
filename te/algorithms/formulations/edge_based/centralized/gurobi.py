@@ -4,8 +4,7 @@ import networkx as nx
 from typing import List, Tuple, Optional
 from collections import defaultdict
 from gurobipy import GRB, GurobiError
-from te.algorithms.base import (TrafficEngineeringLP, SolverParams, TrafficEngineeringLPSolution, 
-                                TrafficEngineeringLPCheckResult, TrafficEngineeringLPEvaluationParams)
+from te.algorithms.base import *
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
 from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
 from te.algorithms.sub_algorithms.link_capacity_test import check_capacity_constraint
@@ -19,10 +18,10 @@ class GurobiTE(TrafficEngineeringLP):
     An honest implementation of edge-based MLU with Gurobi.
     Becomes too sluggish for very large topologies, but solutions look very nice.
     """
-    def __init__(self, graph: nx.DiGraph, traffic: TrafficMatrixBase, solver_params: GurobiSolverParams) -> None:
-        super().__init__()
-        self._graph = graph
-        self._traffic = traffic
+    def __init__(self, problem_description: TrafficEngineeringProblemDescription, solver_params: GurobiSolverParams) -> None:
+        super().__init__(problem_description, solver_params)
+        self._graph = problem_description.Graph
+        self._traffic = problem_description.TM
         self._solver_params: GurobiSolverParams = solver_params
         self._env: gurobipy.Env = None
         self._model: gurobipy.Model = None
@@ -47,10 +46,6 @@ class GurobiTE(TrafficEngineeringLP):
     @property
     def traffic(self) -> TrafficMatrixBase:
         return self._traffic
-
-    @property
-    def params(self) -> SolverParams:
-        return self._solver_params
     
     @property
     def commodity_list(self) -> List[Commodity]:
@@ -222,7 +217,7 @@ class GurobiTE(TrafficEngineeringLP):
         if params:
             self.reset(with_params=True)
             self._params = params
-            for key, value in self.params._asdict().items():
+            for key, value in self.solver_params._asdict().items():
                 self._model.setParam(key, value)
         try:
             self._model.optimize()
@@ -234,7 +229,8 @@ class GurobiTE(TrafficEngineeringLP):
             print(as_fail(f'Error code {e.errno}: {e}'))
             return -1
 
-    def check(self, eval_params: TrafficEngineeringLPEvaluationParams):
+    def check(self):
+        eval_params = self._problem_description.EvalParams
         unsat_ratio, unsat_commodities = check_flow_conservation(
             self._X_ek, self._graph, self._commodity_list,
             eval_params

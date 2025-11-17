@@ -1,11 +1,15 @@
 from abc import abstractmethod
 from typing import Tuple, Optional, Callable
-from te.algorithms.formulations.edge_based.distributed.base import ControllerCommunicationBackendBase, WorkerCommunicationBackendBase
+from ..base import CommunicationBackendBase
 from te.algorithms.array_utils.cpu_utils import CPUArray, BooleanCPUArray
 from te.algorithms.base import SolverParams
 
 
-class SynchADMMControllerBackendBase(ControllerCommunicationBackendBase):
+class SynchADMMControllerBackendBase(CommunicationBackendBase):
+    # For the synchronous case, there is only one controller!
+    def are_all_peers_reachable(self):
+        return True
+    
     @abstractmethod
     def initialize_worker_nodes(self, solver_params: SolverParams, basis: CPUArray, initial_feasible_solution: CPUArray,
                                 in_out_mask: Optional[BooleanCPUArray] = None):
@@ -36,7 +40,13 @@ class SynchADMMControllerBackendBase(ControllerCommunicationBackendBase):
         """Set total number of active commodities in the network (needed for local updates)"""
 
 
-class SynchADMMWorkerBackendBase(WorkerCommunicationBackendBase):
+class SynchADMMWorkerBackendBase(CommunicationBackendBase):
+    # These workers never directly reach-out to any node, they are passive
+    def are_all_peers_reachable(self):
+        return True
+    def are_all_workers_reachable(self):
+        return True
+
     @property
     def set_initial_feasible_solution(self) -> Callable[[CPUArray], None]:
         return self._set_initial_feasible_solution

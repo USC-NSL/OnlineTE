@@ -15,7 +15,8 @@ PROTOS = [
     'distributed_lp',
     'regularized_admm',
     'asynchronous_lp',
-    'path_based_distributed_lp'
+    'path_based_distributed_lp',
+    'hierarchical_lp'
 ]
 
 def make_proto_dir(proto: str) -> Tuple[str, str]:

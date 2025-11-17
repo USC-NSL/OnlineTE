@@ -21,10 +21,11 @@ class GurobiMLUParams(GurobiSolverParams):
 
 
 class GurobiMLU(ControllerMLUSolver):
-    def __init__(self, num_edges: int, capacities: CPUArray, solver_params: GurobiMLUParams):
+    def __init__(self, num_edges: int, capacities: CPUArray, solver_params: GurobiMLUParams, num_domains: int = 1):
         self._num_edges: int = num_edges
         self._capacities: CPUArray = capacities
         self._solver_params = solver_params
+        self._num_domains = num_domains
 
         self._env: gurobipy.Env = None
         self._double_precision_capacities: np.ndarray = np.array(capacities, dtype=np.float64)
@@ -56,6 +57,9 @@ class GurobiMLU(ControllerMLUSolver):
     def solver_params(self) -> GurobiSolverParams:
         return self._solver_params
     @property
+    def num_domains(self) -> int:
+        return self._num_domains
+    @property
     def is_solved(self) -> bool:
         return self._solved
 
@@ -63,6 +67,7 @@ class GurobiMLU(ControllerMLUSolver):
         assert self._model_controller is None
         
         NUM_EDGES = self.num_edges
+        NUM_DOMAISN = self.num_domains
 
         ENV = gurobipy.Env()
         ENV.setParam('OutputFlag', 0)
@@ -73,7 +78,7 @@ class GurobiMLU(ControllerMLUSolver):
         MODEL_CONTROLLER: gurobipy.Model = \
             make_model('EdgeBasedDistributedTE_Controller', params=PARAMS, env=ENV)
         
-        self._Z_e = MODEL_CONTROLLER.addVars(NUM_EDGES, lb=float('-inf'), vtype=GRB.CONTINUOUS, name='Z_E')
+        self._Z_e = MODEL_CONTROLLER.addVars(NUM_EDGES * NUM_DOMAISN, lb=float('-inf'), vtype=GRB.CONTINUOUS, name='Z_E')
         self._utility = MODEL_CONTROLLER.addVar(lb=0.0, ub=1.0, vtype=GRB.CONTINUOUS, name='U')
 
         print(as_info(f"Gurobi objective convergence tolerance: {PARAMS.ConvTol}"))
@@ -86,6 +91,8 @@ class GurobiMLU(ControllerMLUSolver):
         Z_E = self._Z_e
         UTILITY = self._utility
         MODEL_CONTROLLER = self._model_controller
+        NUM_EDGES = self.num_edges
+        NUM_DOMAINS = self.num_domains
 
         # Utilization bound constraints
         u_low = MODEL_CONTROLLER.addConstr(UTILITY >= 0)
@@ -93,8 +100,12 @@ class GurobiMLU(ControllerMLUSolver):
         self._utility_bound_constraints = (u_low, u_high)
 
         capacity_constraints: List[gurobipy.Constr] = []
-        for e in range(self.num_edges):
-            capacity_constraints.append(MODEL_CONTROLLER.addConstr(UTILITY * C[e] >= Z_E[e]))
+        for e in range(NUM_EDGES):
+            expr = gurobipy.LinExpr()
+            expr.addTerms(C[e], UTILITY)
+            for d in range(NUM_DOMAINS):
+                expr.addTerms(-1, Z_E[e + d * NUM_EDGES])
+            capacity_constraints.append(MODEL_CONTROLLER.addConstr(expr >= 0))
         self._capacity_constraints = capacity_constraints
     
     def _add_objective(self):
@@ -106,6 +117,7 @@ class GurobiMLU(ControllerMLUSolver):
 
     def _update_controller_objective(self):
         NUM_EDGES = self._num_edges
+        NUM_DOMAINS = self.num_domains
         UTILITY = self._utility
         Z_E = self._Z_e
         F_M_E = self._current_F
@@ -115,8 +127,8 @@ class GurobiMLU(ControllerMLUSolver):
         
         OBJECTIVE_CONTROLLER = gurobipy.QuadExpr()
         OBJECTIVE_CONTROLLER.addTerms(ALPHA, UTILITY)
-        for e in range(NUM_EDGES):
-            OBJECTIVE_CONTROLLER += (RHO/2) * (F_M_E[e] - Z_E[e]) ** 2
+        for i in range(NUM_EDGES * NUM_DOMAINS):
+            OBJECTIVE_CONTROLLER += (RHO/2) * (F_M_E[i] - Z_E[i]) ** 2
         MODEL_CONTROLLER.setObjective(OBJECTIVE_CONTROLLER, GRB.MINIMIZE)
         self._objective_controller = OBJECTIVE_CONTROLLER
 
@@ -139,7 +151,7 @@ class GurobiMLU(ControllerMLUSolver):
             self._model_controller.resetParams()
     
     def update_F_m(self, new_F: CPUArray):
-        self._current_F = np.array(new_F, dtype=np.float64)
+        self._current_F = np.array(new_F, dtype=np.float64).flatten()
         self._solved = False
         self._update_controller_objective()    
 
@@ -152,6 +164,11 @@ class GurobiMLU(ControllerMLUSolver):
             raise ControllerMLUException('Gurobi', e)
         U = self._utility
         Z_E = self._Z_e
+        N = self.num_edges
+        D = self.num_domains
         self._current_u = cpu_cast_float(U.X)
-        self._current_Z = cpu_array([Z_E[e].X for e in range(self.num_edges)])
+        if self.num_domains > 1:
+            self._current_Z = cpu_array([Z_E[i].X for i in range(N * D)]).reshape((D, N))
+        else:
+            self._current_Z = cpu_array([Z_E[e].X for e in range(N)])
         self._solved = True

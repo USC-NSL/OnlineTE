@@ -35,6 +35,34 @@ def parse_mlu_backend_params(
     args: Optional[argparse.Namespace] = None, 
     parser: Optional[argparse.ArgumentParser] = None
 ) -> Tuple[SolverParams, type[ControllerMLUSolver], argparse.Namespace]:
+    """
+    Parse all MLU backend arguments and output the parameters and class for
+    the selected backend.
+
+    Arguments
+    ---------
+    args: Optional[argparse.Namespace] = Non
+        The parsed arguments from the parser
+    parser: Optional[argparse.ArgumentParser] = None
+        The full parser object, which we use to parse the arguments
+    
+    Returns
+    -------
+    MLU_PARAMS: SolverParams
+        Appropriate solver parameters for the selected backend (i.e. 
+        `gurobi`, `pdlp`, etc.)
+    MLUCLS: type[ControllerMLUSolver]
+        Appropriate solver class that implements the backend for the
+        above parameters.
+    args: argparse.Namespace
+        Remaning parsed arguments (will be the same as `args` if it is
+        not `None`)
+    
+    Notes
+    -----
+    If `args` and `parser` are both `None`, this raises an `AssertionError`. 
+    Specify `args` to prevent the arguments from being parsed again.
+    """
     if args is None:
         assert parser is not None
         args = parser.parse_args()

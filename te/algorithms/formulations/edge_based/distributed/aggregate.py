@@ -1,34 +1,59 @@
 from typing import Tuple, Dict
 from te.algorithms.base import SolverParams
-from . import ControllerRPCParams, WorkerRPCParams
-from .base import ControllerNodeBase, WorkerNodeBase, ControllerNodeParams, WorkerNodeParams
+from .base import DistributedSolverNodeBase
 from .admm_synchronous import SynchADMMSolverParams
 from .admm_synchronous.controller import SynchADMMControllerNode
 from .admm_synchronous.worker import SynchADMMWorkerNode
 from .admm_synchronous.helper import add_admm_synch_communication_backend_subparser, parse_add_admm_synch_communication_backend_params
-from .helper import (multiprocess_mlu_helper, distributed_mlu_helper, distributed_mlu_argparser, distributed_mlu_parse_args, 
-                     MultiprocessMLUHelperParams, DistributedMLUHelperParams)
+from .admm_hierarchical import HierarchicalADMMSolverParams
+from .admm_hierarchical.master import MasterNode
+from .admm_hierarchical.domain import DomainControllerNode
+from .admm_hierarchical.worker import DomainWorkerNode
+from .helper import (single_controller_multiprocess_mlu_helper, distributed_mlu_helper, distributed_mlu_argparser, 
+                     distributed_mlu_parse_args, hierarchical_multiprocess_mlu_helper,
+                     DistributedMLUHelperParams, SingleControllerMultiprocessMLUHelperParams, HierarchicalMultiprocessMLUHelperParams)
 
 
-DistributedSolver = Tuple[type[ControllerNodeBase], type[WorkerNodeBase], type[ControllerRPCParams], type[WorkerRPCParams], type[SolverParams]]
+DistributedSolver = Tuple[
+    type[DistributedSolverNodeBase], 
+    type[DistributedSolverNodeBase], 
+    type[SolverParams]
+]
+
+HierarchicalSolver = Tuple[
+    type[DistributedSolverNodeBase], 
+    type[DistributedSolverNodeBase],
+    type[DistributedSolverNodeBase], 
+    type[SolverParams]
+]
 
 
 AVAILABLE_SOLVERS: Dict[str, DistributedSolver] = {
-    'admm-synch': (SynchADMMControllerNode, SynchADMMWorkerNode, ControllerRPCParams, WorkerRPCParams, SynchADMMSolverParams)
+    'admm-synch': (SynchADMMControllerNode, SynchADMMWorkerNode, SynchADMMSolverParams),
+    'admm-hier':  (MasterNode, DomainControllerNode, DomainWorkerNode, HierarchicalADMMSolverParams)
 }
 """
 Avaialble solvers are:
-    - **admm-synch**: (`SynchADMMControllerNode`, `SynchADMMWorkerNode`, `ControllerRPCParams`, `WorkerRPCParams`, `SynchADMMSolverParams`)
+    - **admm-synch**: (`SynchADMMControllerNode`, `SynchADMMWorkerNode`, `SynchADMMSolverParams`)
 """
 
 
 __all__ = [
     'AVAILABLE_SOLVERS',
     'SynchADMMControllerNode', 'SynchADMMWorkerNode', 
-    'ControllerNodeParams', 'WorkerNodeParams',
-    'ControllerRPCParams', 'WorkerRPCParams', 'SynchADMMSolverParams',
-    'multiprocess_mlu_helper', 'distributed_mlu_helper',
+    'MasterNode', 'DomainControllerNode', 'DomainWorkerNode',
+    'SynchADMMSolverParams', 'HierarchicalADMMSolverParams',
+    # Generic solver function
+    'distributed_mlu_helper',
+    # Local version of the distributed solver
+    'single_controller_multiprocess_mlu_helper', 
+    # Local version of the hierarchical solver
+    'hierarchical_multiprocess_mlu_helper',
+    # Argument parsers
     'distributed_mlu_argparser', 'distributed_mlu_parse_args',
     'add_admm_synch_communication_backend_subparser', 'parse_add_admm_synch_communication_backend_params',
-    'MultiprocessMLUHelperParams', 'DistributedMLUHelperParams'
+    # Parameter bundles
+    'DistributedMLUHelperParams',
+    'SingleControllerMultiprocessMLUHelperParams',
+    'HierarchicalMultiprocessMLUHelperParams'   
 ]

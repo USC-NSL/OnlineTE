@@ -66,3 +66,11 @@ DEFAULT_TAU_INC = 2
 DEFAULT_TAU_DEC = 2
 DEFAULT_BIG_GAMMA = 1e-4
 DEFAULT_BIG_THETA = 1e-2
+
+
+# Distributed implementation specific
+"""
+Can be used to bind RPC servers when spawning a lone node on just one
+independent machine.
+"""
+DEFAULT_RPC_PORT = 13000

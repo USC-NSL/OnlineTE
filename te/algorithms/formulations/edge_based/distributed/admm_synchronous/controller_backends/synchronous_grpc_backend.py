@@ -8,9 +8,9 @@ from te.algorithms.array_utils.cpu_utils import CPUArray, BooleanCPUArray
 from .. import SynchADMMSolverParams
 from ... import ControllerRPCParams
 from ..base import ControllerCommunicationBackendBase
-from ..utils import (serialized_message_to_array, array_to_serialized_message,
-                     chunk_big_array, rebuild_chunked_array,
-                     GRPC_ARRAY_STREAM_MAX_LEN)
+from ...utils import (serialized_message_to_array, array_to_serialized_message,
+                      chunk_big_array, rebuild_chunked_array,
+                      GRPC_ARRAY_STREAM_MAX_LEN)
 
 import protos.distributed_lp.distributed_lp_pb2 as distributed_lp_messages
 from protos.distributed_lp.distributed_lp_pb2_grpc import DistributedADMMSolverStub

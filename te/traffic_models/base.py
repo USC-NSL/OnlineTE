@@ -191,6 +191,12 @@ class TrafficMatrixConverterBase(ABC):
         assert self._type is not None
         super().__init__()
         self._seed = seed
+        self._params = params
+    
+    @property
+    @abstractmethod
+    def params(self) -> TrafficMatrixConverterParamsBase:
+        return self._params
     
     @classmethod
     def type(cls) -> str:

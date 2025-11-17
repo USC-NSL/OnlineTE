@@ -33,6 +33,10 @@ class ControllerMLUSolver(ABC):
         """MLU Solver Parameters"""
     @property
     @abstractmethod
+    def num_domains(self) -> int:
+        """Number of domains"""
+    @property
+    @abstractmethod
     def is_solved(self) -> bool:
         """Check if the model has been solved to completion given the curren `F` vector"""
     

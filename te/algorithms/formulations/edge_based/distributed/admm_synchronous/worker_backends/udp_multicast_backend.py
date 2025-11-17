@@ -7,10 +7,10 @@ from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
 from ..base import SynchADMMWorkerBackendBase
 from .. import SynchADMMSolverParams
-from ... import WorkerRPCParams
-from ..utils import (serialized_message_to_array, array_to_serialized_message,
-                     rebuild_chunked_array, chunk_big_array, get_optional_field,
-                     GRPC_ARRAY_STREAM_MAX_LEN)
+from ...base import RPCParams
+from ...utils import (serialized_message_to_array, array_to_serialized_message,
+                      rebuild_chunked_array, chunk_big_array, get_optional_field,
+                      GRPC_ARRAY_STREAM_MAX_LEN)
 from ..controller_backends.udp_multicast_backend import TLVRPCMessages
 
 import protos.array.array_pb2 as array_messages
@@ -19,7 +19,8 @@ from google.protobuf.empty_pb2 import Empty
 
 
 @dataclass
-class MulticastWorkerBackendParams(WorkerRPCParams):
+class MulticastWorkerBackendParams(RPCParams):
+    NumThreads: int = 1
     ScatterAddress: str = '224.0.0.10'
     ScatterPort: int = 12000
     Timeout: float = 5.0
@@ -31,7 +32,6 @@ class MulticastWorkerBackendParams(WorkerRPCParams):
 class MulticastWorkerBackend(SynchADMMWorkerBackendBase):
     def __init__(self, rpc_params: MulticastWorkerBackendParams):
         super().__init__(rpc_params)
-        self._rpc_params = rpc_params
 
         self._server: Optional[grpc.Server] = None
         self._listener: Optional[NetworkWorkerNodeListener] = None
@@ -51,7 +51,7 @@ class MulticastWorkerBackend(SynchADMMWorkerBackendBase):
     
     @property
     def worker_id(self) -> int:
-        return self._rpc_params.WorkerID
+        return self._rpc_params.PeerIndex
 
     @property
     def current_xid(self) -> int:
@@ -62,9 +62,8 @@ class MulticastWorkerBackend(SynchADMMWorkerBackendBase):
 
     def _initialize_listener(self):
         assert self._server is None and self._listener is None
-        RPC_PARAMS = self._rpc_params
-        IP = RPC_PARAMS.IP
-        PORT = RPC_PARAMS.Port
+        RPC_PARAMS: MulticastWorkerBackendParams = self._rpc_params
+        IP, PORT = RPCParams.get_bind_address()
         self._server = grpc.server(thread_pool=ThreadPoolExecutor(max_workers=RPC_PARAMS.NumThreads))
         self._listener = NetworkWorkerNodeListener(self)
         add_DistributedADMMSolverServicer_to_server(self._listener, self._server)

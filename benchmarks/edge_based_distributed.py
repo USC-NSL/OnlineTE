@@ -53,8 +53,8 @@ if __name__ == '__main__':
         parse_add_admm_synch_communication_backend_params(num_workers, addr_list, args)
     
     if args.local:
-        multiprocess_mlu_helper(MultiprocessMLUHelperParams(
-            ControllerCLS=CONTROLLER_CLS,
+        single_controller_multiprocess_mlu_helper(SingleControllerMultiprocessMLUHelperParams(
+            TELPCLS=CONTROLLER_CLS,
             MLUCLS=MLU_BACKEND_CLS,
             ControllerBackendCLS=CONTROLLER_COMMUNICATION_CLS,
             AlgorithmSolverParams=ALGORITHM_SOLVER_PARAMS,
@@ -69,7 +69,7 @@ if __name__ == '__main__':
         ))
     else:
         distributed_mlu_helper(DistributedMLUHelperParams(
-            ControllerCLS=CONTROLLER_CLS,
+            TELPCLS=CONTROLLER_CLS,
             MLUCLS=MLU_BACKEND_CLS,
             ControllerBackendCLS=CONTROLLER_COMMUNICATION_CLS,
             AlgorithmSolverParams=ALGORITHM_SOLVER_PARAMS,

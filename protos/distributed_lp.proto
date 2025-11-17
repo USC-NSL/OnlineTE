@@ -18,13 +18,6 @@ service DistributedADMMSolver {
     rpc Close(google.protobuf.Empty) returns (google.protobuf.Empty) {}
 }
 
-message InitMessage {
-    SerializedNumpyArrayMessage NULL_M = 1;
-    optional SerializedNumpyArrayMessage P_bar_t = 2;
-    optional SerializedNumpyArrayMessage u_t = 3;
-    optional SerializedNumpyArrayMessage Y_bar_t = 4;
-}
-
 message UpdateMessage {
     SerializedNumpyArrayMessage P_bar_t = 1;
     SerializedNumpyArrayMessage u_t = 2;

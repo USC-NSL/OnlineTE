@@ -26,18 +26,19 @@ Just like Gurobi, PDLP expects double-precision arrays ...
 
 
 class PDLPMLU(ControllerMLUSolver):
-    def __init__(self, num_edges: int, capacities: CPUArray, solver_params: PDLPMLUParams):
+    def __init__(self, num_edges: int, capacities: CPUArray, solver_params: PDLPMLUParams, num_domains: int = 1):
         self._num_edges: int = num_edges
         self._capacities: np.ndarray = np.array(capacities, dtype=np.float64)
         self._solver_params = solver_params
+        self._num_domains = num_domains
 
         self._current_F: np.ndarray = None
         self._solved: bool = False
         self._lp: Optional[pdlp.QuadraticProgram] = None
         self._pdlp_params: Optional[solvers_pb2.PrimalDualHybridGradientParams] = None
 
-        # `Z` has length `N` and we need one more variable for `u`
-        self._NUM_VARIABLES: int = num_edges + 1
+        # `Z` has length `N * d` and we need one more variable for `u`
+        self._NUM_VARIABLES: int = num_edges * num_domains + 1
         # `N` capacity constraints are needed
         self._NUM_CONSTRAINTS: int = num_edges
 
@@ -57,6 +58,9 @@ class PDLPMLU(ControllerMLUSolver):
     def solver_params(self) -> PDLPMLUParams:
         return self._solver_params
     @property
+    def num_domains(self) -> int:
+        return self._num_domains
+    @property
     def is_solved(self) -> bool:
         return self._solved
     
@@ -73,8 +77,11 @@ class PDLPMLU(ControllerMLUSolver):
     def _get_capacity_constraint_matrix(self) -> np.ndarray:
         coeff = np.zeros(shape=(self.num_edges, self._NUM_VARIABLES))
 
-        for e in range(self.num_edges):
-            coeff[e, e] = 1.0
+        N = self.num_edges
+        D = self.num_domains
+        for e in range(N):
+            for d in range(D):
+                coeff[e, e + d*N] = 1.0
             coeff[e, -1] = -self.capacities[e]
         
         return coeff
@@ -93,11 +100,11 @@ class PDLPMLU(ControllerMLUSolver):
     def _get_objective_vector(self) -> np.ndarray:
         out = np.zeros((self._NUM_VARIABLES,))
         out[:-1] = -self._current_F * self._solver_params._Rho
-        out[-1] = self._solver_params._Alpha
+        out[-1] = self._solver_params._Alpha * self.num_domains
         return out
 
     def update_F_m(self, new_F: CPUArray):
-        self._current_F = np.array(new_F, dtype=np.float64)
+        self._current_F = np.array(new_F, dtype=np.float64).flatten()
         self._solved = False
         self._lp.objective_vector = self._get_objective_vector()
     
@@ -141,6 +148,8 @@ class PDLPMLU(ControllerMLUSolver):
         return cpu_cast_float(self._last_result.primal_solution[-1])
     @property
     def current_Z(self) -> CPUArray:
+        if self.num_domains > 1:
+            return cpu_array(self._last_result.primal_solution[:-1]).reshape((self.num_domains, self.num_edges))
         return cpu_array(self._last_result.primal_solution[:-1])
     
     def close(self):

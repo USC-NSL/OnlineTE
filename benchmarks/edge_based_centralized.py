@@ -1,4 +1,4 @@
-from te.algorithms.formulations.helper_base import mlu_helper, mlu_argparser, mlu_parse_args
+from te.algorithms.formulations.helper_base import edge_based_mlu_input_helper, mlu_argparser, mlu_parse_args, solve_te_and_check
 from te.algorithms.formulations.edge_based.centralized.aggregate import *
 
 
@@ -48,10 +48,12 @@ if __name__ == '__main__':
     else:
         raise ValueError(f'Invalid solver name: {args.solver}.\nAvailable solvers are: {list(AVAILABLE_SOLVERS.keys())}')
 
+    problem = edge_based_mlu_input_helper(eval_params, warm_start_params, solution_params)
+
     if args.solver == 'gurobi':
-        mlu_helper(GurobiTE, GUROBI_PARAMS, eval_params, warm_start_params, solution_params)
+        solve_te_and_check(problem, GurobiTE, GUROBI_PARAMS)
     elif args.solver == 'gurobi-dual':
-        mlu_helper(DualGurobiTE, GUROBI_PARAMS, eval_params, warm_start_params, solution_params)
+        solve_te_and_check(problem, DualGurobiTE, GUROBI_PARAMS)
     else:
         assert args.solver == 'pdlp'
-        mlu_helper(PDLPTE, PDLP_PARAMS, eval_params, warm_start_params, solution_params)
+        solve_te_and_check(problem, PDLPTE, PDLPParams)
