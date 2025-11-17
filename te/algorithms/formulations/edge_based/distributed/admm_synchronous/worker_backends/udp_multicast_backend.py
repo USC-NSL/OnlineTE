@@ -63,7 +63,7 @@ class MulticastWorkerBackend(SynchADMMWorkerBackendBase):
     def _initialize_listener(self):
         assert self._server is None and self._listener is None
         RPC_PARAMS: MulticastWorkerBackendParams = self._rpc_params
-        IP, PORT = RPCParams.get_bind_address()
+        IP, PORT = RPC_PARAMS.get_bind_address()
         self._server = grpc.server(thread_pool=ThreadPoolExecutor(max_workers=RPC_PARAMS.NumThreads))
         self._listener = NetworkWorkerNodeListener(self)
         add_DistributedADMMSolverServicer_to_server(self._listener, self._server)

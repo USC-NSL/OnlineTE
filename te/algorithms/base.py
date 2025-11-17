@@ -482,8 +482,8 @@ class TrafficEngineeringProblemDescription:
 class TrafficEngineeringLP(ABC):
     @abstractmethod
     def __init__(self, problem_description: TrafficEngineeringProblemDescription, 
-                 solver_params: SolverParams):
-        super().__init__()
+                 solver_params: SolverParams, **kwargs):
+        super().__init__(**kwargs)
         self._problem_description = problem_description
         self._solver_params = solver_params
 

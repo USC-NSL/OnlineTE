@@ -126,7 +126,6 @@ class SynchADMMWorkerNode(DistributedSolverNodeBase):
 
 
 if __name__ == '__main__':
-    import socket
     import argparse
     import te.constants
     from utils.logging import as_fail
@@ -134,7 +133,7 @@ if __name__ == '__main__':
     from .worker_backends.grpc_backend import gRPCWorkerBackend, gRPCWorkerBackendParams
 
     parser =argparse.ArgumentParser('Spawn A Worker Node')
-    parser.add_argument('worker-id', type=int, help='Worker ID')
+    parser.add_argument('worker_id', type=int, help='Worker ID')
     parser.add_argument('--multicast', action='store_true', help='Use UDP Multicast backend')
     parser.add_argument('--hostname', help='Hostname to use')
     parser.add_argument('--port', type=int, help='Port number to bind to')
@@ -160,20 +159,16 @@ if __name__ == '__main__':
 
     if not args.multicast:
         rpc_params = gRPCWorkerBackendParams(
-            IP=socket.gethostbyname(hostname), 
-            Port=te.constants.DEFAULT_RPC_PORT + worker_id,
-            WorkerID=worker_id
+            PeerIndex=worker_id, Peers=tuple([(hostname, port)])
         )
         rpc_cls = gRPCWorkerBackend
     else:
         rpc_params = MulticastWorkerBackendParams(
-            IP=socket.gethostbyname(hostname), 
-            Port=te.constants.DEFAULT_RPC_PORT + worker_id,
-            WorkerID=worker_id
+            PeerIndex=worker_id, Peers=tuple([(hostname, port)])
         )
         rpc_cls = MulticastWorkerBackend
     
-    print(f'RPC Parameters:\n{rpc_params}')
+    print(f'RPC Parameters:\n{rpc_params.str_all()}')
     SynchADMMWorkerNode.spawn_and_run(DistributedSolverNodeParams(
         CommunicationBackendCLS=rpc_cls, RPCParams_=rpc_params
     ))

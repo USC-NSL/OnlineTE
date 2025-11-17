@@ -8,7 +8,6 @@ from te.algorithms.base import *
 from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
 from topologies.utils import get_graph_M_matrix, get_adjacency_null_space, get_commodity_in_out_mask
-# from topologies.utils import get_symbolic_graph_M_matrix
 from utils.exceptions import SolutionInterrupted
 from utils.logging import as_info, as_success, log_subsection_separator, ShortTQDM
 from te.algorithms.array_utils import set_global_precision
@@ -27,16 +26,22 @@ from ..base import DistributedSolverNodeBase, DistributedSolverNodeParams
 from te.algorithms.sub_algorithms.mlu_backends.base import ControllerMLUSolver, ControllerMLUException
 
 
-class SynchADMMControllerNode(DistributedSolverNodeBase):
-    def __init__(self, params: DistributedSolverNodeParams,
-                 mlu_cls: type[ControllerMLUSolver], mlu_params: SolverParams) -> None:
-        super().__init__(params)
-        self._graph = params.ProblemDescription.Graph
+class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
+    def __init__(self, 
+                 problem_description: TrafficEngineeringProblemDescription,
+                 solver_params: SynchADMMSolverParams,
+                 node_params: DistributedSolverNodeParams, 
+                 mlu_cls: type[ControllerMLUSolver], 
+                 mlu_params: SolverParams) -> None:
+        super().__init__(
+            problem_description=problem_description,
+            solver_params=solver_params,
+            node_params=node_params
+        )
+        self._graph = problem_description.Graph
         self._M = get_graph_M_matrix(self._graph)
-        # self._symbolic_M = get_symbolic_graph_M_matrix(self._graph)
-        self._traffic = params.ProblemDescription.TM
-        self._solver_params: SynchADMMSolverParams = params.SolverParams_
-        self._rpc_params = params.RPCParams_
+        self._traffic = problem_description.TM
+        self._solver_params: SynchADMMSolverParams = solver_params
         self._rng = np.random.default_rng(seed=self._solver_params.TMSeed)
         self._commodity_list = traffic_to_commodity(self._traffic)
 
@@ -65,7 +70,8 @@ class SynchADMMControllerNode(DistributedSolverNodeBase):
         self._Y_bar_t: Optional[CPUArray] = None
         self._u_t: Optional[CPUArray] = None
 
-        self.backend: SynchADMMControllerBackendBase = params.CommunicationBackendCLS(params.RPCParams_)
+        self.backend: SynchADMMControllerBackendBase = node_params.CommunicationBackendCLS(node_params.RPCParams_)
+        # self.backend.register_signal_handler()
         self.backend.start()
 
         self._objective_trace: TrafficEngineeringLPObjectiveTrace = \
@@ -341,7 +347,9 @@ class SynchADMMControllerNode(DistributedSolverNodeBase):
     def run(self):
         self.solve()
 
-    def check(self, eval_params: TrafficEngineeringLPEvaluationParams):
+    def check(self):
+        eval_params = self._problem_description.EvalParams
+
         # Are outer ADMM pairs in consensus?
         X_EK_SUM_E = self._X_ek_sum_e
         Z_E = self._get_Z_value()

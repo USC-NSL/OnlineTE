@@ -152,10 +152,10 @@ class CommunicationBackendBase(ABC):
     def are_all_workers_reachable(self) -> bool:
         """Check if all network nodes for this peer are ready"""
     
-    def register_signal_handler(self):
-        """Delegate signal handling to the backend, otherwise, the controller/worker should do it"""
-        signal.signal(signal.SIGINT, self.stop)
-        signal.signal(signal.SIGTERM, self.die)
+    # def register_signal_handler(self):
+    #     """Delegate signal handling to the backend, otherwise, the controller/worker should do it"""
+    #     signal.signal(signal.SIGINT, self.stop)
+    #     signal.signal(signal.SIGTERM, self.die)
 
 
 @dataclass
@@ -167,13 +167,12 @@ class DistributedSolverNodeParams:
     """
     CommunicationBackendCLS: type[CommunicationBackendBase]
     RPCParams_: RPCParams
-    SolverParams_: Optional[SolverParams] = None
-    ProblemDescription: Optional[TrafficEngineeringProblemDescription] = None
 
 
 class DistributedSolverNodeBase(ABC):
     @abstractmethod
-    def __init__(self, node_params: DistributedSolverNodeParams):
+    def __init__(self, node_params: DistributedSolverNodeParams, **kwargs):
+        super().__init__(**kwargs)
         self._node_params = node_params
         # First interrupt is graceful, the next one kills the process no questions asked ...
         self._die_on_next_int = False

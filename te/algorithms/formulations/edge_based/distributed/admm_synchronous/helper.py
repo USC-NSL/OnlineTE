@@ -95,7 +95,8 @@ def parse_add_admm_synch_communication_backend_params(
         GRPC_WORKER_PARAMS = [
             gRPCWorkerBackendParams(
                 # TODO: Is there any good reason to go above one thread for workers?
-                IP=addr[0], Port=addr[1], WorkerID=i, NumThreads=1
+                PeerIndex=i, Peers=tuple([addr]), NumThreads=1
+                # IP=addr[0], Port=addr[1], WorkerID=i, NumThreads=1
             ) for i, addr in enumerate(addr_list)
         ]
         return GRPC_ASYNCH_CONTROLLER_PARAMS, AsynchronousgRPCControllerBackend, GRPC_WORKER_PARAMS, gRPCWorkerBackend, args

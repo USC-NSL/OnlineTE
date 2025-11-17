@@ -6,8 +6,8 @@ from concurrent.futures import ThreadPoolExecutor, wait
 from utils.logging import as_info
 from te.algorithms.array_utils.cpu_utils import CPUArray, BooleanCPUArray
 from .. import SynchADMMSolverParams
-from ... import ControllerRPCParams
-from ..base import ControllerCommunicationBackendBase
+from ..base import SynchADMMWorkerBackendBase
+from ...base import RPCParams
 from ...utils import (serialized_message_to_array, array_to_serialized_message,
                       chunk_big_array, rebuild_chunked_array,
                       GRPC_ARRAY_STREAM_MAX_LEN)
@@ -18,20 +18,20 @@ from google.protobuf.empty_pb2 import Empty
 
 
 @dataclass
-class SynchronousgRPCControllerBackendParams(ControllerRPCParams):
+class SynchronousgRPCControllerBackendParams(RPCParams):
     NumThreads: int = 1
     
     def __post_init__(self):
         self.left_column_share = 0.2
 
 
-class SynchronousgRPCControllerBackend(ControllerCommunicationBackendBase):
+class SynchronousgRPCControllerBackend(SynchADMMWorkerBackendBase):
     def __init__(self, rpc_params: SynchronousgRPCControllerBackendParams):
         self._rpc_params = rpc_params
 
         self._worker_channels: List[grpc.Channel] = [
             grpc.insecure_channel(target=":".join([ip, str(port)]))
-                for ip, port in self._rpc_params.AddressList
+                for ip, port in self._rpc_params.Workers
         ]
         self._worker_stubs: List[DistributedADMMSolverStub] = [
             DistributedADMMSolverStub(ch) for ch in self._worker_channels
@@ -45,7 +45,7 @@ class SynchronousgRPCControllerBackend(ControllerCommunicationBackendBase):
     
     @property
     def number_of_nodes(self) -> int:
-        return self._rpc_params.NumWorkers
+        return len(self._rpc_params.Workers)
 
     def start(self):
         self.is_alive = True

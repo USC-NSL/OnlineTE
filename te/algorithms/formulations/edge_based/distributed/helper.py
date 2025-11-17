@@ -6,19 +6,21 @@ from dataclasses import dataclass
 from typing import Optional, List, Tuple
 from .base import *
 from te.algorithms.base import *
-from utils.logging import as_warning, log_section_title
+from utils.logging import as_info, as_warning, log_section_title
 from te.algorithms.formulations.helper_base import solve_te_and_check, mlu_argparser, mlu_parse_args
 from te.algorithms.sub_algorithms.mlu_backends.base import ControllerMLUSolver
 
 
 @dataclass
-class DistributedMLUHelperParams(DistributedSolverNodeParams):
+class DistributedMLUHelperParams:
     """
     Helper Dataclass for a distributed MLU solver.
     Adds attributes for MLU solver backend and its parameters to the usual
     `DistributedSolverNodeParams` class.
     """
     MasterCLS: type[TrafficEngineeringLP]
+    MasterBackendCLS: type[CommunicationBackendBase]
+    MasterRPCParams: RPCParams
     MLUCLS: type[ControllerMLUSolver]
     MLUParams: SolverParams
 
@@ -38,7 +40,7 @@ class SingleControllerMultiprocessMLUHelperParams(DistributedMLUHelperParams):
 
 
 @dataclass
-class HierarchicalMLUHelperParams(DistributedSolverNodeParams):
+class HierarchicalMLUHelperParams:
     """
     Helper Dataclass for a hierarchical MLU solver, where domain
     controllers interact with a master node in a peer-to-peer fashion.
@@ -46,6 +48,8 @@ class HierarchicalMLUHelperParams(DistributedSolverNodeParams):
     of integers, that define how large each domain partition is.
     """
     MasterCLS: type[TrafficEngineeringLP]
+    MasterBackendCLS: type[CommunicationBackendBase]
+    MasterRPCParams: RPCParams
     MLUCLS: type[ControllerMLUSolver]
     MLUParams: SolverParams
     DomainPartitions: List[int]
@@ -73,52 +77,85 @@ class HierarchicalMultiprocessMLUHelperParams(HierarchicalMLUHelperParams):
         assert len(self.WorkerRPCParamList) == sum(self.DomainPartitions)
 
 
-def distributed_mlu_helper(params: DistributedMLUHelperParams):
+@dataclass
+class PrettyAddressList(SolverParams):
+    Addresses: Tuple[Tuple[str, int]]
+    
+    def __post_init__(self):
+        self._left_column_share = 0.2
+
+
+def distributed_mlu_helper(
+    problem: TrafficEngineeringProblemDescription, 
+    distributed_solver: DistributedMLUHelperParams,
+    solver_params: SolverParams
+):
+    print(as_info(
+        f'Using master node communication backend `{distributed_solver.MasterBackendCLS.backend_name()}` with parameters:\n'+
+        distributed_solver.MasterRPCParams.str_all()
+    ))
+    node_params = DistributedSolverNodeParams(
+        CommunicationBackendCLS=distributed_solver.MasterBackendCLS,
+        RPCParams_=distributed_solver.MasterRPCParams
+    )
     solve_te_and_check(
-        params.ProblemDescription, 
-        params.MasterCLS, 
-        params.SolverParams_,
-        params.MLUCLS,
-        params.MLUParams
+        problem, 
+        distributed_solver.MasterCLS,
+        solver_params,
+        node_params,
+        distributed_solver.MLUCLS,
+        distributed_solver.MLUParams
     )
 
 
-def single_controller_multiprocess_mlu_helper(params: SingleControllerMultiprocessMLUHelperParams):
-    num_workers = len(params.RPCParams_.Workers)
+def single_controller_multiprocess_mlu_helper(
+    problem: TrafficEngineeringProblemDescription, 
+    distributed_solver: SingleControllerMultiprocessMLUHelperParams,
+    solver_params: SolverParams
+):
+    num_workers = len(distributed_solver.MasterRPCParams.Workers)
     # Number of workers that we want to spawn must match the number of workers
     # controlled by our controller node.
-    assert len(params.WorkerRPCParamList) == num_workers
+    assert len(distributed_solver.WorkerRPCParamList) == num_workers
     print(as_warning(log_section_title("LOCAL EXPERIMENT")))
+    print(as_info(
+        f'A total of {num_workers} worker nodes will be spawned with addresses:\n'+
+        PrettyAddressList(tuple([p.Peers[0] for p in distributed_solver.WorkerRPCParamList])).str_all()
+    ))
     with concurrent.futures.ProcessPoolExecutor(
         max_workers=num_workers, 
         mp_context=multiprocessing.get_context(method='spawn')
     ) as network_pool:
         # Worker nodes need no problem description and solver inputs, the
         # central controller will tell them all they need.
-        for worker_rpc_params in params.WorkerRPCParamList:
+        for worker_rpc_params in distributed_solver.WorkerRPCParamList:
             network_pool.submit(
-                params.WorkerCLS.spawn_and_run, 
+                distributed_solver.WorkerCLS.spawn_and_run, 
                 DistributedSolverNodeParams(
-                    CommunicationBackendCLS=params.WorkerBackendCLS,
+                    CommunicationBackendCLS=distributed_solver.WorkerBackendCLS,
                     RPCParams_=worker_rpc_params
                 )
             )
-        distributed_mlu_helper(params)
+        distributed_mlu_helper(problem, distributed_solver, solver_params)
 
 
-def hierarchical_multiprocess_mlu_helper(params: HierarchicalMultiprocessMLUHelperParams):
+def hierarchical_multiprocess_mlu_helper(
+    problem: TrafficEngineeringProblemDescription, 
+    distributed_solver: HierarchicalMultiprocessMLUHelperParams,
+    solver_params: SolverParams
+):
     print(as_warning(log_section_title("LOCAL EXPERIMENT")))
-    NUM_DOMAIN_CONTROLLERS = len(params.DomainControllerRPCParamList)
-    NUM_DOMAIN_WORKERS = len(params.WorkerRPCParamList)
+    NUM_DOMAIN_CONTROLLERS = len(distributed_solver.DomainControllerRPCParamList)
+    NUM_DOMAIN_WORKERS = len(distributed_solver.WorkerRPCParamList)
     with concurrent.futures.ProcessPoolExecutor(
         max_workers=NUM_DOMAIN_WORKERS, 
         mp_context=multiprocessing.get_context(method='spawn')
     ) as domain_worker_pool:
-        for worker_rpc_params in params.WorkerRPCParamList:
+        for worker_rpc_params in distributed_solver.WorkerRPCParamList:
             domain_worker_pool.submit(
-                params.WorkerCLS.spawn_and_run, 
+                distributed_solver.WorkerCLS.spawn_and_run, 
                 DistributedSolverNodeParams(
-                    CommunicationBackendCLS=params.WorkerBackendCLS,
+                    CommunicationBackendCLS=distributed_solver.WorkerBackendCLS,
                     RPCParams_=worker_rpc_params
                 )
             )
@@ -128,16 +165,16 @@ def hierarchical_multiprocess_mlu_helper(params: HierarchicalMultiprocessMLUHelp
         ) as domain_controller_pool:
             # Domain controller nodes must stand-by until the master is up.
             # As such, they will not get any extra problem description.
-            for domain_controller_rpc_params in params.DomainControllerRPCParamList:
+            for domain_controller_rpc_params in distributed_solver.DomainControllerRPCParamList:
                 domain_controller_pool.submit(
-                    params.DomainCLS.spawn_and_run, 
+                    distributed_solver.DomainCLS.spawn_and_run, 
                     DistributedSolverNodeParams(
-                        mlu_backend=params.MLUCLS, mlu_params=params.MLUParams,
-                        communication_backend=params.DomainBackendCLS,
+                        communication_backend=distributed_solver.DomainBackendCLS,
                         rpc_params=domain_controller_rpc_params
-                    )
+                    ),
+                    distributed_solver.MLUCLS, distributed_solver.MLUParams
                 )
-            distributed_mlu_helper(params)
+            distributed_mlu_helper(problem, distributed_solver, solver_params)
 
 
 def distributed_mlu_argparser(prog_name: str) -> argparse.ArgumentParser:
@@ -189,7 +226,7 @@ def distributed_mlu_parse_args(parser: argparse.ArgumentParser) -> Tuple[
     eval_params, solution_params, warm_start_params, args = mlu_parse_args(parser)
     num_workers = args.num_workers
     if args.local:
-        addr_list = tuple([('localhost', te.constants.DEFAULT_RPC_PORT + i) for i in range(num_workers)])
+        addr_list = tuple([('localhost', te.constants.DEFAULT_RPC_PORT + i + 1) for i in range(num_workers)])
     else:
         if len(args.hosts) == 0:
             # Use `ni` as hosts ...
