@@ -1,15 +1,13 @@
 import grpc
 import asyncio
 import numpy as np
-from typing import List, Optional, Tuple
 from dataclasses import dataclass
+from typing import List, Optional, Tuple
 from te.algorithms.array_utils.cpu_utils import CPUArray, BooleanCPUArray
 from .. import SynchADMMSolverParams
 from ...base import RPCParams
 from ..base import SynchADMMControllerBackendBase
-from ...utils import (serialized_message_to_array, array_to_serialized_message,
-                      chunk_big_array, async_rebuild_chunked_array,
-                      GRPC_ARRAY_STREAM_MAX_LEN)
+from ...utils import *
 
 import protos.distributed_lp.distributed_lp_pb2 as distributed_lp_messages
 from protos.distributed_lp.distributed_lp_pb2_grpc import DistributedADMMSolverStub
@@ -19,6 +17,7 @@ from google.protobuf.empty_pb2 import Empty
 @dataclass
 class AsynchronousgRPCControllerBackendParams(RPCParams):
     Timeout: float = 5
+    """Timeout for all asynchronous `wait` calls"""
     
     def __post_init__(self):
         self.left_column_share = 0.2
@@ -189,3 +188,28 @@ class AsynchronousgRPCControllerBackend(SynchADMMControllerBackendBase):
     
     def set_active_commodity_count(self, K: int):
         self._event_loop.run_until_complete(self._set_active_commodity_count(K))
+
+
+import jsonargparse
+from ..worker_backends.grpc_backend import gRPCWorkerBackendParams, gRPCWorkerBackend
+
+def add_asyn_grpc_params(parser: jsonargparse.ArgumentParser):
+    parser.add_class_arguments(AsynchronousgRPCControllerBackendParams, 'AsyngRPC', 
+                               help='Asynchronous gRPC Communication Backend Parameters')
+
+def parse_asyn_grpc_params(args: jsonargparse.Namespace) -> AsynchronousgRPCControllerBackendParams:
+    return AsynchronousgRPCControllerBackendParams.make_from_args(args)
+
+def generate_asyn_grpc_worker_params(
+    controller_params: AsynchronousgRPCControllerBackendParams
+) -> Tuple[List[gRPCWorkerBackendParams], type[gRPCWorkerBackend]]:
+    return [gRPCWorkerBackendParams(
+        PeerIndex=i, Peers=tuple([addr]),
+        NumThreads=1
+    ) for i, addr in enumerate(controller_params.Workers)], gRPCWorkerBackend
+
+
+__all__ = [
+    'AsynchronousgRPCControllerBackend', 
+    'parse_asyn_grpc_params', 'add_asyn_grpc_params', 'generate_asyn_grpc_worker_params'
+]

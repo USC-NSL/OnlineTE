@@ -3,6 +3,7 @@ import socket
 import struct
 import asyncio
 import numpy as np
+import te.constants
 from typing import List, Optional, Tuple, Any
 from dataclasses import dataclass
 from utils.exceptions import SolutionInterrupted
@@ -10,9 +11,7 @@ from te.algorithms.array_utils.cpu_utils import CPUArray, BooleanCPUArray
 from .. import SynchADMMSolverParams
 from ...base import RPCParams
 from ..base import SynchADMMControllerBackendBase
-from ...utils import (serialized_message_to_array, array_to_serialized_message,
-                      chunk_big_array, async_rebuild_chunked_array,
-                      GRPC_ARRAY_STREAM_MAX_LEN)
+from ...utils import *
 from utils.logging import as_warning
 
 import protos.distributed_lp.distributed_lp_pb2 as distributed_lp_messages
@@ -22,12 +21,16 @@ from google.protobuf.empty_pb2 import Empty
 
 @dataclass
 class MulticastControllerBackendParams(RPCParams):
-    ScatterAddress: str = '224.0.0.10'
-    HostName: str = socket.gethostname()
+    ScatterAddress: str = te.constants.DEFAULT_SCATTER_ADDRESS
+    """Multicast group address to scatter to all worker nodes"""
+    ScatterPort: int = te.constants.DEFAULT_SCATTER_PORT
+    """UDP port to bind for multicasting"""
     TTL: int = 2
-    ScatterPort: int = 12000
+    """UDP packet TTL. Should be at least 2."""
     Timeout: float = 1
+    """Timeout when waiting for gather phases"""
     UpdateCopyCount: int = 3
+    """Number of copies to send when scattering when packet loss is likely"""
     
     def __post_init__(self):
         self.left_column_share = 0.2
@@ -303,3 +306,30 @@ class MulticastControllerBackend(SynchADMMControllerBackendBase):
     
     def set_active_commodity_count(self, K: int):
         self._event_loop.run_until_complete(self._set_active_commodity_count(K))
+
+
+import jsonargparse
+from ..worker_backends.udp_multicast_backend import MulticastWorkerBackendParams, MulticastWorkerBackend
+
+def add_mcast_params(parser: jsonargparse.ArgumentParser):
+    parser.add_class_arguments(MulticastControllerBackendParams, 'Mcast',
+                               help='IP Multicast Communication Backend Parameters')
+
+def parse_mcast_params(args: jsonargparse.Namespace) -> MulticastControllerBackendParams:
+    return MulticastControllerBackendParams.make_from_args(args)
+
+def generate_mcast_worker_params(
+    controller_params: MulticastControllerBackendParams
+) -> Tuple[List[MulticastWorkerBackendParams], type[MulticastWorkerBackend]]:
+    return [MulticastWorkerBackendParams(
+        PeerIndex=i, Peers=tuple([addr]),
+        ScatterAddress=controller_params.ScatterAddress,
+        ScatterPort=controller_params.ScatterPort,
+        TTL=controller_params.TTL
+    ) for i, addr in enumerate(controller_params.Workers)], MulticastWorkerBackend
+
+
+__all__ = [
+    'MulticastControllerBackend', 
+    'add_mcast_params', 'parse_mcast_params', 'generate_mcast_worker_params'
+]

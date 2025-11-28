@@ -69,8 +69,19 @@ DEFAULT_BIG_THETA = 1e-2
 
 
 # Distributed implementation specific
+DEFAULT_RPC_PORT = 13000
 """
 Can be used to bind RPC servers when spawning a lone node on just one
 independent machine.
 """
-DEFAULT_RPC_PORT = 13000
+
+DEFAULT_SCATTER_ADDRESS = "224.0.0.10"
+"""
+Default multicast group address used for scattering updates from the controller
+to many workers.
+"""
+
+DEFAULT_SCATTER_PORT = 12000
+"""
+Default UDP port used to bind for IP multicasting.
+"""

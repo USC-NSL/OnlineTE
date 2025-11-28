@@ -90,7 +90,7 @@ class PDLPParams(SolverParams):
         Constraint violation tolerance. 
     """
     Threads: int = 1
-    Presolve: bool = te.constants.DEFAULT_PRESOLVE
+    Presolve: bool = False
     ConvTol: float = te.constants.DEFAULT_OPTIMALITY_TOLERANCE
     FeasibilityTol: float = te.constants.DEFAULT_FEASIBILITY_TOLERANCE
 

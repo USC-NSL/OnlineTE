@@ -107,3 +107,11 @@ async def async_rebuild_chunked_array(chunk_async_stream: grpc.aio._call.UnarySt
         arrays.append(cpu_frombuffer_serial(next_chunk.data, dtype=dtype))
         next_chunk = await chunk_async_stream.read()
     return np.hstack(arrays).reshape(shape)
+
+
+__all__ = [
+    'GRPC_ARRAY_STREAM_MAX_LEN', 'ARRAY_TYPE_MAP', 'REVERSE_ARRAY_TYPE_MAP',
+    'array_to_serialized_message', 'serialized_message_to_array',
+    'ARRAY_PREAMBLE_STRUCT_FORMAT', 'parse_array_preamble',
+    'chunk_big_array','rebuild_chunked_array', 'async_rebuild_chunked_array'
+]

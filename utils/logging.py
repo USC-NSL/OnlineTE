@@ -1,7 +1,6 @@
 import tqdm
-import gurobipy
 import numpy as np
-from typing import List, Union, Iterable, Optional
+from typing import List, Iterable, Optional
 
 
 class ANSIColors:

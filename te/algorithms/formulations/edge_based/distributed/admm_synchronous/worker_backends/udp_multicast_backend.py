@@ -1,6 +1,7 @@
 import grpc
 import socket
 import threading
+import te.constants
 import protos.distributed_lp.distributed_lp_pb2 as distributed_lp_messages
 from typing import Optional, Iterator
 from dataclasses import dataclass
@@ -21,9 +22,13 @@ from google.protobuf.empty_pb2 import Empty
 @dataclass
 class MulticastWorkerBackendParams(RPCParams):
     NumThreads: int = 1
-    ScatterAddress: str = '224.0.0.10'
-    ScatterPort: int = 12000
+    """Number of threads in the gRPC server pool"""
+    ScatterAddress: str = te.constants.DEFAULT_SCATTER_ADDRESS
+    """Multicast group address to scatter to all worker nodes"""
+    ScatterPort: int = te.constants.DEFAULT_SCATTER_PORT
+    """UDP port to bind for multicasting"""
     Timeout: float = 5.0
+    """Timeout when waiting for controller updates"""
 
     def __post_init__(self):
         self.left_column_share = 0.2

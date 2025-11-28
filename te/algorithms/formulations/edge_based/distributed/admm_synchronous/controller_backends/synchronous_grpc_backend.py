@@ -1,16 +1,14 @@
 import grpc
 import numpy as np
-from typing import List, Optional
 from dataclasses import dataclass
+from typing import List, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, wait
 from utils.logging import as_info
 from te.algorithms.array_utils.cpu_utils import CPUArray, BooleanCPUArray
 from .. import SynchADMMSolverParams
 from ..base import SynchADMMWorkerBackendBase
 from ...base import RPCParams
-from ...utils import (serialized_message_to_array, array_to_serialized_message,
-                      chunk_big_array, rebuild_chunked_array,
-                      GRPC_ARRAY_STREAM_MAX_LEN)
+from ...utils import *
 
 import protos.distributed_lp.distributed_lp_pb2 as distributed_lp_messages
 from protos.distributed_lp.distributed_lp_pb2_grpc import DistributedADMMSolverStub
@@ -20,6 +18,7 @@ from google.protobuf.empty_pb2 import Empty
 @dataclass
 class SynchronousgRPCControllerBackendParams(RPCParams):
     NumThreads: int = 1
+    """Number of threads in the gRPC server pool"""
     
     def __post_init__(self):
         self.left_column_share = 0.2
@@ -165,3 +164,28 @@ class SynchronousgRPCControllerBackend(SynchADMMWorkerBackendBase):
             self._broadcast_thread_pool.submit(stub.SetActiveCommodityCount, message)
                 for stub in self._worker_stubs
         ])
+
+
+import jsonargparse
+from ..worker_backends.grpc_backend import gRPCWorkerBackendParams, gRPCWorkerBackend
+
+def add_syn_grpc_params(parser: jsonargparse.ArgumentParser):
+    parser.add_class_arguments(SynchronousgRPCControllerBackendParams, 'SyngRPC',
+                               help='Synchronous gRPC Communication Backend Parameters')
+
+def parse_syn_grpc_params(args: jsonargparse.Namespace) -> SynchronousgRPCControllerBackendParams:
+    return SynchronousgRPCControllerBackendParams.make_from_args(args)
+
+def generate_syn_grpc_worker_params(
+    controller_params: SynchronousgRPCControllerBackendParams
+) -> Tuple[List[gRPCWorkerBackendParams], type[gRPCWorkerBackend]]:
+    return [gRPCWorkerBackendParams(
+        PeerIndex=i, Peers=tuple([addr]),
+        NumThreads=1
+    ) for i, addr in enumerate(controller_params.Workers)], gRPCWorkerBackend
+
+
+__all__ = [
+    'SynchronousgRPCControllerBackend', 
+    'parse_syn_grpc_params', 'add_syn_grpc_params', 'generate_syn_grpc_worker_params'
+]

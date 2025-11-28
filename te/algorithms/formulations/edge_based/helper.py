@@ -1,4 +1,4 @@
-import argparse
+import jsonargparse
 from typing import Optional, Tuple
 from te.algorithms.base import *
 from te.traffic_models.converters import SampledConverter, SampledTrafficMatrixConverterParams
@@ -72,7 +72,7 @@ def edge_based_mlu_input_helper(
     )
 
 
-def mlu_problem_description_parser(prog_name: str) -> argparse.ArgumentParser:
+def mlu_problem_description_parser(prog_name: str) -> jsonargparse.ArgumentParser:
     """
     Helper utility that creates an argument parser for defining a random MLU problem.
 
@@ -83,7 +83,7 @@ def mlu_problem_description_parser(prog_name: str) -> argparse.ArgumentParser:
     
     Returns
     -------
-    parser: argparse.ArgumentParser
+    parser: jsonargparse.ArgumentParser
         A partially completed argument parser. The fields that it contains 
         are described below.
 
@@ -127,7 +127,7 @@ def mlu_problem_description_parser(prog_name: str) -> argparse.ArgumentParser:
     `name-sol`: str
         Name of teh output solution file
     """
-    parser = argparse.ArgumentParser(prog_name)
+    parser = jsonargparse.ArgumentParser(prog_name)
     
     # Topology name and TM seed are _ALWAYS_ needed
     parser.add_argument('--topo', help='Topology name', required=True)
@@ -140,7 +140,7 @@ def mlu_problem_description_parser(prog_name: str) -> argparse.ArgumentParser:
     runtime_params_group.add_argument('--scale-factor', type=float, default=10.0, 
                                       help='Link capacity scaling factor.')
     runtime_params_group.add_argument('--report-unsat', action='store_true', 
-                                      help='Report unsatisfied commodity assignments.')
+                                      help='Fully report unsatisfied commodity assignments (if False, only gives a summary)')
 
     # Parameters for warm-start tests
     warm_start_params_group = parser.add_argument_group('Warm Start Parameters')
@@ -164,22 +164,22 @@ def mlu_problem_description_parser(prog_name: str) -> argparse.ArgumentParser:
     return parser
 
 
-def parse_mlu_problem_description_args(parser: argparse.ArgumentParser) -> Tuple[
+def parse_mlu_problem_description_args(parser: jsonargparse.ArgumentParser) -> Tuple[
     TrafficEngineeringProblemDescription,
-    argparse.Namespace]:
+    jsonargparse.Namespace]:
     """
     Parse all the default arguments needed for the MLU problem.
 
     Arguments
     ---------
-    parser: `argparse.ArgumentParser`
+    parser: `jsonargparse.ArgumentParser`
         The argument parser (assumed produced with `mlu_argparser`)
     
     Returns
     -------
     problem_description: TrafficEngineeringProblemDescription
         Full description of our MLU problem to pass to our solvers
-    args: argparse.Namespace
+    args: jsonargparse.Namespace
         The namespace object of parsed arguments to further process
     """
     args = parser.parse_args()

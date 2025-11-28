@@ -1,23 +1,23 @@
 import signal
 import contextlib
 import te.constants
-from typing import Optional, Tuple
+from typing import Tuple
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
-from te.algorithms.base import SolverParams, TrafficEngineeringProblemDescription
+from te.algorithms.base import SolverParams
 from utils.exceptions import SolutionInterrupted
 from utils.logging import as_warning
 
 
 """
 We model a distributed setting as follows:
-- Our model is hierarchical, which can be though of as nodes within layers going
-  from 0 to `n-1` in some `n` level topology.
+- Our model is hierarchical, which can be thought of as nodes within layers going
+  from 0 to `n-1` in some `n` level control plane topology.
 - Each node in level `i` controls a partition of nodes in level `i+1` as its _worker_
   ndoes. It is allowed to invoke RPCs on them without any prior notice.
 - Nodes within the same level are considered _peers_, which can communicate with each
   other in an asynchronous manner or not all (depending on how the user wants them to
-  look).
+  interact).
 - Each node has a communication backend, which abstract away the operation of sending 
   arrays over the wire from the solvers implemented within the node.
   These backends will be invoked to exchange messages between solver nodes, and may use any
@@ -31,8 +31,11 @@ they fit into any distributed solver.
 @dataclass
 class RPCParams(SolverParams):
     PeerIndex: int = 0
+    """Index of _this_ peer within its network"""
     Peers: Tuple[Tuple[str, int]] = (("localhost", te.constants.DEFAULT_RPC_PORT),)
-    Workers: Tuple[Tuple[str, int]] = tuple()
+    """Address list (as a tuple) of _all_ peers within this network"""
+    Workers: Tuple[Tuple[str, int],...] = tuple()
+    """Address list of all worker nodes for this peer"""
     
     def __post_init__(self):
         self.left_column_share = 0.2
@@ -152,6 +155,8 @@ class CommunicationBackendBase(ABC):
     def are_all_workers_reachable(self) -> bool:
         """Check if all network nodes for this peer are ready"""
     
+    # TODO: There seems to be a case where the signal is processed
+    #       multiple times. Find out what causes that ...
     # def register_signal_handler(self):
     #     """Delegate signal handling to the backend, otherwise, the controller/worker should do it"""
     #     signal.signal(signal.SIGINT, self.stop)

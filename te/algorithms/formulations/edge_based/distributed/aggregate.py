@@ -31,7 +31,7 @@ HierarchicalSolver = Tuple[
 
 AVAILABLE_SOLVERS: Dict[str, DistributedSolver] = {
     'admm-synch': (SynchADMMControllerNode, SynchADMMWorkerNode, SynchADMMSolverParams),
-    'admm-hier':  (MasterNode, DomainControllerNode, DomainWorkerNode, HierarchicalADMMSolverParams)
+    # 'admm-hier':  (MasterNode, DomainControllerNode, DomainWorkerNode, HierarchicalADMMSolverParams)
 }
 """
 Avaialble solvers are:

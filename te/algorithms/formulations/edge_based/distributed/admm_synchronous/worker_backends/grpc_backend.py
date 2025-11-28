@@ -18,6 +18,7 @@ from google.protobuf.empty_pb2 import Empty
 @dataclass
 class gRPCWorkerBackendParams(RPCParams):
     NumThreads: int = 1
+    """Number of threads in the gRPC server pool"""
     
     def __post_init__(self):
         self.left_column_share = 0.2

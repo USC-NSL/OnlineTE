@@ -174,33 +174,12 @@ class GurobiMLU(ControllerMLUSolver):
         self._solved = True
 
 
-import argparse
+import jsonargparse
 
-def gurobi_mlu_solver_params_parser(parser: argparse.ArgumentParser):
-    GUROBI_MLU_PARAMS = GurobiSolverParams()
-    parser.add_argument('--method', help='Gurobi method to use', choices=list(METHOD_MAP.keys()), default=METHOD_MAP_REVERSE[GUROBI_MLU_PARAMS.Method])
-    parser.add_argument('--focus', help='Gurobi numeric focus', type=int, choices=[0, 1, 2, 3], default=GUROBI_MLU_PARAMS.NumericFocus)
-    parser.add_argument('--presolve', help='Perform presolve', action='store_true')
-    parser.add_argument('--crossover', action='store_true', help='(BARRIER only) perform crossover after barrier solver ends')
-    parser.add_argument('--threads', help='(BARRIER only) Max number of threads', type=int, default=GUROBI_MLU_PARAMS.Threads)
-    parser.add_argument('--log-to', help='Log file path', default=GUROBI_MLU_PARAMS.LogFile)
-    parser.add_argument('--conv-tol', help='Objective convergence tolerance', type=float, default=GUROBI_MLU_PARAMS.ConvTol)
+def add_gurobi_mlu_solver_params_parser(parser: jsonargparse.ArgumentParser):
+    parser.add_class_arguments(GurobiSolverParams, nested_key='GurobiMLUParams', help='Gurobi MLU Backend Parameters')
+    return parser
 
 
-def parse_gurobi_mlu_solver_params(
-    parser: argparse.ArgumentParser, 
-    args: Optional[argparse.Namespace] = None
-) -> Tuple[GurobiSolverParams, argparse.Namespace]:
-    if args is None:
-        args = parser.parse_args()
-    
-    GUROBI_MLU_PARAMS = GurobiMLUParams()
-    GUROBI_MLU_PARAMS.Method = METHOD_MAP[args.method]
-    GUROBI_MLU_PARAMS.NumericFocus = args.focus
-    GUROBI_MLU_PARAMS.Presolve = args.presolve
-    GUROBI_MLU_PARAMS.Crossover = args.crossover
-    GUROBI_MLU_PARAMS.Threads = args.threads
-    GUROBI_MLU_PARAMS.LogFile = args.log_to
-    GUROBI_MLU_PARAMS.ConvTol = args.conv_tol
-
-    return GUROBI_MLU_PARAMS, args
+def parse_gurobi_mlu_solver_params(args: jsonargparse.Namespace) -> GurobiSolverParams:
+    return GurobiSolverParams.make_from_args(args.GurobiMLUParams)

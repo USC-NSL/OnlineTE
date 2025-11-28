@@ -1,10 +1,12 @@
 import os
 import pickle
 import inspect
+import argparse
 import numpy as np
 import networkx as nx
 import te.constants
 import dataclasses
+import jsonargparse
 import matplotlib.pyplot as plt
 from itertools import count
 from typing import List, Optional, Tuple, Dict, Union, Any, Set
@@ -189,6 +191,14 @@ class SolverParams(ABC):
     
     def str_all(self) -> str:
         return self.stringify_up_to_level(-1)
+    
+    @classmethod
+    def make_from_args(cls, namespace: Union[argparse.Namespace, jsonargparse.Namespace]):
+        params = dict()
+        for name in cls.field_names():
+            if name in namespace:
+                params[name] = namespace[name]
+        return cls(**params)
 
 
 @dataclass(frozen=True)
