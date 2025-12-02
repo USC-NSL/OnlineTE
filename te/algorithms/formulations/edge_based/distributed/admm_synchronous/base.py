@@ -20,7 +20,7 @@ class SynchADMMControllerBackendBase(CommunicationBackendBase):
         """Update the initial feasible solution (X_ek_0)"""
     
     @abstractmethod
-    def get_X_ek(self, basis: CPUArray, initial_feasible_solution: CPUArray) -> CPUArray:
+    def get_X_ek(self, is_sparse: bool, basis: CPUArray, initial_feasible_solution: CPUArray) -> CPUArray:
         """Get the final solution array (X_ek)"""
     
     @abstractmethod

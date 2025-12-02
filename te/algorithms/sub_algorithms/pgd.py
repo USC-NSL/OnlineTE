@@ -227,30 +227,41 @@ def do_block_pgd_with_exact_line_search(lambda_block, x_block_0, nnt, n, c_block
     return converged_lambda_block, y_block, total_iterations
 
 
-def do_plain_pgd_with_step_reduction(lambda_block, x_block_0, nnt, n, c_block, gamma: float, n_iter: int, 
-                                     kappa: float, epoch: int, mask = None):
+def do_plain_pgd(lambda_block, X_block_0, C_block, N, NNT,
+                 gamma: float, n_iter: int, mask):
     """
-    A plain block oriented PGD operation, with step size heuristic.
-    The step size heuristic is:
-
-        step_size <- (gamma / epoch**kappa)
-    
-    For 0 <= `kappa` <= 1.
+    A plain block oriented PGD operation.
     """
     mod = cp.get_array_module(lambda_block)
-    big_c_block = x_block_0 + n @ c_block
-    step_size = gamma / ((epoch+1) ** kappa)
+    big_c_block = X_block_0 + N @ C_block
     for _ in range(n_iter):
-        grad_block = nnt @ lambda_block + big_c_block
-        # mod.clip(lambda_block - step_size * grad_block, a_min=0, a_max=None, out=lambda_block)
-        assert mask is not None
-        lambda_block = lambda_block - step_size * grad_block
+        grad_block = NNT @ lambda_block + big_c_block
+        lambda_block = lambda_block - gamma * grad_block
+        # Masked entries must not be projected. So we first extract the negative
+        # ones into a `correction` matrix, then clip the whole array (this sets
+        # the extracted negative values to zero), then we add them back.
         correction = mod.clip(mod.multiply(lambda_block, mask), a_min=None, a_max=0)
         lambda_block = mod.clip(lambda_block, a_min=0, a_max=None) + correction
     del big_c_block
     del grad_block
-    y_block = c_block + n.T @ lambda_block
-    return lambda_block, y_block
+    Y_block = C_block + N.T @ lambda_block
+    return lambda_block, Y_block
+
+
+# TODO: Is there any good reason to keep this?
+# def do_sparse_pgd(lambda_block, x_block_0, nnt, n, c_block, gamma: float, epsilon: float, n_iter: int, mask = None):
+#     mod = cp.get_array_module(lambda_block)
+#     big_c_block = x_block_0 + n @ c_block - (mod.sum(nnt, axis=1) * epsilon)[:, np.newaxis]
+#     for _ in range(n_iter):
+#         grad_block = nnt @ lambda_block + big_c_block
+#         assert mask is not None
+#         lambda_block = lambda_block - gamma * grad_block
+#         correction = mod.clip(mod.multiply(lambda_block, mask), a_min=None, a_max=0)
+#         lambda_block = mod.clip(lambda_block, a_min=0, a_max=None) + correction
+#     del big_c_block
+#     del grad_block
+#     y_block = c_block + n.T @ (lambda_block - epsilon)
+#     return lambda_block, y_block
 
 
 _NESTEROV_LAST_BLOCK = None

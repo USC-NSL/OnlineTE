@@ -7,9 +7,9 @@ from typing import List, Tuple, Optional
 from te.algorithms.base import *
 from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
-from topologies.utils import get_graph_M_matrix, get_adjacency_null_space, get_commodity_in_out_mask
+from topologies.utils import get_graph_M_matrix, get_adjacency_null_space, get_commodity_in_out_mask, get_sparse_null_space
 from utils.exceptions import SolutionInterrupted
-from utils.logging import as_info, as_success, log_subsection_separator, ShortTQDM
+from utils.logging import as_info, as_success, as_warning, log_subsection_separator, ShortTQDM
 from te.algorithms.array_utils import set_global_precision
 from te.algorithms.array_utils.cpu_utils import (CPUArray, BooleanCPUArray,
                                                  cpu_array, cpu_zeros, cpu_double_array, 
@@ -47,6 +47,7 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
 
         self._NULL_M: CPUArray = None
         self._NNT_M: CPUArray = None
+        self._NTN_M_inv: CPUArray = None
         
         self._T: Optional[int] = None
         self._NUM_EDGES: Optional[int] = None
@@ -146,10 +147,23 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
         assert len(M.shape) == 2
         m, n = M.shape
         assert m < n
-        N = cpu_array(get_adjacency_null_space(M))
+        if self._solver_params.UseSparseBasis:
+            N = cpu_array(get_sparse_null_space(M))
+        else:
+            N = cpu_array(get_adjacency_null_space(M))
         T = N.shape[1]
         self._NULL_M = N
+        density = np.count_nonzero(N) * 100 // N.size
+        print(as_info(f'Density of null space basis: {density}'))
+        if density > 10 and self._solver_params.UseSparseBasis:
+            print(as_warning('The null space basis is still very dense!'))
         self._NNT_M = N @ N.T
+        ETA = self._solver_params.Eta
+        RHO = self._solver_params.Rho
+        if self._solver_params.UseSparseBasis:
+            self._NTN_M_inv = cpu_array(np.linalg.inv(N.T @ N + ETA/RHO * np.eye(T)))
+        else:
+            self._NTN_M_inv = cpu_array(np.eye(T) / (1 + ETA/RHO))
         self._T = T
         self._NUM_EDGES = n
         self._M_MASK = get_commodity_in_out_mask(self.graph, self.commodity_list)
@@ -206,12 +220,15 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
         assert self._mlu_solver is not None
         self._mlu_solver._make_variables()
         
-    
     def _get_F(self) -> np.ndarray:
         return self._get_Z_value() - self._Z_e_start - self._r_e
     
     def _set_X_ek(self):
-        self._X_ek = self.backend.get_X_ek(basis=self._NULL_M, initial_feasible_solution=self._X_ek_start)
+        self._X_ek = self.backend.get_X_ek(
+            is_sparse=self._solver_params.Beta is not None,
+            basis=self._NULL_M, 
+            initial_feasible_solution=self._X_ek_start
+        )
     
     def _add_constraints(self):
         assert self._mlu_solver is not None
@@ -246,7 +263,8 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
         NULL_M = self._NULL_M
         # P_BAR_T = (NULL_M.T @ F_E + (ETA/RHO) * (U_T + Y_BAR_T)) / (K + (ETA/RHO))
         # TODO: See https://github.com/USC-NSL/DistributedTE/issues/29
-        P_BAR_T = (NULL_M.T @ F_E / K + (ETA/RHO) * (U_T + Y_BAR_T)) / (1 + (ETA/RHO))
+        # P_BAR_T = (NULL_M.T @ F_E / K + (ETA/RHO) * (U_T + Y_BAR_T)) / (1 + (ETA/RHO))
+        P_BAR_T = self._NTN_M_inv @ (NULL_M.T @ F_E / K + (ETA/RHO) * (U_T + Y_BAR_T))
         self._P_bar_t = P_BAR_T
     
     def _update_u_t(self):
@@ -267,7 +285,9 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
             Y_bar_t=self._Y_bar_t,
             u_t=self._u_t
         )
-        return norm_in_consensus(self._P_bar_t, self._Y_bar_t, 5e-4)
+        # TODO: How safe is this?
+        # return norm_in_consensus(self._P_bar_t, self._Y_bar_t, 5e-4)
+        return False
     
     @record_cpu_runtime('Update-X-EK-SUM')
     def _update_X_ek_sum(self):
@@ -309,18 +329,16 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
     def solve(self, params: Optional[int] = None) -> float:
         self.check_result = None
         MODEL_CONTROLLER = self._mlu_solver
-        PARAMS = self._solver_params
-        EPOCHS = params if params is not None else PARAMS.NumberOfEpochs
-        SHIFT = 0 if params is None else PARAMS.NumberOfEpochs // 2
+        PARAMS = self._solver_params if params is None else params
 
         try:
             t = time.time()
             self._update_controller_objective()
             MODEL_CONTROLLER.solve()
             self._update_r_e()
-            for epoch in ShortTQDM(range(EPOCHS)):
-                for i in reversed(range(PARAMS.NumberOfNetworkUpdates)):
-                    self._do_network_update(epoch + SHIFT)
+            for epoch in ShortTQDM(range(PARAMS.OuterLoopRounds)):
+                for i in reversed(range(PARAMS.InnerLoopRounds)):
+                    self._do_network_update(epoch)
                     if i > 0 and self._reconvene_network_updates():
                         break
                 self._reconvene_network_updates()
@@ -370,7 +388,8 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
             unsat_ratio=unsat_ratio,
             congested_ratio=congested_ratio,
             unsat_commodities=unsat_commodities,
-            congested_links=congested_links
+            congested_links=congested_links,
+            density=np.count_nonzero(np.clip(X_EK)) / X_EK.size
         )
 
     def get_solution_commodity_list(self) -> List[Tuple[Commodity, Commodity]]:

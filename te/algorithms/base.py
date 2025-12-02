@@ -13,7 +13,7 @@ from typing import List, Optional, Tuple, Dict, Union, Any, Set
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from te.algorithms import SOLUTION_DIR
-from utils.logging import LINE_SEPARATOR_LENGTH, as_success, as_fail
+from utils.logging import LINE_SEPARATOR_LENGTH, as_success, as_fail, as_warning
 from te.traffic_models.base import TrafficMatrixBase, TrafficMatrixConverterBase, TrafficMatrixConverterParamsBase, Commodity
 
 
@@ -360,11 +360,14 @@ class TrafficEngineeringLPCheckResult:
         A set of commodity indices that are unsatisfied.
     congested_links: Set[int]
         Set of link (edge) indices that are congested.
+    density: Optional[float]
+        Final solution density
     """
     unsat_ratio: float
     congested_ratio: float
     unsat_commodities: Set[int]
     congested_links: Set[int]
+    density: Optional[float] = None
 
     def __str__(self) -> str:
         out = []
@@ -376,6 +379,11 @@ class TrafficEngineeringLPCheckResult:
             out.append(as_success("ALL LINK CAPCITIES WERE HONORED"))
         else:
             out.append(as_fail("{:.1f}% OF LINKS ARE CONGESTED".format(self.congested_ratio*100)))
+        if self.density is not None:
+            if self.density > 0.5:
+                out.append(as_warning("DENSITY: {:.1f}%".format(self.density*100)))
+            else:
+                out.append(as_success("DENSITY: {:.1f}%".format(self.density*100)))
         return '\n'.join(out)
 
 

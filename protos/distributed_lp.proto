@@ -43,17 +43,18 @@ message State {
 }
 
 message SolverParameters {
-    int32 NumberOfEpochs = 1;
-    int32 NumberOfNetworkUpdates = 2;
-    float Rho = 3;
-    float Eta = 4;
-    float Gamma = 5;
-    float Kappa = 6;
-    int32 PGDIterations = 7;
-    int32 NumWorkers = 8;
-    string Precision = 9;
-    float ConvTol = 10;
-    int32 TMSeed = 11;
+    optional int32 OuterLoopRounds = 1;
+    optional int32 InnerLoopRounds = 2;
+    optional float Rho = 3;
+    optional float Eta = 4;
+    optional float Gamma = 5;
+    optional float Beta = 6;
+    optional bool UseSparseBasis = 7;
+    optional int32 SwitchIterations = 8;
+    optional float ConvTol = 9;
+    optional string Precision = 10;
+    optional int32 TMSeed = 11;
+    optional int32 NumWorkers = 12;
 }
 
 message ActiveCommodityCount {

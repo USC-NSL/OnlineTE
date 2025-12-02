@@ -184,7 +184,10 @@ class NetworkWorkerNodeListener(DistributedADMMSolverServicer):
     def SetSolverParameters(self, request: distributed_lp_messages.SolverParameters, context):
         new_params = SynchADMMSolverParams()
         for field in new_params.child_fields.keys():
-            setattr(new_params, field, getattr(request, field))
+            if request.HasField(field):
+                setattr(new_params, field, getattr(request, field))
+            else:
+                setattr(new_params, field, None)
         self._backend.set_solver_parameters(new_params)
         return Empty()
     

@@ -95,6 +95,7 @@ class PDLPMLU(ControllerMLUSolver):
     def _get_objective_matrix_diagonal(self) -> np.ndarray:
         d = np.full((self._NUM_VARIABLES,), fill_value=self._solver_params._Rho)
         d[-1] = 0
+        # d[-1] = self._solver_params._Alpha * self.num_domains
         return d
     
     def _get_objective_vector(self) -> np.ndarray:

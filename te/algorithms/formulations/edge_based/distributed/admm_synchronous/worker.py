@@ -7,7 +7,10 @@ from te.algorithms.array_utils.cpu_utils import CPUArray, BooleanCPUArray, cpu_z
 from ..base import DistributedSolverNodeBase, DistributedSolverNodeParams
 from . import SynchADMMSolverParams
 from .base import SynchADMMWorkerBackendBase
-from te.algorithms.sub_algorithms.pgd import do_plain_pgd_with_step_reduction, do_nesterov_pgd
+from te.algorithms.sub_algorithms.pgd import do_plain_pgd
+# TODO: Test this one a bit more ...
+# from te.algorithms.sub_algorithms.pgd import do_nesterov_pgd
+from te.algorithms.sub_algorithms.lasso import sparse_range_lasso
 
 
 class SynchADMMWorkerNode(DistributedSolverNodeBase):
@@ -23,6 +26,7 @@ class SynchADMMWorkerNode(DistributedSolverNodeBase):
         self._CHUNK_LEN: Optional[int] = None
         self._NULL_M: Optional[CPUArray] = None
         self._NNT_M: Optional[CPUArray] = None
+        self._NTN_M_inv: Optional[CPUArray] = None
         self._MASK_M_chunk: Optional[BooleanCPUArray] = None
         self._X_ek_start_chunk: Optional[CPUArray] = None
         self._Y_bar_t_cached: Optional[CPUArray] = None
@@ -57,9 +61,14 @@ class SynchADMMWorkerNode(DistributedSolverNodeBase):
         self._NULL_M = NULL_M
         assert self._X_ek_start_chunk is not None
         CHUNK_LEN = self._CHUNK_LEN
+        PARAMS = self._solver_params
         self._NULL_M = NULL_M
         self._NNT_M = NULL_M @ NULL_M.T
         T = self._NULL_M.shape[1]
+        if PARAMS.UseSparseBasis:
+            self._NTN_M_inv = cpu_array(np.linalg.inv(PARAMS.Gamma * NULL_M.T @ NULL_M + np.eye(T)))
+        else:
+            self._NTN_M_inv = cpu_array(np.eye(T) / (1 + PARAMS.Gamma))
         self._T = T
         self._Y_tk_chunk = cpu_zeros((T, CHUNK_LEN))
         self._Y_bar_t_cached: Optional[CPUArray] = cpu_zeros((T,))
@@ -86,24 +95,33 @@ class SynchADMMWorkerNode(DistributedSolverNodeBase):
         set_global_precision(precision=new_params.Precision)
         set_cpu_float_precision()
 
+    # TODO: Remove extra arguments here, we no longer need them ...
     def do_inner_loop_pgd_update(self, epoch: int, F_e: Optional[CPUArray] = None) -> Tuple[int, CPUArray]:
+        ETA = self._solver_params.Eta
         GAMMA = self._solver_params.Gamma
-        KAPPA = self._solver_params.Kappa
-        PGD_ITERS = self._solver_params.PGDIterations
+        BETA = self._solver_params.Beta
+        SWITCH_ITERS = self._solver_params.SwitchIterations
         NULL_M = self._NULL_M
         NNT_M = self._NNT_M
+        NTN_M_INV = self._NTN_M_inv
         X_EK_START_CHUNK = self._X_ek_start_chunk
         M_MASK_CHUNK = self._MASK_M_chunk
+        Y_TK_CHUNK = self._Y_tk_chunk
         LAMBDA_EK_CHUNK = self._lambda_ek_chunk
         C_TK_CHUNK = self._get_current_C()
         
         start = time.perf_counter_ns()
-        self._lambda_ek_chunk, self._Y_tk_chunk = \
-            do_plain_pgd_with_step_reduction(LAMBDA_EK_CHUNK, X_EK_START_CHUNK, NNT_M, NULL_M, C_TK_CHUNK, GAMMA, 
-                                                PGD_ITERS, KAPPA, epoch, M_MASK_CHUNK)
-        # self._lambda_ek_chunk, self._Y_tk_chunk = \
-        #     do_nesterov_pgd(LAMBDA_EK_CHUNK, X_EK_START_CHUNK, NNT_M, NULL_M, C_TK_CHUNK, GAMMA, 
-        #                     PGD_ITERS, epoch, M_MASK_CHUNK)
+        if BETA is None:
+            self._lambda_ek_chunk, self._Y_tk_chunk = do_plain_pgd(
+                lambda_block=LAMBDA_EK_CHUNK, X_block_0=X_EK_START_CHUNK, C_block=C_TK_CHUNK,
+                N=NULL_M, NNT=NNT_M, gamma=GAMMA, n_iter=SWITCH_ITERS, mask=M_MASK_CHUNK
+            )
+        else:
+            self._lambda_ek_chunk, self._Y_tk_chunk = sparse_range_lasso(
+                Y_block=Y_TK_CHUNK, S_block=LAMBDA_EK_CHUNK, X_block_0=X_EK_START_CHUNK,
+                N=NULL_M, C_block=C_TK_CHUNK, gamma=GAMMA, epsilon=BETA/ETA, 
+                n_iter=SWITCH_ITERS, mask=M_MASK_CHUNK, NTN_inv=NTN_M_INV
+            )
         means = np.mean(self._Y_tk_chunk, axis=1)
         return time.perf_counter_ns() - start, means
     
@@ -116,10 +134,16 @@ class SynchADMMWorkerNode(DistributedSolverNodeBase):
         self._Y_bar_t_cached = Y_bar_t
     
     def report_chunk(self) -> CPUArray:
-        return cpu_array(self._Y_tk_chunk)
+        if self._solver_params.Beta is not None:
+            return cpu_array(self._lambda_ek_chunk)
+        else:
+            return cpu_array(self._Y_tk_chunk)
     
     def report_aggregate(self) -> CPUArray:
-        return np.sum(self._X_ek_start_chunk + self._NULL_M @ self._Y_tk_chunk, axis=1)
+        if self._solver_params.Beta is not None:
+            return np.sum(self._lambda_ek_chunk, axis=1)
+        else:
+            return np.sum(self._X_ek_start_chunk + self._NULL_M @ self._Y_tk_chunk, axis=1)
 
     def close(self):
         self.backend.close()

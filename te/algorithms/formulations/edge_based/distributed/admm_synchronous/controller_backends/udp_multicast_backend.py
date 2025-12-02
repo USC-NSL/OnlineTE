@@ -228,15 +228,18 @@ class MulticastControllerBackend(SynchADMMControllerBackendBase):
     def update_demands(self, updated_feasible_solution: CPUArray):
         self._event_loop.run_until_complete(self._update_demands(updated_feasible_solution))
     
-    async def _get_X_ek(self, basis: CPUArray, initial_feasible_solution: CPUArray):
+    async def _get_X_ek(self, is_sparse: bool, basis: CPUArray, initial_feasible_solution: CPUArray):
         chunks = await asyncio.gather(*[
             async_rebuild_chunked_array(stub.RequestChunk(Empty()))
             for stub in self._worker_stubs
         ])
-        return initial_feasible_solution + basis @ np.hstack(list(chunks))
+        if is_sparse:
+            return np.hstack(list(chunks))
+        else:
+            return initial_feasible_solution + basis @ np.hstack(list(chunks))
 
-    def get_X_ek(self, basis: CPUArray, initial_feasible_solution: CPUArray):
-        return self._event_loop.run_until_complete(self._get_X_ek(basis, initial_feasible_solution))
+    def get_X_ek(self, is_sparse: bool, basis: CPUArray, initial_feasible_solution: CPUArray):
+        return self._event_loop.run_until_complete(self._get_X_ek(is_sparse, basis, initial_feasible_solution))
     
     async def _get_X_ek_sum(self):
         serialized_chunks = await asyncio.gather(*[

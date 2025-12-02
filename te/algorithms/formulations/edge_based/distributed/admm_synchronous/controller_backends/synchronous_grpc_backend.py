@@ -107,7 +107,7 @@ class SynchronousgRPCControllerBackend(SynchADMMWorkerBackendBase):
                 ) for i, stub in enumerate(WORKERS)
             ])
 
-    def update_demands(self, updated_feasible_solution: CPUArray):
+    def update_demands(self, is_sparse: bool, updated_feasible_solution: CPUArray):
         X_EK_START_CHUNKS = np.array_split(updated_feasible_solution, self.number_of_nodes, axis=1)
         WORKERS = self._worker_stubs
         wait([
@@ -116,11 +116,14 @@ class SynchronousgRPCControllerBackend(SynchADMMWorkerBackendBase):
             ) for i, stub in enumerate(WORKERS)
         ])
 
-    def get_X_ek(self, basis: CPUArray, initial_feasible_solution: CPUArray):
+    def get_X_ek(self, is_sparse: bool, basis: CPUArray, initial_feasible_solution: CPUArray):
         chunks = self._broadcast_thread_pool.map(
             lambda stub: rebuild_chunked_array(stub.RequestChunk(Empty())), self._worker_stubs
         )
-        return initial_feasible_solution + basis @ np.hstack(list(chunks))
+        if is_sparse:
+            return np.hstack(list(chunks))
+        else:
+            return initial_feasible_solution + basis @ np.hstack(list(chunks))
     
     def get_X_ek_sum(self):
         serialized_chunks = self._broadcast_thread_pool.map(
