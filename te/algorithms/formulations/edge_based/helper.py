@@ -8,13 +8,13 @@ from topologies.utils import get_uniform_tm_problem_with_capacity_heuristic
 from utils.logging import as_info, log_section_title
 
 
-def edge_based_mlu_input_helper(
+def edge_based_te_input_helper(
     eval_params: TrafficEngineeringLPEvaluationParams,
     warmstart_params: Optional[TrafficEngineeringLPWarmStartParams] = None,
     solution_params: Optional[TrafficEngineeringLPSolutionParams] = None
 ) -> TrafficEngineeringProblemDescription:
     """
-    A helper for quickly creating some (Edge-Based) MLU problem and its inputs.
+    A helper for quickly creating some (Edge-Based) TE problem and its inputs.
     
     Arguments
     ---------
@@ -27,8 +27,8 @@ def edge_based_mlu_input_helper(
     
     Returns
     -------
-    mlu_problem: TrafficEngineeringProblemDescription
-        Full description of some MLU problem.
+    te_problem: TrafficEngineeringProblemDescription
+        Full description of some TE problem.
     """
     c, graph, tm = get_uniform_tm_problem_with_capacity_heuristic(
         eval_params.TopologyName, 
@@ -37,14 +37,14 @@ def edge_based_mlu_input_helper(
     )
 
     if warmstart_params is not None:
-        print(as_info(log_section_title("MLU PROBLEM (WITH WARM-START)")))
+        print(as_info(log_section_title(f"{eval_params.Objective} PROBLEM (WITH WARM-START)")))
         # TODO: Implement different converter passing here ...
         converter = SampledConverter(
             seed=warmstart_params.ConverterSeed,
             params=warmstart_params.ConverterParams
         )
     else:
-        print(as_info(log_section_title("MLU PROBLEM")))
+        print(as_info(log_section_title(f"{eval_params.Objective} PROBLEM")))
         converter = None
     
     print(as_info(f"Network link capacity is: {str(round(c, 2))}"))
@@ -72,9 +72,9 @@ def edge_based_mlu_input_helper(
     )
 
 
-def mlu_problem_description_parser(prog_name: str) -> jsonargparse.ArgumentParser:
+def te_problem_description_parser(prog_name: str) -> jsonargparse.ArgumentParser:
     """
-    Helper utility that creates an argument parser for defining a random MLU problem.
+    Helper utility that creates an argument parser for defining a random TE problem.
 
     Arguments
     ---------
@@ -93,6 +93,7 @@ def mlu_problem_description_parser(prog_name: str) -> jsonargparse.ArgumentParse
         The topology name (must in the Internet Topology Zoo)
     `tm-seed`: int
         The RNG seed used to generate the TM
+    `objective`: TEObjective
     Runtime Parameters
     ------------------
     `feas-tol`: float
@@ -128,10 +129,13 @@ def mlu_problem_description_parser(prog_name: str) -> jsonargparse.ArgumentParse
         Name of teh output solution file
     """
     parser = jsonargparse.ArgumentParser(prog_name)
+
+    parser.add_argument('--config', action='config')
     
     # Topology name and TM seed are _ALWAYS_ needed
     parser.add_argument('--topo', help='Topology name', required=True)
     parser.add_argument('--tm-seed', type=int, help='TM RNG seed', required=True)
+    parser.add_argument('--objective', help='TE Objective', type=TEObjective, required=True)
 
     # These runtime parameters are also always needed
     runtime_params_group = parser.add_argument_group('Runtime Parameters')
@@ -161,24 +165,30 @@ def mlu_problem_description_parser(prog_name: str) -> jsonargparse.ArgumentParse
     solution_params_group.add_argument('--path-sol', help='Directory path to store the solution(s) in')
     solution_params_group.add_argument('--name-sol', help='Name (prefix) for solution files')
     
+    trace_params_group = parser.add_argument_group('Runtime Trace Parameters')
+    trace_params_group.add_argument('--path-trace', help='Path to store the runtime trace record file',
+                                    default='res.txt')
+    trace_params_group.add_argument('--path-plt', help='Path to store the runtime trace plot file',
+                                    default='res.png')
+    
     return parser
 
 
-def parse_mlu_problem_description_args(parser: jsonargparse.ArgumentParser) -> Tuple[
+def parse_te_problem_description_args(parser: jsonargparse.ArgumentParser) -> Tuple[
     TrafficEngineeringProblemDescription,
     jsonargparse.Namespace]:
     """
-    Parse all the default arguments needed for the MLU problem.
+    Parse all the default arguments needed for the TE problem.
 
     Arguments
     ---------
     parser: `jsonargparse.ArgumentParser`
-        The argument parser (assumed produced with `mlu_argparser`)
+        The argument parser (assumed produced with `te_argparser`)
     
     Returns
     -------
     problem_description: TrafficEngineeringProblemDescription
-        Full description of our MLU problem to pass to our solvers
+        Full description of our TE problem to pass to our solvers
     args: jsonargparse.Namespace
         The namespace object of parsed arguments to further process
     """
@@ -186,11 +196,14 @@ def parse_mlu_problem_description_args(parser: jsonargparse.ArgumentParser) -> T
     eval_params = TrafficEngineeringLPEvaluationParams(
         TopologyName=args.topo, 
         Seed=args.tm_seed, 
+        Objective=args.objective,
         SaveSol=args.save_sol,
         ScaleFactor=args.scale_factor,
         FeasibilityTolerance=args.feas_tol, 
         FeasibilityRatio=None,
-        PrintReports=args.report_unsat
+        PrintReports=args.report_unsat,
+        TraceOutputPath=args.path_trace,
+        PLTOutputPath=args.path_plt
     )
 
     converter_seed = args.converter_seed
@@ -216,7 +229,7 @@ def parse_mlu_problem_description_args(parser: jsonargparse.ArgumentParser) -> T
     else:
         solution_params = None
     
-    problem_description = edge_based_mlu_input_helper(
+    problem_description = edge_based_te_input_helper(
         eval_params=eval_params, warmstart_params=warm_start_params,
         solution_params=solution_params
     )
@@ -225,6 +238,6 @@ def parse_mlu_problem_description_args(parser: jsonargparse.ArgumentParser) -> T
 
 
 __all__ = [
-    'edge_based_mlu_input_helper', 'parse_mlu_problem_description_args', 
-    'mlu_problem_description_parser'
+    'edge_based_te_input_helper', 'parse_te_problem_description_args', 
+    'te_problem_description_parser'
 ]

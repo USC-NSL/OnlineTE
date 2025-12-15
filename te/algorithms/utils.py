@@ -16,6 +16,7 @@ from te.traffic_models.base import TrafficMatrixBase
 from te.algorithms.base import TrafficEngineeringLP, SolverParams, TrafficEngineeringLPEvaluationParams
 from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution, EdgeBasedMinimizeMaximumUtilitySolutionParams
 from te.algorithms.statistics.base import stringify_collected_stats
+from te.algorithms.sub_algorithms.stretch import get_average_stretch
 
 
 
@@ -24,118 +25,64 @@ def get_solution_confusion_matrix(lp: TrafficEngineeringLP, eval_params: Traffic
     Plot the solution and output the objective trace.
     """
     def write_traces(_lp: TrafficEngineeringLP):
-        solver_params = _lp.solver_params
         objective_trace = _lp.objective_trace
         objective_gap_trace = _lp.objective_gap_trace
+        average_stretch: np.ndarray = get_average_stretch(
+            _lp.commodity_list,
+            _lp.assignments,
+            _lp.graph
+        )
         if objective_trace is None:
             objective_trace = []
         else:
             objective_trace = objective_trace.trace
         if objective_gap_trace is None:
             objective_gap_trace = []
-        rho_coeff_trace = []
-        eta_coeff_trace = []
-        if hasattr(solver_params, 'UseVariableRho'):
-            if solver_params.UseVariableRho:
-                rho_coeff_trace = _lp.rho_coeff_trace
-                eta_coeff_trace = _lp.eta_coeff_trace
         with open(eval_params.TraceOutputPath, 'w') as traces:
             traces.writelines([
                 f'objective_value: {",".join([str(item) for item in objective_trace])}\n',
                 f'duality_gap: {",".join(str(item) for item in objective_gap_trace)}\n',
-                f'admm_step_coeff_1: {",".join(str(item) for item in rho_coeff_trace)}\n',
-                f'admm_step_coeff_2: {",".join(str(item) for item in eta_coeff_trace)}\n'
+                f'average_stretch: {",".join(str(item) for item in average_stretch.tolist())}'
             ])
-    
-    def get_cm(_lp: TrafficEngineeringLP):
-        try:
-            check_result = _lp.check_result
-        except ValueError:
-            _lp.check(eval_params)
-            check_result = _lp.check_result
-        
-        commodities = lp.commodity_list
-        topology_size = len(lp.graph.nodes)
-        cm = np.zeros(shape=(topology_size, topology_size))
-        for index in check_result.unsat_commodities:
-            commodity = commodities[index]
-            cm[commodity.source, commodity.destination] = 1
-        return cm
 
     def make_fig(_lp: TrafficEngineeringLP) -> Figure:
-        cm = get_cm(_lp)
+        avg_stretch = get_average_stretch(
+            lp.commodity_list,
+            lp.assignments,
+            lp.graph
+        )
         objective_trace = _lp.objective_trace
         objective_gap_trace = _lp.objective_gap_trace
-        solver_params = _lp.solver_params
-        rho_coeff_trace = None
-        if hasattr(solver_params, 'UseVariableRho'):
-            if solver_params.UseVariableRho:
-                print(as_info("ADMM algorithm used variable step sizes. Will plot that too"))
-                rho_coeff_trace = _lp.rho_coeff_trace
-                eta_coeff_trace = _lp.eta_coeff_trace
         if objective_trace is None:
             print(as_warning("No trace of objective value is available"))
         if objective_gap_trace is None:
             print(as_warning("No trace of primal/dual objective gap is available"))
         else:
-            if rho_coeff_trace is None:
-                if objective_gap_trace is None and objective_trace is None:
-                    fig = plt.figure(figsize=(4, 3))
-                    sns.heatmap(cm)
-                elif objective_trace is not None and objective_gap_trace is None:
-                    fig = plt.figure(figsize=(8, 3))
-                    plt.subplot(1, 2, 1)
-                    objective_trace.plot()
-                    plt.subplot(1, 2, 2)
-                    sns.heatmap(cm, vmin=0, vmax=1)
-                else:
-                    fig = plt.figure(figsize=(12, 3))
-                    plt.subplot(1, 3, 1)
-                    # plt.xlim([100, 300])
-                    objective_trace.plot()
-                    ax = plt.subplot(1, 3, 2)
-                    plt.plot(objective_gap_trace)
-                    ax.set_yscale('log')
-                    plt.subplot(1, 3, 3)
-                    sns.heatmap(cm, vmin=0, vmax=1)
+            if objective_gap_trace is None and objective_trace is None:
+                fig = plt.figure(figsize=(4, 3))
+                plt.subplot(1, 1, 1)
+                sns.ecdfplot(avg_stretch)
+                plt.title('Average Stretch (Hops)')
+            elif objective_trace is not None and objective_gap_trace is None:
+                fig = plt.figure(figsize=(8, 3))
+                plt.subplot(1, 2, 1)
+                objective_trace.plot()
+                plt.title('Objective Trace')
+                plt.subplot(1, 2, 2)
+                sns.ecdfplot(avg_stretch)
+                plt.title('Average Stretch (Hops)')
             else:
-                if objective_gap_trace is None and objective_trace is None:
-                    fig = plt.figure(figsize=(4, 6))
-                    plt.subplot(2, 2, 1)
-                    sns.heatmap(cm)
-                    ax = plt.subplot(2, 2, 3)
-                    ax.set_yscale('log')
-                    plt.plot(rho_coeff_trace)
-                    ax = plt.subplot(2, 2, 4)
-                    ax.set_yscale('log')
-                    plt.plot(eta_coeff_trace)
-                elif objective_trace is not None and objective_gap_trace is None:
-                    fig = plt.figure(figsize=(8, 6))
-                    plt.subplot(2, 2, 1)
-                    plt.plot(objective_trace)
-                    plt.subplot(2, 2, 2)
-                    sns.heatmap(cm)
-                    ax = plt.subplot(2, 2, 3)
-                    ax.set_yscale('log')
-                    plt.plot(rho_coeff_trace)
-                    ax = plt.subplot(2, 2, 4)
-                    ax.set_yscale('log')
-                    plt.plot(eta_coeff_trace)
-                else:
-                    fig = plt.figure(figsize=(12, 6))
-                    plt.subplot(2, 3, 1)
-                    objective_trace.plot()
-                    plt.subplot(2, 3, 2)
-                    sns.heatmap(cm)
-                    ax = plt.subplot(2, 3, 3)
-                    ax.set_yscale('log')
-                    plt.plot(objective_gap_trace)
-                    ax = plt.subplot(2, 3, 4)
-                    ax.set_yscale('log')
-                    plt.plot(rho_coeff_trace)
-                    ax = plt.subplot(2, 3, 5)
-                    ax.set_yscale('log')
-                    plt.plot(eta_coeff_trace)
+                fig = plt.figure(figsize=(12, 3))
+                plt.subplot(1, 3, 1)
+                objective_trace.plot()
+                plt.title('Objective Trace')
+                ax = plt.subplot(1, 3, 2)
+                plt.plot(objective_gap_trace)
+                ax.set_yscale('log')
+                plt.title('Objective Gap Trace')
+                plt.subplot(1, 3, 3)
+                sns.ecdfplot(avg_stretch)
+                plt.title('Average Stretch (Hops)')
             return fig
     
     if eval_params.ShowPLT or eval_params.SavePLT:

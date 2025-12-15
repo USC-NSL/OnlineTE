@@ -38,6 +38,7 @@ class PDLPTE(TrafficEngineeringLP):
         self._commodity_tuple_list: List[Commodity] = traffic_to_list_of_tuples(self._traffic)
         self._utility: Optional[float] = None
         self._X_ek: Optional[np.ndarray] = None
+        self._last_objective_value: Optional[float] = None
 
         self._NUM_VARIABLES: Optional[int] = None
         self._NUM_CONSTRAINTS: Optional[int] = None
@@ -65,8 +66,12 @@ class PDLPTE(TrafficEngineeringLP):
 
     @property
     def objective_value(self) -> float:
-        assert self._utility is not None
-        return self._utility
+        if self._problem_description.is_mlu:
+            assert self._utility is not None
+            return self._utility
+        else:
+            assert self._last_objective_value is not None
+            return self._last_objective_value
     
     @property
     def objective_trace(self) -> Optional[List[float]]:
@@ -94,8 +99,16 @@ class PDLPTE(TrafficEngineeringLP):
     def _set_solution(self, result: pdlp.SolverResult):
         K = len(self._commodity_list)
         N = len(self._graph.edges)
-        self._utility = result.primal_solution[-1]
-        self._X_ek = np.reshape(result.primal_solution[:-1], shape=(N, K))
+        if self._problem_description.is_mlu:
+            self._utility = result.primal_solution[-1]
+            self._X_ek = np.reshape(result.primal_solution[:-1], shape=(N, K))
+        else:
+            self._X_ek = np.reshape(result.primal_solution, shape=(N, K))
+    
+    def _set_last_objective(self, result: pdlp.SolverResult):
+        ls = result.solve_log.solution_stats.convergence_information
+        assert len(ls) == 1
+        self._last_objective_value = ls[0].primal_objective
 
     def _make_variables(self):
         N = self.graph.number_of_edges()
@@ -103,7 +116,10 @@ class PDLPTE(TrafficEngineeringLP):
         K = len(self.commodity_list)
 
         # First `NK` variables are the flows, `X_ek`. The last one is the utilization, `u`.
-        self._NUM_VARIABLES = N * K + 1
+        if self._problem_description.is_mlu:
+            self._NUM_VARIABLES = N * K + 1
+        else:
+            self._NUM_VARIABLES = N * K
         # Each edge has one capacity constraint (N)
         # Each commodity has two constraints on the source and destination (2 * 2 * K)
         # Each commodity has one constraint on every node other than the source or the destination ((M-2) * K)
@@ -120,7 +136,8 @@ class PDLPTE(TrafficEngineeringLP):
     
     def _get_variable_upper_bound_vector(self) -> np.ndarray:
         out = np.ones(shape=(self._NUM_VARIABLES,)) * np.inf
-        out[-1] = 1.0
+        if self._problem_description.is_mlu:
+            out[-1] = 1.0
         return out
 
     def _get_endpoint_constraint_vector_for_commodity(self, demand: float, source: int, target: int, k: int) -> ConstraintVector:
@@ -134,7 +151,8 @@ class PDLPTE(TrafficEngineeringLP):
 
         for e in OUT_INDEX[source]:
             coeff[0, self._get_flow_index(K, e, k)] = 1.0
-            lower[0] = demand
+            if self._problem_description.is_mlu:
+                lower[0] = demand
             upper[0] = demand
         for e in IN_INDEX[source]:
             coeff[1, self._get_flow_index(K, e, k)] = 1.0
@@ -146,7 +164,8 @@ class PDLPTE(TrafficEngineeringLP):
             upper[2] = 0      
         for e in IN_INDEX[target]:
             coeff[3, self._get_flow_index(K, e, k)] = 1.0
-            lower[3] = demand
+            if self._problem_description.is_mlu:
+                lower[3] = demand
             upper[3] = demand
         
             return coeff, lower, upper
@@ -186,13 +205,24 @@ class PDLPTE(TrafficEngineeringLP):
             start = e * K
             end = start + K
             coeff[e, start:end] = 1.0
-            coeff[e, -1] = -self._capacities[e]
+            if self._problem_description.is_mlu:
+                coeff[e, -1] = -self._capacities[e]
+            else:
+                upper[e] = self._capacities[e]
         
         return coeff, lower, upper
 
     def _get_objective_vector(self) -> Tuple[float, np.ndarray]:
         vec = np.zeros(shape=(self._NUM_VARIABLES,))
-        vec[-1] = 1.0
+        if self._problem_description.is_mlu:
+            vec[-1] = 1.0
+        else:
+            print("Adding objective")
+            OUT_INDEX = self._out_indexing
+            K = len(self._commodity_list)
+            for k, commodity in ShortTQDMEnumerate(self.commodity_list):
+                for e in OUT_INDEX[commodity.source]:
+                    vec[self._get_flow_index(K, e, k)] = -1.0
         return 0, vec
     
     def _get_demand_constraints(self) -> ConstraintVector:
@@ -269,6 +299,7 @@ class PDLPTE(TrafficEngineeringLP):
             if result.solve_log.termination_reason == solve_log_pb2.TERMINATION_REASON_OPTIMAL:
                 self._set_solution(result)
                 return result.solve_log.solve_time_sec
+            self._set_solution(result)
             print(as_fail(f"Solution failed. Reason: {solve_log_pb2.TerminationReason.Name(result.solve_log.termination_reason)}"))
             return -1
         except Exception as e:
@@ -324,23 +355,13 @@ class PDLPTE(TrafficEngineeringLP):
         raise NotImplementedError
 
 
-import argparse
+import jsonargparse
 
-def centralized_pdlp_solver_params_parser(parser: argparse.ArgumentParser):
-    PDLP_PARAMS = PDLPParams()
-    parser.add_argument('--threads', type=int, help='Number of threads to use for PDHG', default=PDLP_PARAMS.Threads)
-    parser.add_argument('--presolve', help='Perform presolve', action='store_true')
+def centralized_pdlp_solver_params_parser() -> jsonargparse.ArgumentParser:
+    parser = jsonargparse.ArgumentParser()
+    parser.add_class_arguments(PDLPParams, 'SolverParams', help='PDLP Solver Params')
+    return parser
 
 
-def parse_centralized_pdlp_solver_params(
-    parser: argparse.ArgumentParser, 
-    args: Optional[argparse.Namespace] = None
-) -> Tuple[PDLPParams, argparse.Namespace]:
-    if args is None:
-        args = parser.parse_args()
-    PDLP_PARAMS = PDLPParams()
-    PDLP_PARAMS.Threads = args.threads
-    PDLP_PARAMS.FeasibilityTol = args.feas_tol
-    PDLP_PARAMS.ConvTol = args.conv_tol
-    PDLP_PARAMS.Presolve = args.presolve
-    return PDLP_PARAMS, args
+def parse_centralized_pdlp_solver_params(args: jsonargparse.Namespace) -> PDLPParams:
+    return PDLPParams.make_from_args(args.SolverParams)

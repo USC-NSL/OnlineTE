@@ -1,5 +1,6 @@
 import tqdm
 import numpy as np
+import te.constants
 from typing import List, Iterable, Optional
 
 
@@ -69,7 +70,8 @@ class ShortTQDM:
         else:
             assert length is not None
             self._len = length
-        self._pbar = tqdm.tqdm(object, bar_format=self.pbar_format(), total=self._len)
+        if te.constants.SHOW_PROGRESS_BAR:
+            self._pbar = tqdm.tqdm(object, bar_format=self.pbar_format(), total=self._len)
         self._object = iter(object)
     
     def __len__(self) -> int:
@@ -81,10 +83,12 @@ class ShortTQDM:
     def __next__(self):
         try:
             obj = next(self._object)
-            self._pbar.update()
+            if te.constants.SHOW_PROGRESS_BAR:
+                self._pbar.update()
             return obj
         except StopIteration:
-            self._pbar.close()
+            if te.constants.SHOW_PROGRESS_BAR:
+                self._pbar.close()
             raise StopIteration
     
 
@@ -92,4 +96,5 @@ class ShortTQDMEnumerate(ShortTQDM):
     def __init__(self, object: List):
         self._len = len(object)
         self._object = enumerate(object)
-        self._pbar = tqdm.tqdm(object, bar_format=self.pbar_format(), total=self._len)
+        if te.constants.SHOW_PROGRESS_BAR:
+            self._pbar = tqdm.tqdm(object, bar_format=self.pbar_format(), total=self._len)

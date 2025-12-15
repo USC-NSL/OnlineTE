@@ -205,7 +205,6 @@ def get_node_out_array(graph: nx.DiGraph) -> Dict[int, np.ndarray]:
         mapping[v] = np.zeros(shape=(graph.out_degree(v),), dtype=np.int32)
         for i, anc_v in enumerate(graph.successors(v)):
             mapping[v][i] = indexing[(v, anc_v)]
-    print(mapping)
     return mapping
 
 

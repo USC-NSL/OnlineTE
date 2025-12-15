@@ -1,6 +1,6 @@
 from typing import Tuple, Dict
 from te.algorithms.base import SolverParams, TrafficEngineeringLP
-from . import METHOD_MAP, METHOD_MAP_REVERSE, GurobiSolverParams, PDLPParams
+from . import GurobiSolverParams, PDLPParams
 from .gurobi import GurobiTE, centralized_gurobi_solver_params_parser, parse_centralized_gurobi_solver_params
 from .pdlp import PDLPTE, centralized_pdlp_solver_params_parser, parse_centralized_pdlp_solver_params
 from .dual_gurobi import DualGurobiTE, centralized_dual_gurobi_solver_params_parser, parse_centralized_dual_gurobi_solver_params
@@ -21,7 +21,6 @@ Avaialble solvers are:
 
 __all__ = [
     'AVAILABLE_SOLVERS',
-    'METHOD_MAP', 'METHOD_MAP_REVERSE',
     'GurobiTE', 'GurobiSolverParams', 'centralized_gurobi_solver_params_parser', 'parse_centralized_gurobi_solver_params',
     'PDLPTE', 'PDLPParams', 'centralized_pdlp_solver_params_parser', 'parse_centralized_pdlp_solver_params',
     'DualGurobiTE', 'centralized_dual_gurobi_solver_params_parser', 'parse_centralized_dual_gurobi_solver_params'

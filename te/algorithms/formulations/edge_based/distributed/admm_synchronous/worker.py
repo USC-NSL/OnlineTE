@@ -68,7 +68,7 @@ class SynchADMMWorkerNode(DistributedSolverNodeBase):
         if PARAMS.UseSparseBasis:
             self._NTN_M_inv = cpu_array(np.linalg.inv(PARAMS.Gamma * NULL_M.T @ NULL_M + np.eye(T)))
         else:
-            self._NTN_M_inv = cpu_array(np.eye(T) / (1 + PARAMS.Gamma))
+            self._NTN_M_inv = None
         self._T = T
         self._Y_tk_chunk = cpu_zeros((T, CHUNK_LEN))
         self._Y_bar_t_cached: Optional[CPUArray] = cpu_zeros((T,))

@@ -9,12 +9,14 @@ from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
 from topologies.utils import get_graph_M_matrix, get_adjacency_null_space, get_commodity_in_out_mask, get_sparse_null_space
 from utils.exceptions import SolutionInterrupted
-from utils.logging import as_info, as_success, as_warning, log_subsection_separator, ShortTQDM
+from utils.logging import as_info, as_success, log_subsection_separator, ShortTQDM
 from te.algorithms.array_utils import set_global_precision
 from te.algorithms.array_utils.cpu_utils import (CPUArray, BooleanCPUArray,
                                                  cpu_array, cpu_zeros, cpu_double_array, 
                                                  set_cpu_float_precision)
 from te.algorithms.utils import get_solution_maximum_utilization
+# TODO: Finish the `SharingWrapper` for the inner loop
+from te.algorithms.sub_algorithms.admm import ADMMWrapper
 from te.algorithms.sub_algorithms.feasible_assignment import get_feasible_flow_assignment
 from te.algorithms.sub_algorithms.admm_consensus_test import outer_admm_consensus_test, inner_admm_consensus_test, norm_in_consensus
 from te.algorithms.sub_algorithms.link_capacity_test import check_capacity_constraint
@@ -47,7 +49,6 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
 
         self._NULL_M: CPUArray = None
         self._NNT_M: CPUArray = None
-        self._NTN_M_inv: CPUArray = None
         
         self._T: Optional[int] = None
         self._NUM_EDGES: Optional[int] = None
@@ -65,11 +66,12 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
         self._X_ek_start: Optional[CPUArray] = None
         self._Z_e_start: Optional[CPUArray] = None
         self._X_ek_sum_e: Optional[CPUArray] = None
-        self._r_e: Optional[CPUArray] = None
+        self._outer_admm_wrapper: Optional[ADMMWrapper] = None
 
         self._P_bar_t: Optional[CPUArray] = None
         self._Y_bar_t: Optional[CPUArray] = None
         self._u_t: Optional[CPUArray] = None
+        self._inner_admm_wrapper: Optional[ADMMWrapper] = None
 
         self.backend: SynchADMMControllerBackendBase = node_params.CommunicationBackendCLS(node_params.RPCParams_)
         # self.backend.register_signal_handler()
@@ -153,17 +155,7 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
             N = cpu_array(get_adjacency_null_space(M))
         T = N.shape[1]
         self._NULL_M = N
-        density = np.count_nonzero(N) * 100 // N.size
-        print(as_info(f'Density of null space basis: {density}'))
-        if density > 10 and self._solver_params.UseSparseBasis:
-            print(as_warning('The null space basis is still very dense!'))
         self._NNT_M = N @ N.T
-        ETA = self._solver_params.Eta
-        RHO = self._solver_params.Rho
-        if self._solver_params.UseSparseBasis:
-            self._NTN_M_inv = cpu_array(np.linalg.inv(N.T @ N + ETA/RHO * np.eye(T)))
-        else:
-            self._NTN_M_inv = cpu_array(np.eye(T) / (1 + ETA/RHO))
         self._T = T
         self._NUM_EDGES = n
         self._M_MASK = get_commodity_in_out_mask(self.graph, self.commodity_list)
@@ -177,7 +169,6 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
         self._capacities = cpu_double_array([item[-1] for item in self._graph.edges(data='capacity')])
         self._c_norm = np.linalg.norm(self._capacities)
         self._alpha = self._c_norm * np.sqrt(NUM_EDGES)
-        self._r_e = cpu_zeros((NUM_EDGES,))
         self._u_t = cpu_zeros((T,))
         self._P_bar_t = cpu_zeros((T,))
         self._Y_bar_t = cpu_zeros((T,))
@@ -191,6 +182,9 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
         self._mlu_params._Rho = self._solver_params.Rho
         self._mlu_params._Alpha = self._alpha
         self._mlu_solver = self._mlu_solver_cls(NUM_EDGES, self._capacities, self._mlu_params)
+
+        self._outer_admm_wrapper = ADMMWrapper(NUM_EDGES, self._solver_params.Rho)
+        self._outer_admm_wrapper.initialize(self._X_ek_sum_e)
     
     def _report_problem_size(self):
         M = len(self._graph.nodes)
@@ -221,7 +215,7 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
         self._mlu_solver._make_variables()
         
     def _get_F(self) -> np.ndarray:
-        return self._get_Z_value() - self._Z_e_start - self._r_e
+        return self._outer_admm_wrapper.get_X_step_bias() - self._Z_e_start
     
     def _set_X_ek(self):
         self._X_ek = self.backend.get_X_ek(
@@ -237,9 +231,7 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
     @record_cpu_runtime('Controller-Update')
     def _update_controller_objective(self):
         assert self._mlu_solver is not None
-        X_EK_SUM_E = self._X_ek_sum_e
-        R_E = self._r_e
-        self._mlu_solver.update_F_m(X_EK_SUM_E + R_E)
+        self._mlu_solver.update_F_m(-self._outer_admm_wrapper.get_Z_step_bias())
     
     def _add_objective(self):
         assert self._mlu_solver is not None
@@ -248,6 +240,7 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
     @record_return_value('PGD-Runtime')
     @record_cpu_runtime('Network-Update')
     def _do_network_update(self, epoch: int):
+        # TODO: Try to make the workers return aggregate flows as well
         max_run, self._Y_bar_t = self.backend.do_network_update(epoch)
         return max_run
     
@@ -261,10 +254,7 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
         Y_BAR_T = self._Y_bar_t
         F_E = self._get_F()
         NULL_M = self._NULL_M
-        # P_BAR_T = (NULL_M.T @ F_E + (ETA/RHO) * (U_T + Y_BAR_T)) / (K + (ETA/RHO))
-        # TODO: See https://github.com/USC-NSL/DistributedTE/issues/29
-        # P_BAR_T = (NULL_M.T @ F_E / K + (ETA/RHO) * (U_T + Y_BAR_T)) / (1 + (ETA/RHO))
-        P_BAR_T = self._NTN_M_inv @ (NULL_M.T @ F_E / K + (ETA/RHO) * (U_T + Y_BAR_T))
+        P_BAR_T = (NULL_M.T @ F_E / K + (ETA/RHO) * (U_T + Y_BAR_T)) / (1 + (ETA/RHO))
         self._P_bar_t = P_BAR_T
     
     def _update_u_t(self):
@@ -291,16 +281,19 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
     
     @record_cpu_runtime('Update-X-EK-SUM')
     def _update_X_ek_sum(self):
-        self._X_ek_sum_e = self._Z_e_start + len(self._commodity_list) * self._NULL_M @ self._Y_bar_t
+        # TODO: This is the correct way, but is too slow!
+        if self._solver_params.Beta is not None:
+            self._X_ek_sum_e = self.backend.get_X_ek_sum()
+        else:
+            self._X_ek_sum_e = self._Z_e_start + len(self._commodity_list) * self._NULL_M @ self._Y_bar_t
+        self._outer_admm_wrapper.record_X_update(self._X_ek_sum_e)
     
     @record_cpu_runtime('Update-Re')
     def _update_r_e(self):
         assert self._mlu_solver is not None
 
-        R_E = self._r_e
-        Z_E = self._get_Z_value()
-        X_EK_SUM_E = self._X_ek_sum_e
-        self._r_e = R_E + (X_EK_SUM_E - Z_E)
+        self._outer_admm_wrapper.record_Z_update(self._get_Z_value())
+        self._outer_admm_wrapper.update_dual_var(True)
 
     def close(self):
         self.backend.close()
@@ -337,6 +330,10 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
             MODEL_CONTROLLER.solve()
             self._update_r_e()
             for epoch in ShortTQDM(range(PARAMS.OuterLoopRounds)):
+                # print("="*50)
+                # print(f"X_EK_SUM:\t{np.round(self._outer_admm_wrapper.X, decimals=2)}")
+                # print(f"Z_E:\t{np.round(self._outer_admm_wrapper.Z, decimals=2)}")
+                # print(f"R_E:\t{np.round(self._outer_admm_wrapper.dual_var, decimals=2)}")
                 for i in reversed(range(PARAMS.InnerLoopRounds)):
                     self._do_network_update(epoch)
                     if i > 0 and self._reconvene_network_updates():
@@ -351,7 +348,13 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
                     float(self.objective_value), 
                     float(get_solution_maximum_utilization(self._X_ek_sum_e, self._graph))
                 )
+                # TODO: Find a way to add the inner loop infeasibility ...
+                self._objective_gap_trace.append(self._outer_admm_wrapper.infeasibility)
             self._set_X_ek()
+            # print("="*50)
+            # print(f"X_EK_SUM:\t{np.round(self._outer_admm_wrapper.X, decimals=2)}")
+            # print(f"Z_E:\t{np.round(self._outer_admm_wrapper.Z, decimals=2)}")
+            # print(f"R_E:\t{np.round(self._outer_admm_wrapper.dual_var, decimals=2)}")
             return time.time() - t
         except ControllerMLUException as e:
             print(f'MLU solver failed: {e}')

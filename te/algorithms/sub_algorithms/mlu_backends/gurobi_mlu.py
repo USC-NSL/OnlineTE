@@ -8,7 +8,7 @@ from te.algorithms.utils import as_info
 from .base import ControllerMLUSolver, ControllerMLUException
 from te.algorithms.statistics.helpers import record_cpu_runtime
 from te.algorithms.formulations.edge_based.centralized import make_model, optimize_or_scream
-from te.algorithms.formulations.edge_based.centralized import GurobiSolverParams, METHOD_MAP, METHOD_MAP_REVERSE
+from te.algorithms.formulations.edge_based.centralized import GurobiSolverParams
 
 
 @dataclass

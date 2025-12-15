@@ -3,7 +3,6 @@ from typing import Tuple
 from .base import ControllerMLUSolver, SolverParams
 from .gurobi_mlu import GurobiMLUParams, GurobiMLU, add_gurobi_mlu_solver_params_parser, parse_gurobi_mlu_solver_params
 from .pdlp_mlu import PDLPMLUParams, PDLPMLU, add_pdlp_mlu_solver_params_parser, parse_pdlp_mlu_solver_params
-from te.algorithms.formulations.edge_based.centralized import METHOD_MAP, METHOD_MAP_REVERSE
 
 
 def add_mlu_backend_parser(parser: jsonargparse.ArgumentParser):
@@ -46,7 +45,6 @@ def parse_mlu_backend_params(args: jsonargparse.Namespace) -> Tuple[SolverParams
 __all__ = [
     'GurobiMLUParams', 'PDLPMLUParams',
     'GurobiMLU', 'PDLPMLU',
-    'METHOD_MAP', 'METHOD_MAP_REVERSE',
     'ControllerMLUSolver',
     'add_mlu_backend_parser', 'parse_mlu_backend_params'
 ]

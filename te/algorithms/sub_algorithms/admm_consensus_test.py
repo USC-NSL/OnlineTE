@@ -39,7 +39,7 @@ def outer_admm_consensus_test(primal: np.ndarray, pair: np.ndarray, eval_params:
         primal_e = primal[e]
         pair_e = pair[e]
         if (abs(primal_e) < NEGLIGIBLE_FLOW_ABS_TOL) and (abs(pair_e) < NEGLIGIBLE_FLOW_ABS_TOL):
-            pass
+            continue
         elif not in_consensus(primal_e, pair_e, eval_params.FeasibilityTolerance, feasibility_ratio):
             violations.append((primal_e, pair_e))
     

@@ -1,4 +1,5 @@
 import os
+import enum
 import pickle
 import inspect
 import argparse
@@ -32,6 +33,13 @@ as_te_solution_name = lambda name: with_postfix(name, TE_SOLUTION_POSTFIX)
 as_solution_elements_name = lambda name: with_postfix(name, SOLUTION_ELEMENTS_POSTFIX)
 as_json_solution_name = lambda name: with_postfix(name, JSON_SOLUTION_POSTFIX)
 as_simplex_basis_name = lambda name: with_postfix(name, SIMPLEX_BASIS_POSTFIX)
+
+
+class TEObjective(str, enum.Enum):
+    """Describes the objective that we want to solve for"""
+    MLU = "MLU"
+    MAX_FLOW = "Max-Flow"
+    MAX_CONCURRENT_FLOW = "Max-Concurrent-Flow"
 
 
 class SolverParams(ABC):
@@ -153,6 +161,8 @@ class SolverParams(ABC):
             return f"<{value.__class__.__name__}>"
         elif inspect.isclass(value):
             return f"[{value.__class__.__name__}]"
+        elif isinstance(value, enum.Enum):
+            return str(value)
         raise ValueError(f'Unexpected instance: {type(value)}')
     
     def _field_to_string(self, key: str, value: Any):
@@ -239,6 +249,9 @@ class TrafficEngineeringLPEvaluationParams(SolverParams):
     Seed: int
         Any RNG will be initialized to this seed to make the
         evaluations reproducible.
+    Objective: TEObjective
+        The particular TE objective we want to solve for.
+        Defaults to MLU.
     ScaleFactor: float
         When a problem can become infeasible because of capacity
         constraints, this value can be used to inflate capacity
@@ -280,6 +293,7 @@ class TrafficEngineeringLPEvaluationParams(SolverParams):
     """
     TopologyName: str
     Seed: int
+    Objective: TEObjective = TEObjective.MLU
     ScaleFactor: float = 10.0
     FloatResolution: float = te.constants.FLOAT_RES
     FeasibilityTolerance: Optional[float] = None
@@ -300,6 +314,10 @@ class TrafficEngineeringLPEvaluationParams(SolverParams):
         copy = dataclasses.replace(self)
         for k, v in kwargs.items:
             setattr(copy, k, v)
+    
+    @property
+    def is_mlu(self) -> bool:
+        return self.Objective == TEObjective.MLU
 
 
 @dataclass
@@ -496,6 +514,10 @@ class TrafficEngineeringProblemDescription:
     WarmStartParams: Optional[TrafficEngineeringLPWarmStartParams] = None
     Solution: Optional[TrafficEngineeringLPSolution] = None
 
+    @property
+    def is_mlu(self) -> bool:
+        return self.EvalParams.is_mlu
+
 
 class TrafficEngineeringLP(ABC):
     @abstractmethod
@@ -644,7 +666,7 @@ class TrafficEngineeringLP(ABC):
 
 
 __all__ = [
-    'SolverParams', 'TrafficEngineeringLPEvaluationParams',
+    'SolverParams', 'TrafficEngineeringLPEvaluationParams', 'TEObjective',
     'TrafficEngineeringLPWarmStartParams', 'TrafficEngineeringLPSolutionParams',
     'TrafficEngineeringLPCheckResult', 'TrafficEngineeringLPSolution',
     'TrafficEngineeringProblemDescription', 'TrafficEngineeringLP',

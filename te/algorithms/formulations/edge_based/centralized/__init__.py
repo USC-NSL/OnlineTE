@@ -1,3 +1,4 @@
+import enum
 import gurobipy
 import te.constants
 from typing import Optional
@@ -8,22 +9,13 @@ from utils.exceptions import SolutionInterrupted
 from utils.logging import as_warning, as_fail, as_info
 
 
-METHOD_MAP = {
-    'BARRIER': gurobipy.GRB.METHOD_BARRIER,
-    'SIM-PRIMAL': gurobipy.GRB.METHOD_PRIMAL,
-    'SIM-DUAL': gurobipy.GRB.METHOD_DUAL
-}
-"""
-A mapping from a string to the method `enum` for Gurobi.
-"""
-METHOD_MAP_REVERSE = {
-    gurobipy.GRB.METHOD_BARRIER: 'BARRIER',
-    gurobipy.GRB.METHOD_PRIMAL: 'SIM-PRIMAL',
-    gurobipy.GRB.METHOD_DUAL: 'SIM-DUAL'
-}
-"""
-Reverse of `METHOD_MAP`
-"""
+class GurobiMethod(enum.Enum):
+    BARRIER = gurobipy.GRB.METHOD_BARRIER
+    SIM_PRIMAL = gurobipy.GRB.METHOD_PRIMAL
+    SIM_DUAL = gurobipy.GRB.METHOD_DUAL
+
+    def __str__(self) -> str:
+        return self.name
 
 
 @dataclass
@@ -33,8 +25,8 @@ class GurobiSolverParams(SolverParams):
 
     Attributes
     ----------
-    Method: int
-        The Gurobi solver method to be used (values should be clones of `GRB` enums)
+    Method: GurobiMethod
+        The Gurobi solver method to be used
     Crossover: int
         Whether to use Simplex crossover after finishing Barrier iterations. Since
         Gurobi epxects `int`s, we use `int` instead of `bool`.
@@ -56,7 +48,8 @@ class GurobiSolverParams(SolverParams):
     LogFile:
         Output log file for Gurobi.
     """
-    Method: int = te.constants.DEFAULT_SOLVER_METHOD
+    # Method: int = te.constants.DEFAULT_SOLVER_METHOD
+    Method: GurobiMethod = GurobiMethod.BARRIER
     Crossover: int = te.constants.DEFAULT_CROSSOVER
     NumericFocus: int = te.constants.DEFAULT_NUMERIC_FOCUS
     ConvTol: float = te.constants.DEFAULT_OPTIMALITY_TOLERANCE
@@ -101,7 +94,7 @@ class PDLPParams(SolverParams):
 def make_model(name: str, params: SolverParams, env: Optional[gurobipy.Env], verbose: bool = True, **kwargs):
     assert issubclass(params.__class__, GurobiSolverParams)
     model = gurobipy.Model(name=name, env=env)
-    model.Params.Method = params.Method
+    model.Params.Method = params.Method.value
     model.Params.Crossover = params.Crossover
     model.Params.NumericFocus = params.NumericFocus
 
@@ -123,7 +116,7 @@ def make_model(name: str, params: SolverParams, env: Optional[gurobipy.Env], ver
     if verbose:
         print(as_info(
             "Created Gurobi Model With:\n"
-            f"\tMethod: {METHOD_MAP_REVERSE[params.Method]}\n"
+            f"\tMethod: {params.Method}\n"
             f"\tSimplex Optimality Tolerance (OptimalityTol): {model.Params.OptimalityTol}\n"
             f"\tBarrier Optimality Tolerance (BarConvTol): {model.Params.BarConvTol}\n"
             f"\tCosntraint Feasibility Tolerance (FeasibilityTol): {model.Params.FeasibilityTol}\n"

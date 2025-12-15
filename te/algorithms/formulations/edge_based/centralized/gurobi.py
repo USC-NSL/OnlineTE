@@ -10,7 +10,7 @@ from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
 from te.algorithms.sub_algorithms.link_capacity_test import check_capacity_constraint
 from te.algorithms.sub_algorithms.flow_conservation_test import check_flow_conservation
 from utils.logging import as_info, as_fail, ShortTQDMEnumerate
-from . import GurobiSolverParams, make_model, METHOD_MAP, METHOD_MAP_REVERSE
+from . import GurobiSolverParams, make_model
 
 
 class GurobiTE(TrafficEngineeringLP):
@@ -23,15 +23,15 @@ class GurobiTE(TrafficEngineeringLP):
         self._graph = problem_description.Graph
         self._traffic = problem_description.TM
         self._solver_params: GurobiSolverParams = solver_params
-        self._env: gurobipy.Env = None
-        self._model: gurobipy.Model = None
-        self._flows: gurobipy.tupledict = None
-        self._utility: gurobipy.Var = None
-        self._objective: gurobipy.LinExpr = None
+        self._env: Optional[gurobipy.Env] = None
+        self._model: Optional[gurobipy.Model] = None
+        self._flows: Optional[gurobipy.tupledict] = None
+        self._utility: Optional[gurobipy.Var] = None
+        self._objective: Optional[gurobipy.LinExpr] = None
         self._commodity_list: List[Commodity] = traffic_to_commodity(self._traffic)
-        self._demand_constraints: List[Tuple[gurobipy.Constr, gurobipy.Constr]] = None
-        self._capacity_constraints: gurobipy.tupledict = None
-        self._X_ek: np.ndarray = None
+        self._demand_constraints: Optional[List[Tuple[gurobipy.Constr, gurobipy.Constr]]] = None
+        self._capacity_constraints: Optional[gurobipy.tupledict] = None
+        self._X_ek: Optional[np.ndarray] = None
         
         self._report_problem_size()
     
@@ -53,7 +53,10 @@ class GurobiTE(TrafficEngineeringLP):
 
     @property
     def objective_value(self) -> float:
-        return self._utility.X
+        if self._problem_description.is_mlu:
+            return self._utility.X
+        else:
+            return -self._objective.getValue()
     
     @property
     def objective_trace(self) -> Optional[List[float]]:
@@ -110,8 +113,9 @@ class GurobiTE(TrafficEngineeringLP):
         # This implicitly encodes the condition for `X_{ke} >= 0`
         print(as_info("Adding commodity assignment variables"))
         self._flows = MODEL.addVars(N, K, lb=0.0, vtype=GRB.CONTINUOUS, name='X')
-        # Link utilization upper bound, may not be important based on what we need
-        self._utility = MODEL.addVar(lb=0.0, ub=1.0, vtype=GRB.CONTINUOUS, name='U')
+        # (MLU Only) Link utilization upper bound, may not be important based on what we need
+        if self._problem_description.is_mlu:
+            self._utility = MODEL.addVar(lb=0.0, ub=1.0, vtype=GRB.CONTINUOUS, name='U')
     
     def _add_constraints(self):
         assert self._model is not None and self._flows is not None
@@ -130,7 +134,10 @@ class GurobiTE(TrafficEngineeringLP):
             total_flow = gurobipy.LinExpr()
             for k in range(K):
                 total_flow.addTerms(1, FLOWS[(e, k)])
-            capacity_constraints.append(MODEL.addConstr(total_flow <= UTILITY * c_e))
+            if self._problem_description.is_mlu:
+                capacity_constraints.append(MODEL.addConstr(total_flow <= UTILITY * c_e))
+            else:
+                capacity_constraints.append(MODEL.addConstr(total_flow <= c_e))
         self._capacity_constraints = capacity_constraints
 
         """
@@ -154,9 +161,13 @@ class GurobiTE(TrafficEngineeringLP):
                 `sum(flow_out[src_k][k]) == sum(flow_in[dst_k][k])`
         
         We use the second form to make sure that the problem is always feasible.
+        For the case of MLU, we expect that some problems can ideed be infeasible.
         """
 
         demand_constraints = []
+        # For the case of Max-Flow / Max-Concurrent-Flow, we should just build the
+        # objective now so that we won't traverse the commodity list again ...
+        non_mlu_objective = gurobipy.LinExpr()
         print(as_info("Adding demand/flow-conservation constraints"))
         for k, commodity in ShortTQDMEnumerate(COMMODITIES):
             SOURCE = commodity.source
@@ -178,25 +189,44 @@ class GurobiTE(TrafficEngineeringLP):
             for v in GRAPH.nodes():
                 if v == SOURCE:
                     # Demand constraint from source
-                    source_constraint = MODEL.addConstr(flow_out[v] - flow_in[v] == DEMAND)
+                    if self._problem_description.EvalParams.Objective == TEObjective.MLU:
+                        source_constraint = MODEL.addConstr(flow_out[v] - flow_in[v] == DEMAND)
+                    elif self._problem_description.EvalParams.Objective == TEObjective.MAX_FLOW:
+                        source_constraint = MODEL.addConstr(flow_out[v] - flow_in[v] <= DEMAND)
+                    else:
+                        raise NotImplementedError
+                    
+                    # Update objective for non-MLU case
+                    if self._problem_description.EvalParams.Objective != TEObjective.MLU:
+                        non_mlu_objective.add(flow_out[v], -1)
                 elif v == DESTINATION:
                     # Demand constraint in destination
-                    destination_constraint = MODEL.addConstr(flow_in[v] - flow_out[v] == DEMAND)
+                    if self._problem_description.EvalParams.Objective == TEObjective.MLU:
+                        destination_constraint = MODEL.addConstr(flow_in[v] - flow_out[v] == DEMAND)
+                    elif self._problem_description.EvalParams.Objective == TEObjective.MAX_FLOW:
+                        destination_constraint = MODEL.addConstr(flow_in[v] - flow_out[v] <= DEMAND)
+                    else:
+                        raise NotImplementedError
                 else:
                     # Flow conservation in transit
                     MODEL.addConstr(flow_out[v] == flow_in[v])
             demand_constraints.append((source_constraint, destination_constraint))
         self._demand_constraints = demand_constraints
 
+        if not self._problem_description.is_mlu:
+            self._objective = non_mlu_objective
+
     def _add_objective(self):
         assert self._model is not None and \
-                self._flows is not None and \
-                self._objective is None
+                self._flows is not None
         
         MODEL = self._model
 
-        # For now, let's minimize maximum link utilization
-        self._objective = self._utility
+        if self._problem_description.is_mlu:
+            assert self._objective is None
+            self._objective = self._utility
+        else:
+            assert self._objective is not None
         MODEL.setObjective(self._objective, GRB.MINIMIZE)
     
     def close(self):
@@ -292,32 +322,13 @@ class GurobiTE(TrafficEngineeringLP):
         # solution.add_solution_element(self._capacity_constraints, 'capacity_constraints')
 
 
-import argparse
+import jsonargparse
 
-def centralized_gurobi_solver_params_parser(parser: argparse.ArgumentParser):
-    GUROBI_PARAMS = GurobiSolverParams()
-    parser.add_argument('--method', help='Gurobi method to use', choices=list(METHOD_MAP.keys()), 
-                        default=METHOD_MAP_REVERSE[GUROBI_PARAMS.Method])
-    parser.add_argument('--focus', help='Gurobi numeric focus', type=int, choices=[0, 1, 2, 3], default=GUROBI_PARAMS.NumericFocus)
-    parser.add_argument('--presolve', help='Perform presolve', action='store_true')
-    parser.add_argument('--crossover', action='store_true', help='(BARRIER only) perform crossover after barrier solver ends')
-    parser.add_argument('--threads', help='(BARRIER only) Max number of threads', type=int, default=GUROBI_PARAMS.Threads)
-    parser.add_argument('--log-to', help='Log file path', default=GUROBI_PARAMS.LogFile)
+def centralized_gurobi_solver_params_parser() -> jsonargparse.ArgumentParser:
+    parser = jsonargparse.ArgumentParser()
+    parser.add_class_arguments(GurobiSolverParams, 'SolverParams', help='Gurobi Solver Params')
+    return parser
 
 
-def parse_centralized_gurobi_solver_params(
-    parser: argparse.ArgumentParser, 
-    args: Optional[argparse.Namespace] = None
-) -> Tuple[GurobiSolverParams, argparse.Namespace]:
-    if args is None:
-        args = parser.parse_args()
-    GUROBI_PARAMS = GurobiSolverParams()
-    GUROBI_PARAMS.Method = METHOD_MAP[args.method]
-    GUROBI_PARAMS.NumericFocus = args.focus
-    GUROBI_PARAMS.FeasibilityTol = args.feas_tol
-    GUROBI_PARAMS.ConvTol = args.conv_tol
-    GUROBI_PARAMS.Presolve = args.presolve
-    GUROBI_PARAMS.Crossover = args.crossover
-    GUROBI_PARAMS.Threads = args.threads
-    GUROBI_PARAMS.LogFile = args.log_to
-    return GUROBI_PARAMS, args
+def parse_centralized_gurobi_solver_params(args: jsonargparse.Namespace) -> GurobiSolverParams:
+    return GurobiSolverParams.make_from_args(args.SolverParams)
