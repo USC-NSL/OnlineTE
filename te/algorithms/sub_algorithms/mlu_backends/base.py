@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from te.algorithms.base import SolverParams
+from te.algorithms.base import SolverParams, TEObjective
 from te.algorithms.array_utils.cpu_utils import CPUArray, DoublePrecisionCPUArray
 
 
@@ -23,6 +23,10 @@ class ControllerMLUSolver(ABC):
     @abstractmethod
     def num_edges(self) -> int:
         """Number of edges in the network"""
+    @property
+    @abstractmethod
+    def objective_type(self) -> TEObjective:
+        """The objective type being solved"""
     @property
     @abstractmethod
     def capacities(self) -> DoublePrecisionCPUArray:
@@ -53,7 +57,7 @@ class ControllerMLUSolver(ABC):
     @property
     @abstractmethod
     def current_u(self) -> float:
-        """Return the current optimal utilization value"""
+        """(MLU ONLY) Return the current optimal utilization value"""
     @property
     @abstractmethod
     def current_Z(self) -> CPUArray:

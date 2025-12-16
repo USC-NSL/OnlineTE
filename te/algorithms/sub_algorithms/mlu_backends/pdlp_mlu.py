@@ -1,10 +1,11 @@
 import numpy as np
 import scipy.sparse
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Optional
 from ortools.pdlp import solve_log_pb2
 from ortools.pdlp import solvers_pb2
 from ortools.pdlp.python import pdlp
+from te.algorithms.base import TEObjective
 from te.algorithms.utils import as_info
 from te.algorithms.array_utils.cpu_utils import CPUArray, cpu_array, cpu_cast_float
 from te.algorithms.formulations.edge_based.centralized import PDLPParams
@@ -26,11 +27,13 @@ Just like Gurobi, PDLP expects double-precision arrays ...
 
 
 class PDLPMLU(ControllerMLUSolver):
-    def __init__(self, num_edges: int, capacities: CPUArray, solver_params: PDLPMLUParams, num_domains: int = 1):
+    def __init__(self, num_edges: int, capacities: CPUArray, solver_params: PDLPMLUParams, num_domains: int = 1,
+                 objective: TEObjective = TEObjective.MLU):
         self._num_edges: int = num_edges
         self._capacities: np.ndarray = np.array(capacities, dtype=np.float64)
         self._solver_params = solver_params
         self._num_domains = num_domains
+        self._objective = objective
 
         self._current_F: np.ndarray = None
         self._solved: bool = False
@@ -52,6 +55,9 @@ class PDLPMLU(ControllerMLUSolver):
     def num_edges(self) -> int:
         return self._num_edges
     @property
+    def objective_type(self) -> TEObjective:
+        return self._objective
+    @property
     def capacities(self) -> CPUArray:
         return self._capacities
     @property
@@ -63,10 +69,16 @@ class PDLPMLU(ControllerMLUSolver):
     @property
     def is_solved(self) -> bool:
         return self._solved
+    @property
+    def is_mlu(self) -> bool:
+        return self._objective == TEObjective.MLU
     
     def _get_variable_lower_bound_vector(self) -> np.ndarray:
         out = np.full((self._NUM_VARIABLES,), -np.inf)
-        out[-1] = 0
+        if self.is_mlu:
+            out[-1] = 0
+        else:
+            out[-1] = 1.0
         return out
 
     def _get_variable_upper_bound_vector(self) -> np.ndarray:
@@ -101,7 +113,8 @@ class PDLPMLU(ControllerMLUSolver):
     def _get_objective_vector(self) -> np.ndarray:
         out = np.zeros((self._NUM_VARIABLES,))
         out[:-1] = -self._current_F * self._solver_params._Rho
-        out[-1] = self._solver_params._Alpha * self.num_domains
+        if self.is_mlu:
+            out[-1] = self._solver_params._Alpha * self.num_domains
         return out
 
     def update_F_m(self, new_F: CPUArray):

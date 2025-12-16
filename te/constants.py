@@ -86,7 +86,7 @@ DEFAULT_SCATTER_PORT = 12000
 Default UDP port used to bind for IP multicasting.
 """
 
-SHOW_PROGRESS_BAR = True
+SHOW_PROGRESS_BAR = False
 """
 Print `tqdm` progress bars
 """

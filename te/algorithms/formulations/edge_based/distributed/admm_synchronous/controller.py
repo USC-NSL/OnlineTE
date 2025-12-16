@@ -71,7 +71,15 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
         self._P_bar_t: Optional[CPUArray] = None
         self._Y_bar_t: Optional[CPUArray] = None
         self._u_t: Optional[CPUArray] = None
-        self._inner_admm_wrapper: Optional[ADMMWrapper] = None
+
+        # MAX-FLOW SPECIFIC
+        self._alpha_k: Optional[CPUArray] = None
+        self._beta_k: Optional[CPUArray] = None
+        self._l_k: Optional[CPUArray] = None
+        self._d_k: Optional[CPUArray] = None
+        self._X_bar_e: Optional[CPUArray] = None
+        self._J_bar_e: Optional[CPUArray] = None
+        self._f_e: Optional[CPUArray] = None
 
         self.backend: SynchADMMControllerBackendBase = node_params.CommunicationBackendCLS(node_params.RPCParams_)
         # self.backend.register_signal_handler()
@@ -355,6 +363,8 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
             # print(f"X_EK_SUM:\t{np.round(self._outer_admm_wrapper.X, decimals=2)}")
             # print(f"Z_E:\t{np.round(self._outer_admm_wrapper.Z, decimals=2)}")
             # print(f"R_E:\t{np.round(self._outer_admm_wrapper.dual_var, decimals=2)}")
+            # print("*"*50)
+            # print(np.round(self._X_ek, decimals=2))
             return time.time() - t
         except ControllerMLUException as e:
             print(f'MLU solver failed: {e}')

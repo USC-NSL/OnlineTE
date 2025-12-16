@@ -10,6 +10,7 @@ service DistributedADMMSolver {
     rpc DoNetworkUpdate(NetworkUpdateRequest) returns (NetworkUpdateResponse) {}
     rpc ResetInnerDualVariable(google.protobuf.Empty) returns (google.protobuf.Empty) {}
     rpc UpdateWorkerNode(UpdateMessage) returns (google.protobuf.Empty) {}
+    rpc UpdateMaxFlowWorkerNode(UpdateMessage) returns (google.protobuf.Empty) {}
     rpc RequestChunk(google.protobuf.Empty) returns (stream Chunk) {}
     rpc RequestAggregate(google.protobuf.Empty) returns (SerializedNumpyArrayMessage) {}
     rpc QueryState(google.protobuf.Empty) returns (State) {}
@@ -23,6 +24,14 @@ message UpdateMessage {
     SerializedNumpyArrayMessage u_t = 2;
     SerializedNumpyArrayMessage Y_bar_t = 3;
     int32 xid = 4;
+}
+
+message MaxFlowUpdateMessage {
+    SerializedNumpyArrayMessage J_bar_e = 1;
+    SerializedNumpyArrayMessage f_e = 2;
+    SerializedNumpyArrayMessage X_bar_e = 3;
+    SerializedNumpyArrayMessage TAU_e = 4;
+    int32 xid = 5;
 }
 
 message NetworkUpdateRequest {
