@@ -1,7 +1,7 @@
 import tqdm
-import gurobipy
 import numpy as np
-from typing import List, Union, Iterable, Optional
+import te.constants
+from typing import List, Iterable, Optional
 
 
 class ANSIColors:
@@ -31,13 +31,6 @@ def str_round(value, digits: int) -> str:
 
 def list_round(values: List, digits: int) -> List[str]:
     return [str_round(value, digits) for value in values]
-
-
-method_to_str = {
-    gurobipy.GRB.METHOD_BARRIER: "BARRIER",
-    gurobipy.GRB.METHOD_PRIMAL: "PRIMAL-SIMPLEX",
-    gurobipy.GRB.METHOD_DUAL: "DUAL-SIMPLEX"
-}
 
 
 LINE_SEPARATOR_LENGTH = 82
@@ -77,7 +70,8 @@ class ShortTQDM:
         else:
             assert length is not None
             self._len = length
-        self._pbar = tqdm.tqdm(object, bar_format=self.pbar_format(), total=self._len)
+        if te.constants.SHOW_PROGRESS_BAR:
+            self._pbar = tqdm.tqdm(object, bar_format=self.pbar_format(), total=self._len)
         self._object = iter(object)
     
     def __len__(self) -> int:
@@ -89,10 +83,12 @@ class ShortTQDM:
     def __next__(self):
         try:
             obj = next(self._object)
-            self._pbar.update()
+            if te.constants.SHOW_PROGRESS_BAR:
+                self._pbar.update()
             return obj
         except StopIteration:
-            self._pbar.close()
+            if te.constants.SHOW_PROGRESS_BAR:
+                self._pbar.close()
             raise StopIteration
     
 
@@ -100,4 +96,5 @@ class ShortTQDMEnumerate(ShortTQDM):
     def __init__(self, object: List):
         self._len = len(object)
         self._object = enumerate(object)
-        self._pbar = tqdm.tqdm(object, bar_format=self.pbar_format(), total=self._len)
+        if te.constants.SHOW_PROGRESS_BAR:
+            self._pbar = tqdm.tqdm(object, bar_format=self.pbar_format(), total=self._len)

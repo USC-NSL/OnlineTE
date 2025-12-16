@@ -14,7 +14,7 @@ from te.traffic_models import get_traffic_model, get_traffic_model_params, get_t
 from te.traffic_models.base import TrafficMatrixBase, TrafficMatrixConverterBase, TrafficMatrixParamsBase
 from te.algorithms.base import (
     as_te_solution_name, as_json_solution_name, as_solution_elements_name, as_simplex_basis_name, 
-    TrafficEngineeringLPSolution, SolutionElementBase)
+    TrafficEngineeringLP, TrafficEngineeringLPSolution, TrafficEngineeringLPSolutionParams, SolutionElementBase)
 
 
 END_TOKEN = '----'
@@ -239,15 +239,49 @@ def _(sol: Dict[Tuple, gp.Constr], name: str) -> GurobiDualVariableTupleDictSolu
 
 
 @dataclass
-class EdgeBasedMinimizeMaximumUtilitySolutionParams:
-    seed: int
-    topology_name: str
-    capacity: float
-    tm_model_name: str
-    tm_model_params: TrafficMatrixParamsBase
-    path: Optional[str] = None
-    sol_name: Optional[str] = None
-    runtime: Optional[float] = None
+class EdgeBasedMinimizeMaximumUtilitySolutionParams(TrafficEngineeringLPSolutionParams):
+    """
+    Class for keeping solution information and parameters.
+
+    Attributes
+    ----------
+    TMSeed: int
+        RNG seed used to get the traffic matrix.
+    TopologyName: str
+        Name of the topology being solved
+    Capacity: float
+        Capacity of all links
+    TMModelName: str
+        Name of the traffic matrix model
+    TMModelParams: type[TrafficMatrixParamsBase]
+        TM model parameters given the name
+    Runtime: float
+        How long the solver took to return the solution
+    
+    TODO
+    -----
+    - Modify `Capacity` to allow for a list of capacities
+    """
+    TMSeed: int
+    TopologyName: str
+    Capacity: float
+    TMModelName: str
+    TMModelParams: type[TrafficMatrixParamsBase]
+    Runtime: Optional[float] = None
+
+    def __post_init__(self):
+        self.left_column_share = 0.5
+        if self.Path is None:
+            assert self.Name is not None
+        assert dataclasses.is_dataclass(self.TMModelParams)
+        if self.Name is None:
+            self.Name = default_solution_name(
+                topology_name=self.TopologyName,
+                rng_seed=self.TMSeed,
+                tm_type=self.TMModelName
+            )
+        if self.Path is None:
+            self.Path = f'$$SOLDIR/{self.Name}'
 
 
 class EdgeBasedMinimizeMaximumUtilitySolution(TrafficEngineeringLPSolution):
@@ -270,19 +304,13 @@ class EdgeBasedMinimizeMaximumUtilitySolution(TrafficEngineeringLPSolution):
     `.elems` file, where each line holds information about a designated solution value.
     """
     def __init__(self, params: EdgeBasedMinimizeMaximumUtilitySolutionParams):
-        assert dataclasses.is_dataclass(params.tm_model_params)
-        if params.path is None:
-            assert params.sol_name is not None
-
-        self.seed = params.seed
-        self.topology_name = params.topology_name
-        self.capacity = float(params.capacity)
-        self.tm_model_name = params.tm_model_name
-        self.tm_model_params = params.tm_model_params
-        self.path = params.path \
-            if params.path is not None \
-            else f'$$SOLDIR/{params.sol_name}'
-        self.runtime = params.runtime
+        self.seed = params.TMSeed
+        self.topology_name = params.TopologyName
+        self.capacity = float(params.Capacity)
+        self.tm_model_name = params.TMModelName
+        self.tm_model_params = params.TMModelParams
+        self.path = params.Path
+        self.runtime = params.Runtime
         self.solution_elements: List[SolutionElementBase] = []
     
     def add_solution_element(self, element, name: str):
@@ -501,8 +529,8 @@ def tuple_dict_to_np_array(element: Union[GurobiTupleDictSolutionElement, Gurobi
     return out
 
 
-def default_solution_name(topology_name: str, rng_seed: int, tm_type: str, postfix: Optional[str] = None, **gurobi_kwargs) -> str:
-    items = [topology_name, str(rng_seed), tm_type]
+def default_solution_name(topology_name: str, rng_seed: int, tm_model_name: str, postfix: Optional[str] = None, **gurobi_kwargs) -> str:
+    items = [topology_name, str(rng_seed), tm_model_name]
     method = gurobi_kwargs.get('method')
     if method is not None:
         if isinstance(method, int):

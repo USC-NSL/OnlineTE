@@ -20,7 +20,7 @@ When generating baseline solutions, one shortcut we can use is to use Barrier in
 with crossover explicitly enabled. This gives us a solution much faster.
 """
 
-DEFAULT_OPTIMALITY_TOLERANCE = 1e-2
+DEFAULT_OPTIMALITY_TOLERANCE = 1e-3
 """
 Solutions don't need to be too accurate, since we have to simplify them later anyway.
 Thus, we relax barrier convergence tolerance, and stop within 1 percent of the optimal.
@@ -66,3 +66,27 @@ DEFAULT_TAU_INC = 2
 DEFAULT_TAU_DEC = 2
 DEFAULT_BIG_GAMMA = 1e-4
 DEFAULT_BIG_THETA = 1e-2
+
+
+# Distributed implementation specific
+DEFAULT_RPC_PORT = 13000
+"""
+Can be used to bind RPC servers when spawning a lone node on just one
+independent machine.
+"""
+
+DEFAULT_SCATTER_ADDRESS = "224.0.0.10"
+"""
+Default multicast group address used for scattering updates from the controller
+to many workers.
+"""
+
+DEFAULT_SCATTER_PORT = 12000
+"""
+Default UDP port used to bind for IP multicasting.
+"""
+
+SHOW_PROGRESS_BAR = False
+"""
+Print `tqdm` progress bars
+"""

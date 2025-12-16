@@ -11,3 +11,4 @@ seaborn==0.11.2
 tqdm==4.66.4
 sympy>=1.13.1
 ortools>=9.12.4544
+jsonargparse==4.43.0

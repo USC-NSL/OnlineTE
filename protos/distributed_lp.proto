@@ -5,28 +5,18 @@ import "array.proto";
 
 service DistributedADMMSolver {
     rpc SetInitialFeasibleSolution(stream Chunk) returns (google.protobuf.Empty) {}
-    // rpc InitializeWorkerNode(InitMessage) returns (google.protobuf.Empty) {}
     rpc SetNullSpaceBasis(stream Chunk) returns (google.protobuf.Empty) {}
     rpc SetCommodityInOutMask(stream Chunk) returns (google.protobuf.Empty) {}
     rpc DoNetworkUpdate(NetworkUpdateRequest) returns (NetworkUpdateResponse) {}
     rpc ResetInnerDualVariable(google.protobuf.Empty) returns (google.protobuf.Empty) {}
     rpc UpdateWorkerNode(UpdateMessage) returns (google.protobuf.Empty) {}
+    rpc UpdateMaxFlowWorkerNode(UpdateMessage) returns (google.protobuf.Empty) {}
     rpc RequestChunk(google.protobuf.Empty) returns (stream Chunk) {}
     rpc RequestAggregate(google.protobuf.Empty) returns (SerializedNumpyArrayMessage) {}
     rpc QueryState(google.protobuf.Empty) returns (State) {}
     rpc SetSolverParameters(SolverParameters) returns (google.protobuf.Empty) {}
     rpc SetActiveCommodityCount(ActiveCommodityCount) returns (google.protobuf.Empty) {}
     rpc Close(google.protobuf.Empty) returns (google.protobuf.Empty) {}
-
-    // DEBUG
-    rpc DebugRequestLambda(google.protobuf.Empty) returns (stream Chunk) {}
-}
-
-message InitMessage {
-    SerializedNumpyArrayMessage NULL_M = 1;
-    optional SerializedNumpyArrayMessage P_bar_t = 2;
-    optional SerializedNumpyArrayMessage u_t = 3;
-    optional SerializedNumpyArrayMessage Y_bar_t = 4;
 }
 
 message UpdateMessage {
@@ -34,6 +24,14 @@ message UpdateMessage {
     SerializedNumpyArrayMessage u_t = 2;
     SerializedNumpyArrayMessage Y_bar_t = 3;
     int32 xid = 4;
+}
+
+message MaxFlowUpdateMessage {
+    SerializedNumpyArrayMessage J_bar_e = 1;
+    SerializedNumpyArrayMessage f_e = 2;
+    SerializedNumpyArrayMessage X_bar_e = 3;
+    SerializedNumpyArrayMessage TAU_e = 4;
+    int32 xid = 5;
 }
 
 message NetworkUpdateRequest {
@@ -54,19 +52,18 @@ message State {
 }
 
 message SolverParameters {
-    int32 NumberOfEpochs = 1;
-    int32 NumberOfNetworkUpdates = 2;
-    int32 NumberOfLocalUpdates = 3;
-    float Rho = 4;
-    float Eta = 5;
-    float Gamma = 6;
-    float Kappa = 7;
-    int32 QPIterations = 8;
-    string QPMethod = 9;
-    int32 NumWorkers = 10;
-    string Precision = 11;
-    float BigGamma = 12;
-    int32 Seed = 13;
+    optional int32 OuterLoopRounds = 1;
+    optional int32 InnerLoopRounds = 2;
+    optional float Rho = 3;
+    optional float Eta = 4;
+    optional float Gamma = 5;
+    optional float Beta = 6;
+    optional bool UseSparseBasis = 7;
+    optional int32 SwitchIterations = 8;
+    optional float ConvTol = 9;
+    optional string Precision = 10;
+    optional int32 TMSeed = 11;
+    optional int32 NumWorkers = 12;
 }
 
 message ActiveCommodityCount {

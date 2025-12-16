@@ -1,17 +1,21 @@
 import os
+import enum
 import pickle
+import inspect
+import argparse
 import numpy as np
 import networkx as nx
 import te.constants
 import dataclasses
+import jsonargparse
 import matplotlib.pyplot as plt
-from multiprocessing import cpu_count
+from itertools import count
 from typing import List, Optional, Tuple, Dict, Union, Any, Set
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from te.algorithms import SOLUTION_DIR
-from utils.logging import LINE_SEPARATOR_LENGTH, as_success, as_fail
-from te.traffic_models.base import TrafficMatrixBase, Commodity
+from utils.logging import LINE_SEPARATOR_LENGTH, as_success, as_fail, as_warning
+from te.traffic_models.base import TrafficMatrixBase, TrafficMatrixConverterBase, TrafficMatrixConverterParamsBase, Commodity
 
 
 TE_SOLUTION_POSTFIX = '.tesol'
@@ -29,6 +33,13 @@ as_te_solution_name = lambda name: with_postfix(name, TE_SOLUTION_POSTFIX)
 as_solution_elements_name = lambda name: with_postfix(name, SOLUTION_ELEMENTS_POSTFIX)
 as_json_solution_name = lambda name: with_postfix(name, JSON_SOLUTION_POSTFIX)
 as_simplex_basis_name = lambda name: with_postfix(name, SIMPLEX_BASIS_POSTFIX)
+
+
+class TEObjective(str, enum.Enum):
+    """Describes the objective that we want to solve for"""
+    MLU = "MLU"
+    MAX_FLOW = "Max-Flow"
+    MAX_CONCURRENT_FLOW = "Max-Concurrent-Flow"
 
 
 class SolverParams(ABC):
@@ -93,22 +104,35 @@ class SolverParams(ABC):
     
     def get_fields_up_to_level(self, level: int):
         ancestor_class = self.__class__
-        for i in range(level+1):
+        if level < 0:
+            it = count()
+        else:
+            it = range(level+1)
+        for i in it:
             ancestor_class = ancestor_class.__base__
-            if ancestor_class == ABC.__class__:
+            if ancestor_class == ABC:
                 ancestor_fields = []
                 break
             else:
                 assert issubclass(ancestor_class, SolverParams)
             if i == level:
                 ancestor_fields = ancestor_class.field_names()
-        child_dict = dataclasses.asdict(self)
+        child_dict = self.__dict__.copy()
         for key in ancestor_fields:
             child_dict.pop(key)
+        keys = list(child_dict.keys())
+        for key in keys:
+            if key.startswith('_'):
+                child_dict.pop(key, None)
         return child_dict
     
     @classmethod
     def _list_or_tuple_to_str(cls, items: Union[List, Tuple]) -> Union[str, List[str]]:
+        if len(items) == 0:
+            if isinstance(items, list):
+                return '[]'
+            else:
+                return '()'
         example = items[0]
         if isinstance(example, (int, float, bool, str)):
             # Multiple things on a single line ...
@@ -133,9 +157,16 @@ class SolverParams(ABC):
             return cls._list_or_tuple_to_str(value)
         elif value is None:
             return "None"
+        elif dataclasses.is_dataclass(value):
+            return f"<{value.__class__.__name__}>"
+        elif inspect.isclass(value):
+            return f"[{value.__class__.__name__}]"
+        elif isinstance(value, enum.Enum):
+            return str(value)
         raise ValueError(f'Unexpected instance: {type(value)}')
     
     def _field_to_string(self, key: str, value: Any):
+        # print(f"Looking at key: {key} with value {value} and type {type(value)}")
         value_str = self._param_to_str(value)
         if isinstance(value_str, str):
             return self.PRINT_FORMAT.format(
@@ -160,13 +191,24 @@ class SolverParams(ABC):
     def __str__(self) -> str:
         return self.stringify_up_to_level(0)
     
-    def stringify_up_to_level(self, level: int):
+    def stringify_up_to_level(self, level: int) -> str:
         return '\n'.join(
             [self.line] +
             [self._field_to_string(key, value)
                 for key, value in self.get_fields_up_to_level(level).items()] +
             [self.line]
         )
+    
+    def str_all(self) -> str:
+        return self.stringify_up_to_level(-1)
+    
+    @classmethod
+    def make_from_args(cls, namespace: Union[argparse.Namespace, jsonargparse.Namespace]):
+        params = dict()
+        for name in cls.field_names():
+            if name in namespace:
+                params[name] = namespace[name]
+        return cls(**params)
 
 
 @dataclass(frozen=True)
@@ -195,49 +237,6 @@ class SolutionElementBase(ABC):
 
 
 @dataclass
-class GurobiSolverParams(SolverParams):
-    """
-    Solver parameters for Gurobi.
-
-    Attributes
-    ----------
-    Method: int
-        The Gurobi solver method to be used (values should be clones of `GRB` enums)
-    Crossover: int
-        Whether to use Simplex crossover after finishing Barrier iterations. Since
-        Gurobi epxects `int`s, we use `int` instead of `bool`.
-    NumericFocus: int
-        How careful should Gurobi be about numerical errors. See Gurobi docs for
-        how to set them. We have noted that Dual Simplex in particular might need
-        to have this with a higher value when solving MLU on large topologies.
-    ConvTol: float
-        Objective convergence tolerance (used for _ALL_ algorithms, not just Barrier).
-    FeasibilityTol: float
-        Constraint violation tolerance. 
-    Presolve: int
-        Whether to allow for Gurobi to apply presolve to the model. In our experience,
-        with Barrier in particular, it is not worth it and it is much better to go
-        directly to the solver.
-    Threads: int
-        Number of threads to use for Barrier/Concurrent solver. Simplex methods do
-        not benefit from multiple threads.
-    LogFile:
-        Output log file for Gurobi.
-    """
-    Method: int = te.constants.DEFAULT_SOLVER_METHOD
-    Crossover: int = te.constants.DEFAULT_CROSSOVER
-    NumericFocus: int = te.constants.DEFAULT_NUMERIC_FOCUS
-    ConvTol: float = te.constants.DEFAULT_OPTIMALITY_TOLERANCE
-    FeasibilityTol: float = te.constants.DEFAULT_FEASIBILITY_TOLERANCE
-    Presolve: int = te.constants.DEFAULT_PRESOLVE
-    Threads: int = min(cpu_count(), 32)
-    LogFile: str = te.constants.DEFAULT_GUROBI_LOG_FILE
-
-    def __post_init__(self):
-        self.left_column_share = 0.5
-
-
-@dataclass
 class TrafficEngineeringLPEvaluationParams(SolverParams):
     """
     All generic evaluation parameters go into this class.
@@ -250,6 +249,9 @@ class TrafficEngineeringLPEvaluationParams(SolverParams):
     Seed: int
         Any RNG will be initialized to this seed to make the
         evaluations reproducible.
+    Objective: TEObjective
+        The particular TE objective we want to solve for.
+        Defaults to MLU.
     ScaleFactor: float
         When a problem can become infeasible because of capacity
         constraints, this value can be used to inflate capacity
@@ -291,6 +293,7 @@ class TrafficEngineeringLPEvaluationParams(SolverParams):
     """
     TopologyName: str
     Seed: int
+    Objective: TEObjective = TEObjective.MLU
     ScaleFactor: float = 10.0
     FloatResolution: float = te.constants.FLOAT_RES
     FeasibilityTolerance: Optional[float] = None
@@ -311,6 +314,52 @@ class TrafficEngineeringLPEvaluationParams(SolverParams):
         copy = dataclasses.replace(self)
         for k, v in kwargs.items:
             setattr(copy, k, v)
+    
+    @property
+    def is_mlu(self) -> bool:
+        return self.Objective == TEObjective.MLU
+
+
+@dataclass
+class TrafficEngineeringLPWarmStartParams(SolverParams):
+    """
+    A dataclass for keeping data about TM converters for warm-starting.
+
+    Attributes
+    ----------
+    ConverterSeed: int
+        The RNG seed that _may_ be used by the TM converter
+    WarmIters: int
+        Number of warm-start iterations. A warm-start iteration includes a
+        converstion of the current TM and solving the problem again
+    ConverterParams: type[TrafficMatrixConverterParamsBase]
+        Parameters to pass to the TM converter
+    """
+    ConverterSeed: int
+    ConverterParams: type[TrafficMatrixConverterParamsBase]
+    WarmIters: int
+
+    def __post_init__(self):
+        self.left_column_share = 0.5
+
+
+@dataclass
+class TrafficEngineeringLPSolutionParams(SolverParams):
+    """
+    A dataclass for keeping data about solutions.
+
+    Attributes
+    ----------
+    Name: str
+        The name _prefix_ of the solution file.
+    Path: Optional[str]
+        The output path for the solution.
+    """
+    Name: str
+    Path: Optional[str]
+
+    def __post_init__(self):
+        self.left_column_share = 0.5
 
 
 @dataclass
@@ -329,11 +378,14 @@ class TrafficEngineeringLPCheckResult:
         A set of commodity indices that are unsatisfied.
     congested_links: Set[int]
         Set of link (edge) indices that are congested.
+    density: Optional[float]
+        Final solution density
     """
     unsat_ratio: float
     congested_ratio: float
     unsat_commodities: Set[int]
     congested_links: Set[int]
+    density: Optional[float] = None
 
     def __str__(self) -> str:
         out = []
@@ -345,6 +397,11 @@ class TrafficEngineeringLPCheckResult:
             out.append(as_success("ALL LINK CAPCITIES WERE HONORED"))
         else:
             out.append(as_fail("{:.1f}% OF LINKS ARE CONGESTED".format(self.congested_ratio*100)))
+        if self.density is not None:
+            if self.density > 0.5:
+                out.append(as_warning("DENSITY: {:.1f}%".format(self.density*100)))
+            else:
+                out.append(as_success("DENSITY: {:.1f}%".format(self.density*100)))
         return '\n'.join(out)
 
 
@@ -381,8 +438,20 @@ class TrafficEngineeringLPObjectiveTrace:
 
 
 class TrafficEngineeringLPSolution(ABC):
-    def dump(self, name: str, path: str = None):
-        path = path if path is not None else os.path.join(SOLUTION_DIR, name)
+    @abstractmethod
+    def __init__(self, params: Optional[TrafficEngineeringLPSolutionParams] = None):
+        super().__init__()
+        self._params = params
+
+    @property
+    def params(self) -> TrafficEngineeringLPSolutionParams:
+        return self._params
+
+    def dump(self, name: Optional[str] = None, path: Optional[str] = None):
+        name = name if name is not None else self._params.Name
+        # TODO: This does not seem right!
+        # path = path if path is not None else os.path.join(SOLUTION_DIR, name)
+        path = path if path is not None else self._params.Path
         with open(path, 'wb') as f:
             pickle.dump(self, f)
     
@@ -405,9 +474,64 @@ class TrafficEngineeringLPSolution(ABC):
     @abstractmethod
     def get_solution_element_by_name(self, name: str) -> SolutionElementBase:
         """Get a solution element by name"""
+    
+    @abstractmethod
+    def dump_elements(self):
+        """Dump solution elements one-by-one"""
+
+
+@dataclass
+class TrafficEngineeringProblemDescription:
+    """
+    A full description of a TE problem and its required outputs.
+    This can be passed to any TE solver to get the full description of the 
+    problem; other parameters need only describe the solver properties.
+
+    Attributes
+    ----------
+    EvalParams: TrafficEngineeringLPEvaluationParams
+        Evaluation parameters, instructing the LP class about how optimal
+        the solution need be and how much infeasibility are we willing to
+        tolerate.
+    Graph: nx.DiGraph
+        The topology as a directed graph. Each edge must have a `capacity`
+        attribute as a floating point number.'
+    TM: TrafficMatrixBase
+        The traffic matrix.
+    Converter: Optional[TrafficMatrixConverterBase] = None
+        The traffic matrix converter that can change the current traffic
+        matrix into a new one to see if we can handle incremental problems.
+    WarmStartParams: Optional[TrafficEngineeringLPWarmStartParams] = None
+        Warm start parameters (e.g. how many TM conversion rounds must
+        be done).
+    Solution: Optional[TrafficEngineeringLPSolution] = None
+        The TE solution object used to add and save solution elements.
+    """
+    EvalParams: TrafficEngineeringLPEvaluationParams
+    Graph: nx.DiGraph
+    TM: TrafficMatrixBase
+    Converter: Optional[TrafficMatrixConverterBase] = None
+    WarmStartParams: Optional[TrafficEngineeringLPWarmStartParams] = None
+    Solution: Optional[TrafficEngineeringLPSolution] = None
+
+    @property
+    def is_mlu(self) -> bool:
+        return self.EvalParams.is_mlu
 
 
 class TrafficEngineeringLP(ABC):
+    @abstractmethod
+    def __init__(self, problem_description: TrafficEngineeringProblemDescription, 
+                 solver_params: SolverParams, **kwargs):
+        super().__init__(**kwargs)
+        self._problem_description = problem_description
+        self._solver_params = solver_params
+
+    @property
+    def problem_description(self) -> TrafficEngineeringProblemDescription:
+        """TE problem description object"""
+        return self._problem_description
+
     @property
     @abstractmethod
     def alg_name(cls) -> str:
@@ -429,9 +553,9 @@ class TrafficEngineeringLP(ABC):
         """List of input commodities"""
 
     @property
-    @abstractmethod
-    def params(self) -> SolverParams:
+    def solver_params(self) -> SolverParams:
         """Solver parameters"""
+        return self._solver_params
 
     @property
     @abstractmethod
@@ -511,11 +635,10 @@ class TrafficEngineeringLP(ABC):
         """
 
     @abstractmethod
-    def check(self, eval_params: TrafficEngineeringLPEvaluationParams):
+    def check(self):
         """
         Performs sanity checks on the current solution and cache the summary of the checks.
         This result should be stored in the `check_result` property.
-        The properties of `eval_params` determines how strict the checks are.
         """
 
     @abstractmethod
@@ -535,3 +658,17 @@ class TrafficEngineeringLP(ABC):
         """
         Add solution elements to a given TE solution instance
         """
+
+    def add_and_dump_lp_solutions(self, solution: TrafficEngineeringLPSolution):
+        self.add_solution_elements()
+        solution.dump_elements()
+        solution.dump()
+
+
+__all__ = [
+    'SolverParams', 'TrafficEngineeringLPEvaluationParams', 'TEObjective',
+    'TrafficEngineeringLPWarmStartParams', 'TrafficEngineeringLPSolutionParams',
+    'TrafficEngineeringLPCheckResult', 'TrafficEngineeringLPSolution',
+    'TrafficEngineeringProblemDescription', 'TrafficEngineeringLP',
+    'TrafficEngineeringLPObjectiveTrace'
+]

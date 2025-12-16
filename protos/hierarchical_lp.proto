@@ -1,0 +1,108 @@
+syntax = "proto3";
+import "google/protobuf/empty.proto";
+import "array.proto";
+
+
+// Service used by the master and implemented within domain controllers in order
+// allow the master to set up the controllers, get the final solution and close 
+// the solvers after we are done.
+service MasterSolver {
+    // Peer state query
+    rpc QueryState(google.protobuf.Empty) returns (State) {}
+    // Domain close request
+    rpc Close(google.protobuf.Empty) returns (google.protobuf.Empty) {}
+    // Initializer RPCs
+    rpc SetInitialFeasibleSolution(stream Chunk) returns (google.protobuf.Empty) {}
+    rpc SetNullSpaceBasis(stream Chunk) returns (google.protobuf.Empty) {}
+    rpc SetCommodityInOutMask(stream Chunk) returns (google.protobuf.Empty) {}
+    rpc SetSolverParameters(SolverParameters) returns (google.protobuf.Empty) {}
+    // Master-specific RPCs
+    rpc RequestXEK(google.protobuf.Empty) returns (stream Chunk) {}
+    rpc RequestConsensusVariables(google.protobuf.Empty) returns (DomainConsensusVariablesMessage) {}
+    rpc NotifyArrivedDomain(DomainUpdateMessage) returns (google.protobuf.Empty) {}
+}
+
+// For checking if node (master/domain/worker) is ready
+message State {
+    bool ready = 1;
+}
+
+// Sent by a domain controller for the master to check inner loop convergence
+message DomainConsensusVariablesMessage {
+    SerializedNumpyArrayMessage Y_bar_t = 1;
+    SerializedNumpyArrayMessage P_bar_t = 2;
+}
+
+// Sent by the master to the domain controllers to finalize asynchronous update
+message DomainUpdateMessage {
+    SerializedNumpyArrayMessage Z_de = 1;
+}
+
+// Mirrors the dataclass that we defined for the solver
+message SolverParameters {
+    int32 NumberOfDomains = 1;
+    int32 NumWorkers = 2;
+    int32 NumberOfMasterUpdates = 3;
+    int32 NumberOfDomainUpdates = 4;
+    int32 MasterUpdateBarrierSize = 5;
+    int32 MasterUpdateMaxLag = 6;
+    float Rho = 7;
+    float Eta = 8;
+    float Gamma = 9;
+    int32 PGDIterations = 10;
+    float ConvTol = 11;
+    string Precision = 12;
+    int32 TMSeed = 13;
+}
+
+// Service used by the domain controllers and implemented by the master in order to
+// allow the master to implemented asynchronous ADMM over domains.
+service AsynchronousDomainNotification {
+    // Peer state query
+    rpc QueryState(google.protobuf.Empty) returns (State) {}
+    // Domain to Master update
+    rpc EnqueueDomainUpdate(MasterUpdateMessage) returns (google.protobuf.Empty) {}
+}
+
+message MasterUpdateMessage {
+    SerializedNumpyArrayMessage X_dek_sum_de = 1;
+    SerializedNumpyArrayMessage r_de = 2;
+}
+
+// Service used by domain controllers and implemented by domain worker nodes in order
+// to solve the domain optimization problem after the master finishes consensus.
+service DomainSolver {
+    // Worker sate query
+    rpc QueryState(google.protobuf.Empty) returns (State) {}
+    // Worker close request
+    rpc Close(google.protobuf.Empty) returns (google.protobuf.Empty) {}
+    // Initializer RPCs
+    rpc SetInitialFeasibleSolution(stream Chunk) returns (google.protobuf.Empty) {}
+    rpc SetNullSpaceBasis(stream Chunk) returns (google.protobuf.Empty) {}
+    rpc SetCommodityInOutMask(stream Chunk) returns (google.protobuf.Empty) {}
+    rpc SetSolverParameters(SolverParameters) returns (google.protobuf.Empty) {}
+    // Domain-specific RPCs
+    rpc RequestChunk(google.protobuf.Empty) returns (stream Chunk) {}
+    rpc DoNetworkUpdate(NetworkUpdateRequest) returns (NetworkUpdateResponse) {}
+    rpc UpdateWorkerNode(UpdateMessage) returns (google.protobuf.Empty) {}
+    rpc RequestAggregate(google.protobuf.Empty) returns (SerializedNumpyArrayMessage) {}
+}
+
+// Sent by the domain contorller to request all workers to do one loop
+message NetworkUpdateRequest {
+    int32 epoch = 1;
+}
+
+// Sent by workers upon finishing one loop
+message NetworkUpdateResponse {
+    int32 worker_id = 1;
+    int32 runtime_ns = 2;
+    SerializedNumpyArrayMessage means = 3;
+}
+
+// Sent by the controller to finalize one loop and prepare the next
+message UpdateMessage {
+    SerializedNumpyArrayMessage P_bar_t = 1;
+    SerializedNumpyArrayMessage u_t = 2;
+    SerializedNumpyArrayMessage Y_bar_t = 3;
+}

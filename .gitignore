@@ -39,3 +39,9 @@ utils/plot_incremental_cdfs.py
 
 # Paths (too big to upload ...)
 paths
+
+# IPython checkpoints
+.ipynb_checkpoints
+
+# (For now) MDC backends
+te/algorithms/sub_algorithms/mdc_backends
