@@ -68,18 +68,9 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
         self._X_ek_sum_e: Optional[CPUArray] = None
         self._outer_admm_wrapper: Optional[ADMMWrapper] = None
 
-        self._P_bar_t: Optional[CPUArray] = None
-        self._Y_bar_t: Optional[CPUArray] = None
-        self._u_t: Optional[CPUArray] = None
-
-        # MAX-FLOW SPECIFIC
-        self._alpha_k: Optional[CPUArray] = None
-        self._beta_k: Optional[CPUArray] = None
-        self._l_k: Optional[CPUArray] = None
-        self._d_k: Optional[CPUArray] = None
-        self._X_bar_e: Optional[CPUArray] = None
-        self._J_bar_e: Optional[CPUArray] = None
-        self._f_e: Optional[CPUArray] = None
+        self._sharing_mean_1: Optional[CPUArray] = None
+        self._sharing_mean_2: Optional[CPUArray] = None
+        self._sharing_dual: Optional[CPUArray] = None
 
         self.backend: SynchADMMControllerBackendBase = node_params.CommunicationBackendCLS(node_params.RPCParams_)
         # self.backend.register_signal_handler()
@@ -157,10 +148,7 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
         assert len(M.shape) == 2
         m, n = M.shape
         assert m < n
-        if self._solver_params.UseSparseBasis:
-            N = cpu_array(get_sparse_null_space(M))
-        else:
-            N = cpu_array(get_adjacency_null_space(M))
+        N = cpu_array(get_adjacency_null_space(M))
         T = N.shape[1]
         self._NULL_M = N
         self._NNT_M = N @ N.T
@@ -172,16 +160,16 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
         return self._mlu_solver.current_Z
     
     def _initialize_variables_and_residuals(self):
-        T = self._T
+        K = len(self._commodity_list)
         NUM_EDGES = self._NUM_EDGES
         self._capacities = cpu_double_array([item[-1] for item in self._graph.edges(data='capacity')])
         self._c_norm = np.linalg.norm(self._capacities)
         self._alpha = self._c_norm * np.sqrt(NUM_EDGES)
-        self._u_t = cpu_zeros((T,))
-        self._P_bar_t = cpu_zeros((T,))
-        self._Y_bar_t = cpu_zeros((T,))
         self._X_ek = cpu_array(self._X_ek_start)
         self._X_ek_sum_e = cpu_array(self._Z_e_start)
+        self._sharing_mean_1 = self._Z_e_start / K
+        self._sharing_mean_2 = cpu_array(self._sharing_mean_1)
+        self._sharing_dual = cpu_zeros((NUM_EDGES,))
         # The objective convergance tolerance for the MLU problem _MUST_ stricter than the
         # tolerance for the distributed algorithm itself.
         assert self._solver_params.ConvTol >= self._mlu_params.ConvTol, \
@@ -223,14 +211,10 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
         self._mlu_solver._make_variables()
         
     def _get_F(self) -> np.ndarray:
-        return self._outer_admm_wrapper.get_X_step_bias() - self._Z_e_start
+        return self._outer_admm_wrapper.get_X_step_bias()
     
     def _set_X_ek(self):
-        self._X_ek = self.backend.get_X_ek(
-            is_sparse=self._solver_params.Beta is not None,
-            basis=self._NULL_M, 
-            initial_feasible_solution=self._X_ek_start
-        )
+        self._X_ek = self.backend.get_X_ek()
     
     def _add_constraints(self):
         assert self._mlu_solver is not None
@@ -249,39 +233,34 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
     @record_cpu_runtime('Network-Update')
     def _do_network_update(self, epoch: int):
         # TODO: Try to make the workers return aggregate flows as well
-        max_run, self._Y_bar_t = self.backend.do_network_update(epoch)
+        # max_run, self._Y_bar_t = self.backend.do_network_update(epoch)
+        max_run, self._sharing_mean_1 = self.backend.do_network_update(epoch)
         return max_run
     
-    def _update_P_bar(self):
+    def _update_sharing_mean(self):
         assert self._mlu_solver is not None
 
         K = len(self._commodity_list)
         ETA = self._solver_params.Eta
         RHO = self._solver_params.Rho
-        U_T = self._u_t
-        Y_BAR_T = self._Y_bar_t
+        U_E = self._sharing_dual
+        X_BAR_E = self._sharing_mean_1
         F_E = self._get_F()
-        NULL_M = self._NULL_M
-        P_BAR_T = (NULL_M.T @ F_E / K + (ETA/RHO) * (U_T + Y_BAR_T)) / (1 + (ETA/RHO))
-        self._P_bar_t = P_BAR_T
-    
-    def _update_u_t(self):
+        self._sharing_mean_2 = (F_E / K + (ETA/RHO) * (U_E + X_BAR_E)) / (1 + (ETA/RHO))
+
+    def _update_sharing_dual(self):
         assert self._mlu_solver is not None
 
-        U_T = self._u_t
-        Y_BAR_T = self._Y_bar_t
-        P_BAR_T = self._P_bar_t
+        self._sharing_dual += (self._sharing_mean_1 - self._sharing_mean_2)
 
-        self._u_t = U_T + (Y_BAR_T - P_BAR_T)
-    
     @record_cpu_runtime('Update-Reconvene')
     def _reconvene_network_updates(self) -> bool:
-        self._update_P_bar()
-        self._update_u_t()
+        self._update_sharing_mean()
+        self._update_sharing_dual()
         self.backend.reconvene_network_updates(
-            P_bar_t=self._P_bar_t,
-            Y_bar_t=self._Y_bar_t,
-            u_t=self._u_t
+            sharing_mean_1=self._sharing_mean_1,
+            sharing_mean_2=self._sharing_mean_2,
+            sharing_dual=self._sharing_dual
         )
         # TODO: How safe is this?
         # return norm_in_consensus(self._P_bar_t, self._Y_bar_t, 5e-4)
@@ -289,11 +268,7 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
     
     @record_cpu_runtime('Update-X-EK-SUM')
     def _update_X_ek_sum(self):
-        # TODO: This is the correct way, but is too slow!
-        if self._solver_params.Beta is not None:
-            self._X_ek_sum_e = self.backend.get_X_ek_sum()
-        else:
-            self._X_ek_sum_e = self._Z_e_start + len(self._commodity_list) * self._NULL_M @ self._Y_bar_t
+        self._X_ek_sum_e = len(self._commodity_list) * self._sharing_mean_1
         self._outer_admm_wrapper.record_X_update(self._X_ek_sum_e)
     
     @record_cpu_runtime('Update-Re')
@@ -320,6 +295,11 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
             self._NULL_M, 
             self._X_ek_start,
             self._M_MASK
+        )
+        self.backend.reconvene_network_updates(
+            sharing_mean_1=self._sharing_mean_1,
+            sharing_mean_2=self._sharing_mean_2,
+            sharing_dual=self._sharing_dual
         )
         self.backend.set_active_commodity_count(len(self._commodity_list))
     
@@ -351,12 +331,11 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
                 self._update_controller_objective()
                 MODEL_CONTROLLER.solve()
                 self._update_r_e()
-
                 self._objective_trace.append(
                     float(self.objective_value), 
                     float(get_solution_maximum_utilization(self._X_ek_sum_e, self._graph))
                 )
-                # TODO: Find a way to add the inner loop infeasibility ...
+                # Inner loop infeasibility is usually very small, no need to bother with it!
                 self._objective_gap_trace.append(self._outer_admm_wrapper.infeasibility)
             self._set_X_ek()
             # print("="*50)
@@ -382,14 +361,10 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
         eval_params = self._problem_description.EvalParams
 
         # Are outer ADMM pairs in consensus?
-        X_EK_SUM_E = self._X_ek_sum_e
-        Z_E = self._get_Z_value()
-        outer_admm_consensus_test(X_EK_SUM_E, Z_E, eval_params=eval_params)
+        outer_admm_consensus_test(self._X_ek_sum_e, self._get_Z_value(), eval_params=eval_params)
         
         # Are inner ADMM pairs in consensus?
-        Y_BAR_T = self._Y_bar_t
-        P_BAR_T = self._P_bar_t
-        inner_admm_consensus_test(Y_BAR_T, P_BAR_T, eval_params=eval_params)
+        inner_admm_consensus_test(self._sharing_mean_1, self._sharing_mean_2, eval_params=eval_params)
         
         # Now, check flow conservation ...
         X_EK = self._X_ek

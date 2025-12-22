@@ -23,14 +23,24 @@ from te.algorithms.formulations.edge_based.distributed.admm_synchronous.helper i
 #         (1, 0): 8, (2, 0): 8, (3, 1): 6, (3, 2): 6, (2, 1): 4
 #     }, name='capacity')
 #     return g
+# def get_topo() -> nx.DiGraph:
+#     g = nx.DiGraph([
+#         (0, 1), (1, 2), (1, 3), (2, 3),
+#         (1, 0), (2, 1), (3, 1), (3, 2)
+#     ])
+#     nx.set_edge_attributes(g, {
+#         (0, 1): 2, (1, 2): 2, (1, 3): 2, (2, 3): 2,
+#         (1, 0): 2, (2, 1): 2, (3, 1): 2, (3, 2): 2
+#     }, name='capacity')
+#     return g
 def get_topo() -> nx.DiGraph:
     g = nx.DiGraph([
-        (0, 1), (1, 2), (1, 3), (2, 3),
-        (1, 0), (2, 1), (3, 1), (3, 2)
+        (0, 1), (0, 2), (1, 3), (2, 3), (0, 3),
+        (1, 0), (2, 0), (3, 1), (3, 2), (3, 0)
     ])
     nx.set_edge_attributes(g, {
-        (0, 1): 2, (1, 2): 2, (1, 3): 2, (2, 3): 2,
-        (1, 0): 2, (2, 1): 2, (3, 1): 2, (3, 2): 2
+        (0, 1): 2, (0, 2): 2, (1, 3): 2, (2, 3): 2, (0, 3): 4,
+        (1, 0): 2, (2, 0): 2, (3, 1): 2, (3, 2): 2, (3, 0): 4
     }, name='capacity')
     return g
 
@@ -46,8 +56,8 @@ def get_topo() -> nx.DiGraph:
 def get_tm() -> CustomTrafficMatrix:
     return CustomTrafficMatrix(
         np.array([
-            [0, 0, 0, 1],
-            [0, 0, 0, 2],
+            [0, 0, 0, 3.5],
+            [0, 0, 0, 2.5],
             [0, 0, 0, 0],
             [0, 0, 0, 0]
         ])

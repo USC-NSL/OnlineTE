@@ -1,4 +1,5 @@
 import numpy as np
+from typing import Tuple
 
 try:
     """
@@ -402,3 +403,20 @@ def do_plain_path_based_pgd_with_step_reduction(y_block, scaled_alpha_block, c_b
             y_block - step_size * grad_block, beta_block
         )
     return y_block
+
+
+def do_memory_efficient_pgd(lambda_block: np.ndarray, c_block: np.ndarray, x_block_0: np.ndarray, nnt: np.ndarray, 
+                            step_size: float, n_iter: int, mask: np.ndarray) -> np.ndarray:
+    """
+    A variant of our plain PGD algorithm that does the bare minimum to handle
+    the sharing problem.
+    It is more memory efficient, as it gets away with calculating the null-space
+    bias (i.e. Y_tk) between iterations.
+    """
+    for _ in range(n_iter):
+        lambda_block -= step_size * (nnt @ lambda_block + c_block + x_block_0)
+        correction = np.clip(np.multiply(lambda_block, mask), a_min=None, a_max=0)
+        np.clip(lambda_block, a_min=0, a_max=None, out=lambda_block)
+        lambda_block += correction
+    return lambda_block
+

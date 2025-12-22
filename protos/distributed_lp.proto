@@ -20,10 +20,8 @@ service DistributedADMMSolver {
 }
 
 message UpdateMessage {
-    SerializedNumpyArrayMessage P_bar_t = 1;
-    SerializedNumpyArrayMessage u_t = 2;
-    SerializedNumpyArrayMessage Y_bar_t = 3;
-    int32 xid = 4;
+    SerializedNumpyArrayMessage sharing_bias = 1;
+    int32 xid = 2;
 }
 
 message MaxFlowUpdateMessage {
@@ -37,7 +35,6 @@ message MaxFlowUpdateMessage {
 message NetworkUpdateRequest {
     int32 epoch = 1;
     int32 xid = 2;
-    optional SerializedNumpyArrayMessage F_e = 3;
 }
 
 message NetworkUpdateResponse {

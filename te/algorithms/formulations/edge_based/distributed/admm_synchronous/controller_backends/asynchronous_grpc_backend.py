@@ -81,6 +81,11 @@ class AsynchronousgRPCControllerBackend(SynchADMMControllerBackendBase):
                                        initial_feasible_solution: CPUArray, in_out_mask: Optional[BooleanCPUArray] = None):
         NUM_WORKERS = self.number_of_workers
         NULL_M = basis
+
+        # TODO: Maybe handle the case of partial partitions
+        assert initial_feasible_solution.shape[1] % NUM_WORKERS == 0, \
+            f"Cannot handle partial partitions yet! ({initial_feasible_solution.shape[1]} % {NUM_WORKERS})"
+
         X_EK_START_CHUNKS = np.array_split(initial_feasible_solution, NUM_WORKERS, axis=1)
         MASK_EK_CHUNKS = None if in_out_mask is None else np.array_split(in_out_mask, NUM_WORKERS, axis=1)
         WORKERS = self._worker_stubs
@@ -123,18 +128,15 @@ class AsynchronousgRPCControllerBackend(SynchADMMControllerBackendBase):
     def update_demands(self, updated_feasible_solution: CPUArray):
         self._event_loop.run_until_complete(self._update_demands(updated_feasible_solution))
     
-    async def _get_X_ek(self, is_sparse: bool, basis: CPUArray, initial_feasible_solution: CPUArray):
+    async def _get_X_ek(self):
         chunks = await asyncio.gather(*[
             async_rebuild_chunked_array(stub.RequestChunk(Empty()))
             for stub in self._worker_stubs
         ])
-        if is_sparse:
-            return np.hstack(list(chunks))
-        else:
-            return initial_feasible_solution + basis @ np.hstack(list(chunks))
+        return np.hstack(list(chunks))
 
-    def get_X_ek(self, is_sparse: bool, basis: CPUArray, initial_feasible_solution: CPUArray):
-        return self._event_loop.run_until_complete(self._get_X_ek(is_sparse, basis, initial_feasible_solution))
+    def get_X_ek(self):
+        return self._event_loop.run_until_complete(self._get_X_ek())
     
     async def _get_X_ek_sum(self):
         serialized_chunks = await asyncio.gather(*[
@@ -152,8 +154,8 @@ class AsynchronousgRPCControllerBackend(SynchADMMControllerBackendBase):
         runtimes, serialized_y_bar_chunks = zip(*list([(res.runtime_ns, res.means) for res in responses]))
         return max(runtimes), np.mean([serialized_message_to_array(chunk) for chunk in serialized_y_bar_chunks], axis=0)
     
-    def do_network_update(self, epoch: int, F_e: Optional[CPUArray] = None):
-        message = distributed_lp_messages.NetworkUpdateRequest(epoch=epoch, F_e=array_to_serialized_message(F_e))
+    def do_network_update(self, epoch: int):
+        message = distributed_lp_messages.NetworkUpdateRequest(epoch=epoch)
         return self._event_loop.run_until_complete(self._do_network_update(message))
     
     async def _reconvene_network_updates(self, message: distributed_lp_messages.UpdateMessage):
@@ -161,11 +163,11 @@ class AsynchronousgRPCControllerBackend(SynchADMMControllerBackendBase):
             stub.UpdateWorkerNode(message) for stub in self._worker_stubs
         ])
     
-    def reconvene_network_updates(self, P_bar_t: CPUArray, Y_bar_t: CPUArray, u_t: CPUArray):
+    def reconvene_network_updates(self, sharing_mean_1: CPUArray, sharing_mean_2: CPUArray, sharing_dual: CPUArray):
         message = distributed_lp_messages.UpdateMessage(
-            P_bar_t = array_to_serialized_message(P_bar_t),
-            Y_bar_t = array_to_serialized_message(Y_bar_t),
-            u_t = array_to_serialized_message(u_t)
+            sharing_bias=array_to_serialized_message(
+                sharing_mean_1 - sharing_mean_2 + sharing_dual
+            )
         )
         self._event_loop.run_until_complete(self._reconvene_network_updates(message))
 
