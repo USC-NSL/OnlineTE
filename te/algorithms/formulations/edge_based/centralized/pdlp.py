@@ -320,7 +320,8 @@ class PDLPTE(TrafficEngineeringLP):
             unsat_ratio=unsat_ratio,
             congested_ratio=congested_ratio,
             unsat_commodities=unsat_commodities,
-            congested_links=congested_links
+            congested_links=congested_links,
+            density=np.count_nonzero(np.clip(self._X_ek)) / self._X_ek.size
         )
     
     def get_solution_commodity_list(self) -> List[Tuple[Commodity, Commodity]]:

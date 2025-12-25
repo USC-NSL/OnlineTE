@@ -4,25 +4,23 @@ import networkx as nx
 from typing import List, Tuple, Optional
 from collections import defaultdict
 from gurobipy import GRB, GurobiError
-from te.algorithms.base import (TrafficEngineeringLP, SolverParams, TrafficEngineeringLPSolution, 
-                                TrafficEngineeringLPCheckResult, TrafficEngineeringLPEvaluationParams)
+from te.algorithms.base import *
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
 from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
 from te.algorithms.sub_algorithms.link_capacity_test import check_capacity_constraint
 from te.algorithms.sub_algorithms.flow_conservation_test import check_flow_conservation
-from te.algorithms.sub_algorithms.paths import TShortestPaths, path_based_to_edge_based
-from te.algorithms.utils import make_model
 from utils.logging import as_info, as_fail, ShortTQDMEnumerate, ShortTQDM
+from te.algorithms.sub_algorithms.paths import TShortestPaths, path_based_to_edge_based
+from ...edge_based.centralized import make_model
+from . import GurobiPathBasedSolverParams
 
-from . import CentralizedPathBasedSolverParams
 
-
-class CentralizedPathBasedLP(TrafficEngineeringLP):
-    def __init__(self, graph: nx.DiGraph, traffic: TrafficMatrixBase, solver_params: CentralizedPathBasedSolverParams) -> None:
-        super().__init__()
-        self._graph = graph
-        self._traffic = traffic
-        self._solver_params: CentralizedPathBasedSolverParams = solver_params
+class GurobiPathBasedTE(TrafficEngineeringLP):
+    def __init__(self, problem_description: TrafficEngineeringProblemDescription, solver_params: GurobiPathBasedSolverParams) -> None:
+        super().__init__(problem_description, solver_params)
+        self._graph = problem_description.Graph
+        self._traffic = problem_description.TM
+        self._solver_params: GurobiPathBasedSolverParams = solver_params
         self._env: Optional[gurobipy.Env] = None
         self._model: Optional[gurobipy.Model] = None
         self._Y_tk: Optional[gurobipy.tupledict] = None
@@ -38,8 +36,11 @@ class CentralizedPathBasedLP(TrafficEngineeringLP):
         self._initialize()
     
     def _initialize(self):
-        self._path_object = TShortestPaths.load(graph=self._graph, T=self._solver_params.NumberOfPathsPerCommodity,
-                                                topo_name=self._solver_params.TopologyName)
+        self._path_object = TShortestPaths.load(
+            graph=self._graph, 
+            T=self._solver_params.NumberOfPathsPerCommodity,
+            topo_name=self._problem_description.EvalParams.TopologyName
+        )
     
     @property
     def alg_name(self) -> str:
@@ -197,20 +198,21 @@ class CentralizedPathBasedLP(TrafficEngineeringLP):
             print(as_fail(f'Error code {e.errno}: {e}'))
             return -1
 
-    def check(self, eval_params: TrafficEngineeringLPEvaluationParams):
+    def check(self):
         unsat_ratio, unsat_commodities = check_flow_conservation(
             self._X_ek, self._graph, self._commodity_list,
-            eval_params
+            self._problem_description.EvalParams
         )
         congested_ratio, congested_links = check_capacity_constraint(
             self._X_ek, self._graph, self._commodity_list,
-            eval_params
+            self._problem_description.EvalParams
         )
         self.check_result = TrafficEngineeringLPCheckResult(
             unsat_ratio=unsat_ratio,
             congested_ratio=congested_ratio,
             unsat_commodities=unsat_commodities,
-            congested_links=congested_links
+            congested_links=congested_links,
+            density=np.count_nonzero(np.clip(self._X_ek)) / self._X_ek.size
         )
     
     def get_solution_commodity_list(self) -> List[Tuple[Commodity, Commodity]]:
@@ -243,3 +245,15 @@ class CentralizedPathBasedLP(TrafficEngineeringLP):
     
     def add_solution_elements(self, solution: TrafficEngineeringLPSolution):
         raise NotImplementedError
+
+
+import jsonargparse
+
+def centralized_gurobi_solver_params_parser() -> jsonargparse.ArgumentParser:
+    parser = jsonargparse.ArgumentParser()
+    parser.add_class_arguments(GurobiPathBasedSolverParams, 'SolverParams', help='Gurobi Solver Params')
+    return parser
+
+
+def parse_centralized_gurobi_solver_params(args: jsonargparse.Namespace) -> GurobiPathBasedSolverParams:
+    return GurobiPathBasedSolverParams.make_from_args(args.SolverParams)

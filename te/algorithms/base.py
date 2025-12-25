@@ -14,7 +14,7 @@ from typing import List, Optional, Tuple, Dict, Union, Any, Set
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from te.algorithms import SOLUTION_DIR
-from utils.logging import LINE_SEPARATOR_LENGTH, as_success, as_fail, as_warning
+from utils.logging import LINE_SEPARATOR_LENGTH, as_success, as_fail, as_warning, as_info
 from te.traffic_models.base import TrafficMatrixBase, TrafficMatrixConverterBase, TrafficMatrixConverterParamsBase, Commodity
 
 
@@ -432,8 +432,11 @@ class TrafficEngineeringLPObjectiveTrace:
         return list(zip(*self.trace))
     
     def plot(self, **kwargs):
-        for trace in list(zip(*self.trace)):
-            plt.plot(trace, **kwargs)
+        for i, trace in enumerate(list(zip(*self.trace))):
+            if self._names[i].startswith('_'):
+                print(as_info(f'Will not plot debug trace: {self._names[i]}'))
+            else:
+                plt.plot(trace, **kwargs)
         plt.legend(self.names)
 
 
@@ -660,7 +663,7 @@ class TrafficEngineeringLP(ABC):
         """
 
     def add_and_dump_lp_solutions(self, solution: TrafficEngineeringLPSolution):
-        self.add_solution_elements()
+        self.add_solution_elements(solution)
         solution.dump_elements()
         solution.dump()
 

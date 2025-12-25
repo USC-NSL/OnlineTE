@@ -1,4 +1,4 @@
-from te.algorithms.formulations.edge_based.helper import *
+from te.algorithms.formulations.helper import *
 # TODO: Replace this with the `distributed.aggregate import *` when that file is ready ...
 from te.algorithms.formulations.edge_based.distributed.admm_synchronous.helper import *
 

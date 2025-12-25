@@ -57,33 +57,32 @@ def get_solution_confusion_matrix(lp: TrafficEngineeringLP, eval_params: Traffic
             print(as_warning("No trace of objective value is available"))
         if objective_gap_trace is None:
             print(as_warning("No trace of primal/dual objective gap is available"))
+        if objective_gap_trace is None and objective_trace is None:
+            fig = plt.figure(figsize=(4, 3))
+            plt.subplot(1, 1, 1)
+            sns.ecdfplot(avg_stretch)
+            plt.title('Average Stretch (Hops)')
+        elif objective_trace is not None and objective_gap_trace is None:
+            fig = plt.figure(figsize=(8, 3))
+            plt.subplot(1, 2, 1)
+            objective_trace.plot()
+            plt.title('Objective Trace')
+            plt.subplot(1, 2, 2)
+            sns.ecdfplot(avg_stretch)
+            plt.title('Average Stretch (Hops)')
         else:
-            if objective_gap_trace is None and objective_trace is None:
-                fig = plt.figure(figsize=(4, 3))
-                plt.subplot(1, 1, 1)
-                sns.ecdfplot(avg_stretch)
-                plt.title('Average Stretch (Hops)')
-            elif objective_trace is not None and objective_gap_trace is None:
-                fig = plt.figure(figsize=(8, 3))
-                plt.subplot(1, 2, 1)
-                objective_trace.plot()
-                plt.title('Objective Trace')
-                plt.subplot(1, 2, 2)
-                sns.ecdfplot(avg_stretch)
-                plt.title('Average Stretch (Hops)')
-            else:
-                fig = plt.figure(figsize=(12, 3))
-                plt.subplot(1, 3, 1)
-                objective_trace.plot()
-                plt.title('Objective Trace')
-                ax = plt.subplot(1, 3, 2)
-                plt.plot(objective_gap_trace)
-                ax.set_yscale('log')
-                plt.title('Objective Gap Trace')
-                plt.subplot(1, 3, 3)
-                sns.ecdfplot(avg_stretch)
-                plt.title('Average Stretch (Hops)')
-            return fig
+            fig = plt.figure(figsize=(12, 3))
+            plt.subplot(1, 3, 1)
+            objective_trace.plot()
+            plt.title('Objective Trace')
+            ax = plt.subplot(1, 3, 2)
+            plt.plot(objective_gap_trace)
+            ax.set_yscale('log')
+            plt.title('Objective Gap Trace')
+            plt.subplot(1, 3, 3)
+            sns.ecdfplot(avg_stretch)
+            plt.title('Average Stretch (Hops)')
+        return fig
     
     if eval_params.ShowPLT or eval_params.SavePLT:
         fig = make_fig(lp)

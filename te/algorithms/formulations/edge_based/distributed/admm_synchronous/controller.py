@@ -339,6 +339,7 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
                 self._objective_gap_trace.append(self._outer_admm_wrapper.infeasibility)
             self._set_X_ek()
             # print("="*50)
+            # print(np.round(self._X_ek, decimals=2))
             # print(f"X_EK_SUM:\t{np.round(self._outer_admm_wrapper.X, decimals=2)}")
             # print(f"Z_E:\t{np.round(self._outer_admm_wrapper.Z, decimals=2)}")
             # print(f"R_E:\t{np.round(self._outer_admm_wrapper.dual_var, decimals=2)}")

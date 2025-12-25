@@ -100,8 +100,8 @@ def spawn_distributed_synchronous_solver(
     problem: TrafficEngineeringProblemDescription, 
     solver: DistributedMLUSolverDescription,
     is_local: bool = False
-):
-    def _spawn_distributed_synchronous_solver():
+) -> Optional[TrafficEngineeringLPObjectiveTrace]:
+    def _spawn_distributed_synchronous_solver() -> Optional[TrafficEngineeringLPObjectiveTrace]:
         print(as_info(
             f'Using master node communication backend `{solver.MasterBackendCLS.backend_name()}` with parameters:\n'+
             solver.MasterRPCParams.str_all()
@@ -110,7 +110,7 @@ def spawn_distributed_synchronous_solver(
             CommunicationBackendCLS=solver.MasterBackendCLS,
             RPCParams_=solver.MasterRPCParams
         )
-        solve_te_and_check(
+        return solve_te_and_check(
             problem, 
             solver.MasterCLS,
             solver.AlgorithmParams,
@@ -143,9 +143,9 @@ def spawn_distributed_synchronous_solver(
                         RPCParams_=worker_rpc_params
                     )
                 )
-            _spawn_distributed_synchronous_solver()
+            return _spawn_distributed_synchronous_solver()
     else:
-        _spawn_distributed_synchronous_solver()
+        return _spawn_distributed_synchronous_solver()
 
 
 __all__ = [
