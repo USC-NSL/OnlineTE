@@ -1,5 +1,4 @@
 import numpy as np
-from typing import Tuple
 
 try:
     """
@@ -20,7 +19,7 @@ except ModuleNotFoundError:
 import te.constants
 from typing import Optional
 from te.algorithms.utils import careful_norm, careful_norm_squared, all_elements_within_threshold
-from te.algorithms.sub_algorithms.simplex_projection import column_wise_projection_onto_probability_simplex
+from te.algorithms.sub_algorithms.simplex_projection import project_onto_probability_simplex
 
 
 """Different Projected Gradient Descent (PGD) algorithms for non-negative constraints"""
@@ -249,22 +248,6 @@ def do_plain_pgd(lambda_block, X_block_0, C_block, N, NNT,
     return lambda_block, Y_block
 
 
-# TODO: Is there any good reason to keep this?
-# def do_sparse_pgd(lambda_block, x_block_0, nnt, n, c_block, gamma: float, epsilon: float, n_iter: int, mask = None):
-#     mod = cp.get_array_module(lambda_block)
-#     big_c_block = x_block_0 + n @ c_block - (mod.sum(nnt, axis=1) * epsilon)[:, np.newaxis]
-#     for _ in range(n_iter):
-#         grad_block = nnt @ lambda_block + big_c_block
-#         assert mask is not None
-#         lambda_block = lambda_block - gamma * grad_block
-#         correction = mod.clip(mod.multiply(lambda_block, mask), a_min=None, a_max=0)
-#         lambda_block = mod.clip(lambda_block, a_min=0, a_max=None) + correction
-#     del big_c_block
-#     del grad_block
-#     y_block = c_block + n.T @ (lambda_block - epsilon)
-#     return lambda_block, y_block
-
-
 _NESTEROV_LAST_BLOCK = None
 
 def do_nesterov_pgd(lambda_block, x_block_0, nnt, n, c_block, gamma: float, n_iter: int, 
@@ -359,52 +342,6 @@ def do_pgd_with_backtracking(lambda_block, x_block_0, nnt, n, c_block, n_iter: i
     return lambda_block, y_block
 
 
-def do_plain_path_based_pgd_with_step_reduction(y_block, scaled_alpha_block, c_block, beta_block,
-                                                gamma: float, n_iter: int, 
-                                                kappa: float, epoch: int):
-    """
-    See `do_pgd_with_step_reduction` for the step heuristics.
-    This function is specifically for the path-based problem, where we try to
-    minimize:
-
-        || alpha_k Y_k - C_k ||_2^2
-    
-    Such that `Y_k` remains in the pinned probability simplex (pinned meaning that
-    `Y_tk` values for `t` indices beyond `beta_k` MUST be zero).
-
-    This operations is slightly more complex than the edge-based version. First, note
-    that the matrix shapes are:
-    - `y_block`: `T x K`
-    - `scaled_alpha_block`: `K x n x T`
-    - `c_block`: `n x K`
-    - `beta_block`: Vector of length `K`
-
-    Thus, the objective is:
-
-        sum_e (sum_t (alpha_ket Y_tk) - C_ek)^2
-    
-    And the derivative for `Y_tk` is:
-
-        sum_e sum_t' (alpha_ket alpha_ket' Y_t'k) - 
-              sum_e  (C_ek alpha_ket)
-    
-    This is easiest to express as two Einstein sums. Let `t -> i`, `k -> j`,
-    `e -> k` and `t' -> h`; We get:
-
-        sum_k sum_h (alpha_jki alpha_jkh Y_hj) - 
-              sum_k (C_kj alpha_jki)
-    """
-    step_size = gamma / ((epoch+1) ** kappa)
-    for _ in range(n_iter):
-        sum_1 = np.einsum('jki,jkh,hj->ij', scaled_alpha_block, scaled_alpha_block, y_block)
-        sum_2 = np.einsum('kj,jki->ij', c_block, scaled_alpha_block)
-        grad_block = sum_1 - sum_2
-        y_block = column_wise_projection_onto_probability_simplex(
-            y_block - step_size * grad_block, beta_block
-        )
-    return y_block
-
-
 def do_memory_efficient_pgd(lambda_block: np.ndarray, c_block: np.ndarray, x_block_0: np.ndarray, nnt: np.ndarray, 
                             step_size: float, n_iter: int, mask: np.ndarray) -> np.ndarray:
     """
@@ -420,3 +357,10 @@ def do_memory_efficient_pgd(lambda_block: np.ndarray, c_block: np.ndarray, x_blo
         lambda_block += correction
     return lambda_block
 
+
+def do_path_based_pgd(y_block: np.ndarray, A_block: np.ndarray, C_block: np.ndarray, 
+                      beta_block: np.ndarray, step_size: float, n_iter: int) -> np.ndarray:
+    for _ in range(n_iter):
+        grad_block = np.einsum('kij,jk->ik', A_block, y_block) - C_block
+        y_block = project_onto_probability_simplex(y_block - step_size * grad_block, beta_block)
+    return y_block

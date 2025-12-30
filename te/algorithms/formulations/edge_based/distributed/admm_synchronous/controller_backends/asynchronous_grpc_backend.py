@@ -151,8 +151,8 @@ class AsynchronousgRPCControllerBackend(SynchADMMControllerBackendBase):
         responses = await asyncio.gather(*[
             stub.DoNetworkUpdate(message) for stub in self._worker_stubs
         ])
-        runtimes, serialized_y_bar_chunks = zip(*list([(res.runtime_ns, res.means) for res in responses]))
-        return max(runtimes), np.mean([serialized_message_to_array(chunk) for chunk in serialized_y_bar_chunks], axis=0)
+        runtimes, serialized_x_bar_chunks = zip(*list([(res.runtime_ns, res.means) for res in responses]))
+        return max(runtimes), np.mean([serialized_message_to_array(chunk) for chunk in serialized_x_bar_chunks], axis=0)
     
     def do_network_update(self, epoch: int):
         message = distributed_lp_messages.NetworkUpdateRequest(epoch=epoch)

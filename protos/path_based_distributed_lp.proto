@@ -3,7 +3,7 @@ import "google/protobuf/empty.proto";
 import "array.proto";
 
 
-service PathBasedDistributedADMMSolver {
+service DistributedADMMSolver {
     rpc SetAlpha(stream Chunk) returns (google.protobuf.Empty) {}
     rpc SetBeta(stream Chunk) returns (google.protobuf.Empty) {}
     rpc SetDemands(stream Chunk) returns (google.protobuf.Empty) {}
@@ -17,10 +17,8 @@ service PathBasedDistributedADMMSolver {
 }
 
 message UpdateMessage {
-    SerializedNumpyArrayMessage X_bar_e = 1;
-    SerializedNumpyArrayMessage P_bar_e = 2;
-    SerializedNumpyArrayMessage u_e = 3;
-    int32 xid = 4;
+    SerializedNumpyArrayMessage sharing_bias = 1;
+    int32 xid = 2;
 }
 
 message NetworkUpdateRequest {
@@ -40,18 +38,17 @@ message State {
 }
 
 message SolverParameters {
-    int32 NumberOfPathsPerCommodity = 1;
-    string TopologyName = 2;
-    int32 NumberOfEpochs = 3;
-    int32 NumberOfNetworkUpdates = 4;
-    float Rho = 5;
-    float Eta = 6;
-    float Gamma = 7;
-    float Kappa = 8;
-    int32 QPIterations = 9;
-    int32 NumWorkers = 10;
-    string Precision = 11;
-    int32 Seed = 12;
+    optional int32 NumberOfPathsPerCommodity = 1;
+    optional int32 OuterLoopRounds = 2;
+    optional int32 InnerLoopRounds = 3;
+    optional float Rho = 4;
+    optional float Eta = 5;
+    optional float Gamma = 6;
+    optional int32 SwitchIterations = 7;
+    optional float ConvTol = 8;
+    optional string Precision = 9;
+    optional int32 TMSeed = 10;
+    optional int32 NumWorkers = 11;
 }
 
 message ActiveCommodityCount {

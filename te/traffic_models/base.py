@@ -21,7 +21,8 @@ class TrafficMatrixParamsBase:
 class TrafficMatrixBase(ABC):
     TM_FILE_NAME_FORMAT = "{name}_{seed}.pkl"
 
-    def __init__(self, tm: np.ndarray=None, seed: int=None, params=None):
+    def __init__(self, tm: Optional[np.ndarray] = None, seed: Optional[int] = None, 
+                 params: Optional[Type[TrafficMatrixParamsBase]] = None):
         self.seed = seed
         self.params = params
 

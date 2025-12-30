@@ -14,6 +14,9 @@ from te.algorithms.sub_algorithms.utils import (get_slice_starts_and_exclusive_e
 from utils.logging import as_info, as_warning, as_fail, ShortTQDMEnumerate
 
 
+# TODO: Fix the return type hints, use `CPUArray` instead ...
+
+
 PATH_FOLDER = os.path.join(TE_PATH, "paths")
 MAX_NUMBER_OF_COMMODITIES_PER_CORE = 5000
 MAX_NUMBER_OF_WORKERS = min(24, NUM_PROCS)
@@ -98,6 +101,13 @@ class TShortestPaths:
                 for i in range(len(path) - 1):
                     alpha_slice[k, edge_indexing[(path[i], path[i+1])], t] = True
             beta_slice[k] = t+1
+
+    def get_initial_total_flow(self, demands: np.ndarray) -> np.ndarray:
+        """
+        Returns the total flow over each edge, when all commodities are
+        routed on the first shortest path.
+        """
+        return np.einsum('ij,i->j', self._alpha_k[:, :, 0], demands)
     
     def make(self):
         """Creates the path matrix and sets the `alpha` attribute"""
