@@ -338,6 +338,27 @@ class AsynchronousReserverWorker:
 
 
 def consensus_test(K, TAU):
+    """
+    Unconstrained Consensus is the problem of the form:
+        minimize sum_i f_i(x_i)
+            s.t. for all i # j: x_i = x_j 
+    The simplest problem for this can be of the form:
+        minimize sum_i (x_i - theta_i)^2
+            s.t. for all i # j: x_i = x_j 
+    Where `theta` is a an unknown parameter, and the optimal value
+    is the mean of `theta`.
+
+    The ADMM steps to solve this would take the form:
+        1) minimize   1/2 (x_i - theta_i)^2 + rho/2 (x_i - z + r_i)^2
+        2) minimize rho/2 sum_i (x_i - z + r_i)^2
+        3) r_i <- r_i + (x_i - z)
+    Which simplifies to:
+        1) x_i <- (theta_i + rho * (z - r_i)) / (1 + rho)
+        2) z <- mean(x) + mean(r)
+        3) r_i <- r_i + (x_i - z)
+    We solve a two dimenssional version of this, so each `x_i` and `z`
+    is a vector.
+    """
     global IS_ALIVE
     cleanup()
     SEED = 12345
@@ -374,6 +395,15 @@ def consensus_test(K, TAU):
 
 
 def reserver_test(K, TAU, RHO):
+    """
+    A variation of the consensus test.
+    Here, we change up the problem as follows:
+        minimize u + sum_i (x_i - theta_i)^2
+            s.t. sum_i x_i <= u.N
+                 0 <= u <= 1
+                 0 <= x_i
+    
+    """
     global IS_ALIVE
     cleanup()
     SEED = 12345
@@ -429,6 +459,6 @@ if __name__ == '__main__':
     # plt.plot(iter8)
     # plt.plot(iter16)
     # plt.show()
-    iter1 = reserver_test(8, 10000, 1.0)
+    iter1 = reserver_test(1, 10000, 1.0)
     plt.plot(iter1)
     plt.show()

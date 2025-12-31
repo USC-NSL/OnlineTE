@@ -54,6 +54,27 @@ def project_onto_probability_simplex(x: np.ndarray, pinned: Optional[np.ndarray]
     return w
 
 
+def project_onto_probability_orthant(x: np.ndarray, pinned: Optional[np.ndarray] = None) -> np.ndarray:
+    """
+    Project onto the probability orthant (i.e. the volume of the probability simplex).
+    Will leave the point untouched if it is already inside the simplex, or pushes it onto
+    the surface if it is not.
+    """
+    N = x.shape[0]
+    if pinned is not None:
+        mask = np.arange(N)[:, np.newaxis] >= pinned
+        x[mask] = 0
+    x = np.clip(x, a_min=0, a_max=None, out=x)
+    columns_to_project = (x.sum(axis=0) > 1)
+    if not np.any(columns_to_project):
+        return x
+    x[:, columns_to_project] = project_onto_probability_simplex(
+        x[:, columns_to_project], 
+        None if pinned is None else pinned[columns_to_project]
+    )
+    return x
+
+
 if __name__ == '__main__':
     import time
     N, M = 16, 1500
@@ -71,3 +92,8 @@ if __name__ == '__main__':
     assert np.allclose(x_iter, x_dir)
     for i in range(M):
         assert np.allclose(x_dir[upto[i]:, i], 0)
+    x_in = np.random.random(size=(N, M))
+    x_in = x_in / np.sum(x_in, axis=0)
+    x_in_res = project_onto_probability_orthant(x_in, upto)
+    x_test = project_onto_probability_orthant(x, upto)
+    assert np.allclose(x_in, x_in_res)

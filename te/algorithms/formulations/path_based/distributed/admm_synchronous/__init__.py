@@ -13,17 +13,17 @@ warnings.filterwarnings("error")
 class SynchADMMSolverParams(SolverParams):
     NumberOfPathsPerCommodity: int = 16
     """Max number of available paths for each commodity"""
-    OuterLoopRounds: Optional[int] = 100
+    OuterLoopRounds: Optional[int] = 200
     """Number of outer loop iterations"""
-    InnerLoopRounds: int = 3
+    InnerLoopRounds: int = 5
     """Number of inner loop iterations"""
     Rho: float = 1.0
     """Outer ADMM step size"""
     Eta: float = 0.2
     """Inner ADMM step size"""
-    Gamma: float = 1.0
+    Gamma: float = 0.1
     """Step size for solving the switch-level problems"""
-    SwitchIterations: int = 2
+    SwitchIterations: int = 5
     """Number of iterations for each switch-level problem"""
     ConvTol: float = 1e-3
     """Objective convergence tolerance"""

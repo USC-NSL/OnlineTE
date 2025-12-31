@@ -19,7 +19,7 @@ except ModuleNotFoundError:
 import te.constants
 from typing import Optional
 from te.algorithms.utils import careful_norm, careful_norm_squared, all_elements_within_threshold
-from te.algorithms.sub_algorithms.simplex_projection import project_onto_probability_simplex
+from te.algorithms.sub_algorithms.simplex_projection import project_onto_probability_simplex, project_onto_probability_orthant
 
 
 """Different Projected Gradient Descent (PGD) algorithms for non-negative constraints"""
@@ -363,4 +363,12 @@ def do_path_based_pgd(y_block: np.ndarray, A_block: np.ndarray, C_block: np.ndar
     for _ in range(n_iter):
         grad_block = np.einsum('kij,jk->ik', A_block, y_block) - C_block
         y_block = project_onto_probability_simplex(y_block - step_size * grad_block, beta_block)
+    return y_block
+
+
+def do_path_based_maxflow_pgd(y_block: np.ndarray, A_block: np.ndarray, C_block: np.ndarray, D_block: np.ndarray,
+                              beta_block: np.ndarray, step_size: float, n_iter: int, eta: float) -> np.ndarray:
+    for _ in range(n_iter):
+        grad_block = eta * (np.einsum('kij,jk->ik', A_block, y_block) - C_block) - D_block[np.newaxis, :]
+        y_block = project_onto_probability_orthant(y_block - step_size * grad_block, beta_block)
     return y_block

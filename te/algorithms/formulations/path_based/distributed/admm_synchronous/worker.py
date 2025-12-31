@@ -9,18 +9,19 @@ from te.algorithms.formulations.edge_based.distributed.base import DistributedSo
 from . import SynchADMMSolverParams
 from .base import SynchADMMWorkerBackendBase
 # from .worker_backends.grpc_backend import gRPCWorkerBackend
-from te.algorithms.sub_algorithms.pgd import do_path_based_pgd
+from te.algorithms.sub_algorithms.pgd import do_path_based_pgd, do_path_based_maxflow_pgd
 from te.algorithms.sub_algorithms.paths import path_based_to_edge_based
 
 
 class DenseSolver:
     def __init__(self, alpha: BooleanCPUArray, beta: IntegerCPUArray, demands: CPUArray,
-                 pgd_step: float, pgd_iters: int):
+                 pgd_step: float, pgd_iters: int, eta: float):
         self._alpha = alpha
         self._beta = beta
         self._demands = demands
         self._pgd_step = pgd_step
         self._pgd_iters = pgd_iters
+        self._eta = eta
 
         K, _, T = alpha.shape
         self._K = K
@@ -40,13 +41,23 @@ class DenseSolver:
         return self._X_ek
     
     def update(self, sharing_bias: CPUArray) -> CPUArray:
-        self._Y_tk = do_path_based_pgd(
+        # self._Y_tk = do_path_based_pgd(
+        #     y_block=self._Y_tk,
+        #     A_block=self._A_ktt,
+        #     C_block=self._get_current_C(sharing_bias),
+        #     beta_block=self._beta,
+        #     step_size=self._pgd_step,
+        #     n_iter=self._pgd_iters
+        # )
+        self._Y_tk = do_path_based_maxflow_pgd(
             y_block=self._Y_tk,
             A_block=self._A_ktt,
             C_block=self._get_current_C(sharing_bias),
+            D_block=self._demands,
             beta_block=self._beta,
             step_size=self._pgd_step,
-            n_iter=self._pgd_iters
+            n_iter=self._pgd_iters,
+            eta=self._eta
         )
         self._X_ek = path_based_to_edge_based(self._Y_tk, self._alpha, self._demands)
         return self._X_ek
@@ -101,7 +112,8 @@ class SynchADMMWorkerNode(DistributedSolverNodeBase):
         self._D_k_chunk = demands
         self._dense_solver = DenseSolver(
             self._alpha_ket_chunk, self._beta_k_chunk, self._D_k_chunk, 
-            self._solver_params.Gamma, self._solver_params.SwitchIterations
+            self._solver_params.Gamma, self._solver_params.SwitchIterations,
+            self._solver_params.Eta
         )
     def set_solver_parameters(self, new_params: SynchADMMSolverParams):
         self._solver_params = new_params

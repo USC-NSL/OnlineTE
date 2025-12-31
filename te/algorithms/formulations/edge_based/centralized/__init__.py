@@ -82,7 +82,7 @@ class PDLPParams(SolverParams):
     FeasibilityTol: float
         Constraint violation tolerance. 
     """
-    Threads: int = 1
+    Threads: int = min(cpu_count(), 8)
     Presolve: bool = False
     ConvTol: float = te.constants.DEFAULT_OPTIMALITY_TOLERANCE
     FeasibilityTol: float = te.constants.DEFAULT_FEASIBILITY_TOLERANCE

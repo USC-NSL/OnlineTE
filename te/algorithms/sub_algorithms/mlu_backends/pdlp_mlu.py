@@ -9,6 +9,7 @@ from te.algorithms.base import TEObjective
 from te.algorithms.utils import as_info
 from te.algorithms.array_utils.cpu_utils import CPUArray, cpu_array, cpu_cast_float
 from te.algorithms.formulations.edge_based.centralized import PDLPParams
+from te.algorithms.formulations.edge_based.centralized.pdlp import ConstraintVector
 from te.algorithms.statistics.helpers import record_cpu_runtime
 from .base import ControllerMLUSolver, ControllerMLUException
 
@@ -86,23 +87,17 @@ class PDLPMLU(ControllerMLUSolver):
         out[-1] = 1.0
         return out
 
-    def _get_capacity_constraint_matrix(self) -> np.ndarray:
-        coeff = np.zeros(shape=(self.num_edges, self._NUM_VARIABLES))
+    def _get_capacity_constraint(self) -> ConstraintVector:
+        constraints = ConstraintVector.allocate(self._NUM_VARIABLES, self._NUM_CONSTRAINTS)
 
         N = self.num_edges
         D = self.num_domains
         for e in range(N):
             for d in range(D):
-                coeff[e, e + d*N] = 1.0
-            coeff[e, -1] = -self.capacities[e]
-        
-        return coeff
-
-    def _get_capacity_constraint_lower_bound(self) -> np.ndarray:
-        return np.full(shape=(self._NUM_CONSTRAINTS,), fill_value=-np.inf)
-    
-    def _get_capacity_constraint_upper_bound(self) -> np.ndarray:
-        return np.zeros(shape=(self._NUM_CONSTRAINTS,))
+                constraints.coeffs[e, e + d*N] = 1.0
+            constraints.coeffs[e, -1] = -self.capacities[e]
+        constraints.lowers.fill(-np.inf)
+        return constraints
     
     def _get_objective_matrix_diagonal(self) -> np.ndarray:
         d = np.full((self._NUM_VARIABLES,), fill_value=self._solver_params._Rho)
@@ -147,9 +142,8 @@ class PDLPMLU(ControllerMLUSolver):
         LP.variable_lower_bounds = self._get_variable_lower_bound_vector()
         LP.variable_upper_bounds = self._get_variable_upper_bound_vector()
         # Capacity constraints
-        LP.constraint_matrix = scipy.sparse.csc_matrix(self._get_capacity_constraint_matrix())
-        LP.constraint_lower_bounds = self._get_capacity_constraint_lower_bound()
-        LP.constraint_upper_bounds = self._get_capacity_constraint_upper_bound()
+        constraints = self._get_capacity_constraint()
+        constraints.attach_to_program(LP)
     
     def _add_objective(self):
         assert self._lp is not None

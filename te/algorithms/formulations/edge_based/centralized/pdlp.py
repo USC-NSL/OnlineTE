@@ -1,6 +1,7 @@
 import numpy as np
 import networkx as nx
 import scipy.sparse
+from dataclasses import dataclass
 from typing import List, Tuple, Optional, Dict
 from collections import defaultdict
 from . import PDLPParams
@@ -16,14 +17,30 @@ from topologies.utils import get_node_in_array, get_node_out_array
 from utils.logging import as_info, as_fail, ShortTQDMEnumerate
 
 
-ConstraintVector = Tuple[scipy.sparse.csc_matrix, np.ndarray, np.ndarray]
-"""
-Encodes as 3-tuple, the elements of:
-- constraint coefficients
-- constraint lower bounds
-- constraint upper bounds
-Coefficients are kept as a sparse matrix, but bounds are dense.
-"""
+@dataclass
+class ConstraintVector:
+    """
+    Encodes as 3-tuple, the elements of:
+    - constraint coefficients
+    - constraint lower bounds
+    - constraint upper bounds
+    Coefficients are kept as a sparse matrix, but bounds are dense.
+    """
+    coeffs: scipy.sparse.lil_matrix
+    lowers: np.ndarray
+    uppers: np.ndarray
+
+    @classmethod
+    def allocate(cls, n_vars, n_constraints):
+        return cls(
+            scipy.sparse.lil_matrix((n_constraints, n_vars)),
+            np.zeros((n_constraints,)), np.zeros((n_constraints,))
+        )
+    
+    def attach_to_program(self, lp: pdlp.QuadraticProgram):
+        lp.constraint_matrix = self.coeffs.tocsc()
+        lp.constraint_lower_bounds = self.lowers
+        lp.constraint_upper_bounds = self.uppers
 
 
 class PDLPTE(TrafficEngineeringLP):
@@ -104,11 +121,11 @@ class PDLPTE(TrafficEngineeringLP):
             self._X_ek = np.reshape(result.primal_solution[:-1], shape=(N, K))
         else:
             self._X_ek = np.reshape(result.primal_solution, shape=(N, K))
+        self._set_last_objective(result)
     
     def _set_last_objective(self, result: pdlp.SolverResult):
         ls = result.solve_log.solution_stats.convergence_information
-        assert len(ls) == 1
-        self._last_objective_value = ls[0].primal_objective
+        self._last_objective_value = -ls[0].primal_objective
 
     def _make_variables(self):
         N = self.graph.number_of_edges()
@@ -140,44 +157,52 @@ class PDLPTE(TrafficEngineeringLP):
             out[-1] = 1.0
         return out
 
-    def _get_endpoint_constraint_vector_for_commodity(self, demand: float, source: int, target: int, k: int) -> ConstraintVector:
-        coeff = np.zeros(shape=(4, self._NUM_VARIABLES))
-        lower = np.zeros(shape=(4,))
-        upper = np.zeros(shape=(4,))
+    def _set_capacity_constraint_vector(self, constraits: ConstraintVector):
+        N = self._graph.number_of_edges()
+        K = len(self.commodity_list)
+
+        for e in range(N):
+            start = e * K
+            end = start + K
+            constraits.coeffs[e, start:end] = 1.0
+            if self._problem_description.is_mlu:
+                constraits.coeffs[e, -1] = -self._capacities[e]
+            else:
+                constraits.uppers[e] = self._capacities[e]
+            constraits.lowers[e] = -np.inf
+
+    def _set_endpoint_constraint_vector_for_commodity(self, demand: float, source: int, target: int, k: int, 
+                                                      constraints: ConstraintVector):
+        constraint_start_index = self._graph.number_of_edges() + k*4
 
         K = len(self.commodity_list)
         IN_INDEX = self._in_indexing
         OUT_INDEX = self._out_indexing
 
         for e in OUT_INDEX[source]:
-            coeff[0, self._get_flow_index(K, e, k)] = 1.0
+            constraints.coeffs[constraint_start_index + 0, self._get_flow_index(K, e, k)] = 1.0
             if self._problem_description.is_mlu:
-                lower[0] = demand
-            upper[0] = demand
+                constraints.lowers[constraint_start_index + 0] = demand
+            constraints.uppers[constraint_start_index + 0] = demand
         for e in IN_INDEX[source]:
-            coeff[1, self._get_flow_index(K, e, k)] = 1.0
-            lower[1] = 0
-            upper[1] = 0
+            constraints.coeffs[constraint_start_index + 1, self._get_flow_index(K, e, k)] = 1.0
+            constraints.lowers[constraint_start_index + 1] = 0
+            constraints.uppers[constraint_start_index + 1] = 0
         for e in OUT_INDEX[target]:
-            coeff[2, self._get_flow_index(K, e, k)] = 1.0
-            lower[2] = 0
-            upper[2] = 0      
+            constraints.coeffs[constraint_start_index + 2, self._get_flow_index(K, e, k)] = 1.0
+            constraints.lowers[constraint_start_index + 2] = 0
+            constraints.uppers[constraint_start_index + 2] = 0
         for e in IN_INDEX[target]:
-            coeff[3, self._get_flow_index(K, e, k)] = 1.0
+            constraints.coeffs[constraint_start_index + 3, self._get_flow_index(K, e, k)] = 1.0
             if self._problem_description.is_mlu:
-                lower[3] = demand
-            upper[3] = demand
-        
-            return coeff, lower, upper
+                constraints.lowers[constraint_start_index + 3] = demand
+            constraints.uppers[constraint_start_index + 3] = demand
 
-
-    def _get_transit_constraint_vector_for_commodity(self, source: int, target: int, k: int) -> ConstraintVector:
+    def _set_transit_constraint_vector_for_commodity(self, source: int, target: int, k: int,
+                                                     constraints: ConstraintVector):
         M = self._graph.number_of_nodes()
-        coeff = np.zeros(shape=(M-2, self._NUM_VARIABLES))
-        lower = np.zeros(shape=(M-2,))
-        upper = np.zeros(shape=(M-2,))
-
         K = len(self.commodity_list)
+        constraint_start_index = self._graph.number_of_edges() + K*4 + (M-2)*k
         IN_INDEX = self._in_indexing
         OUT_INDEX = self._out_indexing
 
@@ -186,31 +211,11 @@ class PDLPTE(TrafficEngineeringLP):
             if v == source or v == target:
                 continue
             for e in OUT_INDEX[v]:
-                coeff[counter, self._get_flow_index(K, e, k)] = 1.0
+                constraints.coeffs[constraint_start_index + counter, self._get_flow_index(K, e, k)] = 1.0
             for e in IN_INDEX[v]:
-                coeff[counter, self._get_flow_index(K, e, k)] = -1.0
+                constraints.coeffs[constraint_start_index + counter, self._get_flow_index(K, e, k)] = -1.0
             counter += 1
         assert counter == M-2
-        
-        return coeff, lower, upper
-    
-    def _get_capacity_constraint_vector(self) -> ConstraintVector:
-        N = self._graph.number_of_edges()
-        K = len(self.commodity_list)
-        coeff = np.zeros(shape=(N, self._NUM_VARIABLES))
-        lower = np.ones(shape=(N,)) * (-np.inf)
-        upper = np.zeros(shape=(N,))
-
-        for e in range(N):
-            start = e * K
-            end = start + K
-            coeff[e, start:end] = 1.0
-            if self._problem_description.is_mlu:
-                coeff[e, -1] = -self._capacities[e]
-            else:
-                upper[e] = self._capacities[e]
-        
-        return coeff, lower, upper
 
     def _get_objective_vector(self) -> Tuple[float, np.ndarray]:
         vec = np.zeros(shape=(self._NUM_VARIABLES,))
@@ -225,25 +230,18 @@ class PDLPTE(TrafficEngineeringLP):
                     vec[self._get_flow_index(K, e, k)] = -1.0
         return 0, vec
     
-    def _get_demand_constraints(self) -> ConstraintVector:
-        coeffs, lowers, uppers = self._get_capacity_constraint_vector()
+    def _get_constraints(self) -> ConstraintVector:
+        constraits = ConstraintVector.allocate(self._NUM_VARIABLES, self._NUM_CONSTRAINTS)
+        self._set_capacity_constraint_vector(constraits)
         # Demand/Flow-conservation cosntraints
         print("Adding demand/flow-conservation constraints")
         for k, commodity in ShortTQDMEnumerate(self.commodity_list):
             source = commodity.source
             target = commodity.destination
             demand = commodity.demand
-            endpoints_vectors = self._get_endpoint_constraint_vector_for_commodity(demand, source, target, k)
-            transit_vectors = self._get_transit_constraint_vector_for_commodity(source, target, k)
-            coeffs = np.vstack([coeffs, endpoints_vectors[0], transit_vectors[0]])
-            lowers = np.hstack([lowers, endpoints_vectors[1], transit_vectors[1]])
-            uppers = np.hstack([uppers, endpoints_vectors[2], transit_vectors[2]])
-        
-        assert coeffs.shape == (self._NUM_CONSTRAINTS, self._NUM_VARIABLES)
-        assert lowers.shape == (self._NUM_CONSTRAINTS,)
-        assert uppers.shape == (self._NUM_CONSTRAINTS,)
-
-        return coeffs, lowers, uppers
+            self._set_endpoint_constraint_vector_for_commodity(demand, source, target, k, constraits)
+            self._set_transit_constraint_vector_for_commodity(source, target, k, constraits)
+        return constraits
     
     def _add_constraints(self):
         assert self._lp is not None
@@ -252,12 +250,9 @@ class PDLPTE(TrafficEngineeringLP):
         # Lower and upper variable bounds
         LP.variable_lower_bounds = self._get_variable_lower_bound_vector()
         LP.variable_upper_bounds = self._get_variable_upper_bound_vector()
-        # Capacity constraints
-        coeffs, lowers, uppers =  self._get_demand_constraints()
-
-        LP.constraint_matrix = scipy.sparse.csc_matrix(coeffs)
-        LP.constraint_lower_bounds = lowers
-        LP.constraint_upper_bounds = uppers
+        # Capacity/Demand constraints
+        constraints = self._get_constraints()
+        constraints.attach_to_program(LP)
 
     def _add_objective(self):
         assert self._lp is not None
