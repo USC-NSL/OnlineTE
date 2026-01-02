@@ -1,3 +1,7 @@
+# When running this on SPHERE, this ENV file needs to be present and updated
+# with appropriate values.
+# This is a template; the value for the Git access token needs to be filled
+# separately (and obviously, kept out of commits!).
 # The username for accessing the SPHERE project
 SPHERE_USER=aghavidel
 SPHERE_HOME=/home/aghavidel/DistributedTE

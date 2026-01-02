@@ -8,6 +8,7 @@ the controller node is named `controller`.
 import os
 import dotenv
 import argparse
+from typing import Optional
 from utils.logging import as_fail, as_warning, as_success
 from __init__ import ROOT_PATH
 
@@ -18,7 +19,7 @@ LOCALHOST_NODE_REFERENCE = 'localhost'
 ANSIBLE_DIR = 'ansible'
 
 
-def generate_host_file(number_of_nodes: int, paths: str):
+def generate_host_file(number_of_nodes: int, path: Optional[str] = None):
     all_group = [LOCALHOST_NODE_REFERENCE, CONTROLLER_NODE_NAME] + \
         [WORKER_NODE_NAME_FORMAT.format(index=i) for i in range(number_of_nodes)]
     workers_group = [
@@ -38,9 +39,12 @@ def generate_host_file(number_of_nodes: int, paths: str):
 
     host_file_str = '\n\n'.join([all_group_str, workers_group_str, controller_group_str, all_vars_str])
 
-    with open(paths, 'w') as f:
+    if path is None:
+        path = os.path.join(ROOT_PATH, ANSIBLE_DIR, 'hosts')
+
+    with open(path, 'w') as f:
         f.write(host_file_str)
-    print(as_success(f'Generated inventory file at: {paths}'))
+    print(as_success(f'Generated inventory file at: {path}'))
 
 
 def check_env_file():
@@ -78,7 +82,7 @@ def generate_service_file():
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('Generate simple host file for Ansible')
     parser.add_argument('n', type=int, help='Number of worker nodes')
-    parser.add_argument('--path', type=str, default='hosts', help='Output file path')
+    parser.add_argument('--path', type=str, help='Output file path')
     args = parser.parse_args()
     check_env_file()
     generate_host_file(args.n, args.path)
