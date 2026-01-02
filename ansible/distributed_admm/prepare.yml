@@ -42,7 +42,7 @@
       name: uv
   
   - name: UV install requirements
-    command: chdir="{{path_home}}" uv pip install -r requirements.txt
+    command: chdir="{{path_home}}" python3 -m uv pip install -r requirements.txt
 
 # The zoo is not reachable anymore. I am going to use a local copy
 # - name: Get the zoo

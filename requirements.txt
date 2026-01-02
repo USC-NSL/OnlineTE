@@ -1,6 +1,6 @@
 grpcio==1.68.0
 grpcio-tools==1.68.0
-gurobipy>=12.0.1
+gurobipy>=3.7.5
 joblib>=1.4.0
 matplotlib==3.10.8
 networkx==2.8.5

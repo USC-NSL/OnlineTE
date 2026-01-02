@@ -11,6 +11,7 @@ cat > ~/.ansible.cfg << EOF
 # explicitly accept the SSH key for each experiment node you run Ansible
 # against
 host_key_checking = False
+interpreter_python = auto_silent
 
 # configure up to 10 hosts in parallel
 forks = 10
