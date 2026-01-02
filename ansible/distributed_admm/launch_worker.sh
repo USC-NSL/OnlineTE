@@ -1,8 +1,12 @@
 #!/bin/bash
 # Called by the service script to set up the TE worker listener (i.e. switches)
 
-# TODO: Fix this path when you can be bothered ...
-cd /home/aghavidel/DistributedTE
+if [[ -z "${SPHERE_HOME}" ]]; then
+    echo "Must set \`SPHERE_HOME\`" 1>&2
+    exit 1
+fi
+
+pushd $"{SPHERE_HOME}"
 
 if [[ -z "${WORKER_ID}" ]]; then
   >&2 echo "WORKER_ID environment variable is not set. Will refuse to proceed."
@@ -28,6 +32,8 @@ else
 /usr/bin/python3 -m te.algorithms.formulations.edge_based_distributed_admm.worker "${WORKER_ID}" --multicast &
   echo "Using UDP multicast backend"
 fi
+
+popd
 
 child=$!
 wait "$child"

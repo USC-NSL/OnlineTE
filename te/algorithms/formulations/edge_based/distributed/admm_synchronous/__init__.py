@@ -17,7 +17,7 @@ class SynchADMMSolverParams(SolverParams):
     """Number of inner loop iterations"""
     Rho: float = 1.0
     """Outer ADMM step size"""
-    Eta: float = 0.5
+    Eta: float = 0.2
     """Inner ADMM step size"""
     Gamma: float = 1.0
     """Step size for solving the switch-level problems"""

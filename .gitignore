@@ -45,3 +45,6 @@ paths
 
 # (For now) MDC backends
 te/algorithms/sub_algorithms/mdc_backends
+
+# The SPHERE service file
+*.service
