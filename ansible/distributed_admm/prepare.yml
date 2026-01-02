@@ -13,6 +13,11 @@
       update_cache: true
       name: git
     when: '"git" not in ansible_facts.packages'
+  
+  - name: Install python-dev
+    ansible.builtin.apt:
+      name: python3-dev
+      state: present
 
 - name: Clone repo and configure PIP
   hosts: controller_group:workers_group
@@ -32,9 +37,12 @@
       dest: "{{path_home}}"
       version: "{{branch}}"
 
-  - name: PIP install requirements
+  - name: PIP install UV
     ansible.builtin.pip:
-      requirements: "{{path_home}}/requirements.txt"
+      name: uv
+  
+  - name: UV install requirements
+    command: chdir="{{path_home}}" uv pip install -r requirements.txt
 
 # The zoo is not reachable anymore. I am going to use a local copy
 # - name: Get the zoo
