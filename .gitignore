@@ -1,2 +1,50 @@
-# Created by venv; see https://docs.python.org/3/library/venv.html
-*
+*.pyc
+*.log
+
+# Debug outputs
+*.nsys-rep
+*.txt
+
+# VENV
+*.env
+*.cfg
+lib/
+lib64/
+bin/
+include/
+share/
+lib64
+Scripts/
+
+# No IPython for now
+# *.ipynb
+
+# Ansible hosts need to be regenerated
+hosts
+
+# Notebooks are too dirty for now ...
+notebooks
+
+# Some old benchmarks (might add them back later ...)
+benchmarks/warmup_test.py
+
+# Some experimental backends (not ready yet ...)
+te/algorithms/formulations/edge_based_distributed_admm/controller_backends/queued_grpc_backend.py
+
+# Output .PNG file
+res.png
+
+# Some old utils
+utils/plot_incremental_cdfs.py
+
+# Paths (too big to upload ...)
+paths
+
+# IPython checkpoints
+.ipynb_checkpoints
+
+# (For now) MDC backends
+te/algorithms/sub_algorithms/mdc_backends
+
+# The SPHERE service file
+*.service
