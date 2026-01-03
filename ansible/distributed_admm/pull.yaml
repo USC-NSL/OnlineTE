@@ -7,6 +7,7 @@
   vars: 
     access_token: "{{ lookup('env', 'GIT_ACCESS_TOKEN') }}"
     path_home: "{{ lookup('env', 'SPHERE_HOME') }}"
+    path_venv: "{{ lookup('env', 'VENV_HOME') }}"
     path_launch: "{{ lookup('env', 'LAUNCH_FILE' )}}"
   module_defaults:
     ansible.builtin.shell:
@@ -21,7 +22,7 @@
       force: true
   
   - name: Compile protobuffs
-    command: python3 protos/__init__.py
+    command: chdir="{{path_home}}" "{{path_venv}}/bin/python protos/__init__.py"
 
   - name: Give EXEC Premission To Launcher
     command: chmod +x "{{path_launch}}"

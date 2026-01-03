@@ -6,6 +6,11 @@ if [[ -z "${SPHERE_HOME}" ]]; then
     exit 1
 fi
 
+if [[ -z "${VENV_HOME}" ]]; then
+    echo "Must set \`VENV_HOME\`" 1>&2
+    exit 1
+fi
+
 pushd $"{SPHERE_HOME}"
 
 if [[ -z "${WORKER_ID}" ]]; then
@@ -27,9 +32,9 @@ trap _kill SIGKILL
 
 if [ "${TE_MULTICAST}" = "0" ]; then
   echo "Using gRPC backend"
-  /usr/bin/python3 -m te.algorithms.formulations.edge_based_distributed_admm.worker "${WORKER_ID}" &
+  "${VENV_HOME}/bin/python" -m te.algorithms.formulations.edge_based_distributed_admm.worker "${WORKER_ID}" &
 else
-/usr/bin/python3 -m te.algorithms.formulations.edge_based_distributed_admm.worker "${WORKER_ID}" --multicast &
+"${VENV_HOME}/bin/python" -m te.algorithms.formulations.edge_based_distributed_admm.worker "${WORKER_ID}" --multicast &
   echo "Using UDP multicast backend"
 fi
 

@@ -3,7 +3,7 @@ import time
 import numpy as np
 from typing import Optional, Tuple
 from te.algorithms.array_utils import set_global_precision
-from te.algorithms.array_utils.cpu_utils import CPUArray, BooleanCPUArray, cpu_zeros, cpu_array, set_cpu_float_precision
+from te.algorithms.array_utils.cpu_utils import CPUArray, BooleanCPUArray, CPUCSRArray, cpu_zeros, cpu_array, set_cpu_float_precision
 from ..base import DistributedSolverNodeBase, DistributedSolverNodeParams
 from . import SynchADMMSolverParams
 from .base import SynchADMMWorkerBackendBase
@@ -91,7 +91,7 @@ class SynchADMMWorkerNode(DistributedSolverNodeBase):
         self._NNT_M: Optional[CPUArray] = None
         self._MASK_M_chunk: Optional[BooleanCPUArray] = None
 
-        self._X_ek_start_chunk: Optional[CPUArray] = None
+        self._X_ek_start_chunk: Optional[CPUCSRArray] = None
         self._sharing_bias_cached: Optional[CPUArray] = None
 
         self._dense_solver: Optional[DenseSolver] = None
@@ -115,7 +115,7 @@ class SynchADMMWorkerNode(DistributedSolverNodeBase):
     def run(self):
         self.backend.wait()
     
-    def set_initial_feasible_solution(self, X: CPUArray):
+    def set_initial_feasible_solution(self, X: CPUCSRArray):
         self._X_ek_start_chunk = X
         self._NUM_EDGES, self._CHUNK_LEN = self._X_ek_start_chunk.shape
     

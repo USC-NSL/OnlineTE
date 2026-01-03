@@ -26,6 +26,7 @@
   vars: 
     access_token: "{{ lookup('env', 'GIT_ACCESS_TOKEN') }}"
     path_home: "{{ lookup('env', 'SPHERE_HOME') }}"
+    path_venv: "{{ lookup('env', 'VENV_HOME') }}"
     branch: "{{ lookup('env', 'GIT_BRANCH') }}"
   
   tasks:
@@ -36,30 +37,21 @@
       force: true
       dest: "{{path_home}}"
       version: "{{branch}}"
+  
+  - name: Create a Python virtual environment
+    ansible.builtin.command:
+      cmd: python3 -m venv "{{path_venv}}"
+    args:
+      creates: "{{path_venv}}/bin/activate"
 
   - name: PIP install UV
-    ansible.builtin.pip:
-      name: uv
+    command: "{{path_venv}}/bin/python -m pip install uv"
   
   - name: UV install requirements
-    command: chdir="{{path_home}}" python3 -m uv pip install -r requirements.txt
-
-# The zoo is not reachable anymore. I am going to use a local copy
-# - name: Get the zoo
-#   hosts: controller_group
-#   remote_user: aghavidel
-#   tasks:
-
-#   - name: Stat the Zoo directory
-#     ansible.builtin.stat:
-#       path: /home/aghavidel/DistributedTE/topologies/zoo
-#     register: zoo_dir
-#   - name: Download and unzip the Topology Zoo dataset
-#     command: chdir=/home/aghavidel/DistributedTE python3 -m topologies.get_topology_zoo
-#     when: (zoo_dir.stat.isdir is not defined or not zoo_dir.stat.isdir)
+    command: "{{path_venv}}/bin/python -m pip install -r requirements.txt"
 
   - name: Compile protobuffs
-    command: chdir="{{path_home}}" python3 protos/__init__.py
+    command: chdir="{{path_home}}" "{{path_venv}}/bin/python protos/__init__.py"
 
 - name: Copy TE Worker Service File
   hosts: workers_group

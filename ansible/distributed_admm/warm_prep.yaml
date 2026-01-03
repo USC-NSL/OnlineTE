@@ -6,9 +6,10 @@
   remote_user: "{{ lookup('env', 'SPHERE_USER') }}"
   vars: 
     path_home: "{{ lookup('env', 'SPHERE_HOME') }}"
+    path_venv: "{{ lookup('env', 'VENV_HOME') }}"
   tasks:
   - name: Compile protobuffs
-    command: chdir="{{path_home}}" python3 protos/__init__.py
+    command: chdir="{{path_home}}" "{{path_venv}}/bin/python protos/__init__.py"
 
 - name: Copy TE Worker Service File
   hosts: workers_group

@@ -7,18 +7,18 @@ from typing import List, Tuple, Optional
 from te.algorithms.base import *
 from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
-from topologies.utils import get_graph_M_matrix, get_adjacency_null_space, get_commodity_in_out_mask, get_sparse_null_space
+from topologies.utils import get_graph_M_matrix, get_adjacency_null_space, get_commodity_in_out_mask
 from utils.exceptions import SolutionInterrupted
 from utils.logging import as_info, as_success, log_subsection_separator, ShortTQDM
 from te.algorithms.array_utils import set_global_precision
-from te.algorithms.array_utils.cpu_utils import (CPUArray, BooleanCPUArray,
+from te.algorithms.array_utils.cpu_utils import (CPUArray, BooleanCPUArray, CPUCSRArray,
                                                  cpu_array, cpu_zeros, cpu_double_array, 
                                                  set_cpu_float_precision)
 from te.algorithms.utils import get_solution_maximum_utilization
 # TODO: Finish the `SharingWrapper` for the inner loop
 from te.algorithms.sub_algorithms.admm import ADMMWrapper
 from te.algorithms.sub_algorithms.feasible_assignment import get_feasible_flow_assignment
-from te.algorithms.sub_algorithms.admm_consensus_test import outer_admm_consensus_test, inner_admm_consensus_test, norm_in_consensus
+from te.algorithms.sub_algorithms.admm_consensus_test import outer_admm_consensus_test, inner_admm_consensus_test
 from te.algorithms.sub_algorithms.link_capacity_test import check_capacity_constraint
 from te.algorithms.sub_algorithms.flow_conservation_test import check_flow_conservation
 from te.algorithms.statistics.helpers import record_cpu_runtime, record_return_value
@@ -63,7 +63,7 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
         self._mlu_solver: Optional[ControllerMLUSolver] = None
 
         self._X_ek: Optional[CPUArray] = None
-        self._X_ek_start: Optional[CPUArray] = None
+        self._X_ek_start: Optional[CPUCSRArray] = None
         self._Z_e_start: Optional[CPUArray] = None
         self._X_ek_sum_e: Optional[CPUArray] = None
         self._outer_admm_wrapper: Optional[ADMMWrapper] = None
@@ -165,7 +165,7 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
         self._capacities = cpu_double_array([item[-1] for item in self._graph.edges(data='capacity')])
         self._c_norm = np.linalg.norm(self._capacities)
         self._alpha = self._c_norm * np.sqrt(NUM_EDGES)
-        self._X_ek = cpu_array(self._X_ek_start)
+        # self._X_ek = cpu_array(self._X_ek_start)
         self._X_ek_sum_e = cpu_array(self._Z_e_start)
         self._sharing_mean_1 = self._Z_e_start / K
         self._sharing_mean_2 = cpu_array(self._sharing_mean_1)
@@ -318,10 +318,6 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
             MODEL_CONTROLLER.solve()
             self._update_r_e()
             for epoch in ShortTQDM(range(PARAMS.OuterLoopRounds)):
-                # print("="*50)
-                # print(f"X_EK_SUM:\t{np.round(self._outer_admm_wrapper.X, decimals=2)}")
-                # print(f"Z_E:\t{np.round(self._outer_admm_wrapper.Z, decimals=2)}")
-                # print(f"R_E:\t{np.round(self._outer_admm_wrapper.dual_var, decimals=2)}")
                 for i in reversed(range(PARAMS.InnerLoopRounds)):
                     self._do_network_update(epoch)
                     if i > 0 and self._reconvene_network_updates():
@@ -338,13 +334,6 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
                 # Inner loop infeasibility is usually very small, no need to bother with it!
                 self._objective_gap_trace.append(self._outer_admm_wrapper.infeasibility)
             self._set_X_ek()
-            # print("="*50)
-            # print(np.round(self._X_ek, decimals=2))
-            # print(f"X_EK_SUM:\t{np.round(self._outer_admm_wrapper.X, decimals=2)}")
-            # print(f"Z_E:\t{np.round(self._outer_admm_wrapper.Z, decimals=2)}")
-            # print(f"R_E:\t{np.round(self._outer_admm_wrapper.dual_var, decimals=2)}")
-            # print("*"*50)
-            # print(np.round(self._X_ek, decimals=2))
             return time.time() - t
         except ControllerMLUException as e:
             print(f'MLU solver failed: {e}')

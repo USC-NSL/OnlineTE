@@ -5,6 +5,7 @@
 # The username for accessing the SPHERE project
 SPHERE_USER=aghavidel
 SPHERE_HOME=/home/aghavidel/DistributedTE
+VENV_HOME=/home/aghavidel/.distte_venv
 
 # Access token for the git repo.
 # Remember to fill this!

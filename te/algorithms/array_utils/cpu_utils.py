@@ -1,9 +1,14 @@
 import numpy as np
+import scipy.sparse as sp
 from te.algorithms.array_utils import get_global_precision, DOUBLE_PRECISION, SINGLE_PRECISION, HALF_PRECISION
-from typing import Tuple, Callable, Any, Optional, Type
+from typing import Tuple, Callable, Any, Optional, Type, List
 
 CPUArray = np.ndarray
 """Alias for `numpy.ndarray`, an array that lives on the RAM. Plenty of space usually."""
+CPUCOOArray = sp.coo_array
+"""Alias for `scipy.sparse.coo_matrix`"""
+CPUCSRArray = sp.csr_array
+"""Alias for `scipy.sparse.csr_matrix`"""
 DoublePrecisionCPUArray = np.ndarray
 """
 Alias for `numpy.ndarray`.
@@ -55,8 +60,14 @@ def cpu_mmap(path: str, shape: Tuple[int], mode: str, dtype: Optional[Type] = No
     else:
         return np.lib.format.open_memmap(shape=shape, filename=path, mode=mode, dtype=dtype)
 
-cpu_array: Callable[[Any], CPUArray] = lambda input: np.array(input, dtype=_CPU_DTYPE)
-"""Create a copy of an array-like thing"""
+def cpu_array(thing: Any) -> CPUArray:
+    """Create a copy of an array-like thing"""
+    if isinstance(thing, (CPUArray, BooleanCPUArray, DoublePrecisionCPUArray, IntegerCPUArray)):
+        return np.array(thing, dtype=_CPU_DTYPE)
+    elif isinstance(thing, (list, tuple)):
+        return np.array(thing, dtype=_CPU_DTYPE)
+    elif isinstance(thing, (CPUCOOArray, CPUCSRArray)):
+        return thing.toarray()
 
 def cpu_frombuffer(buffer: bytes, shape: Tuple[int], dtype: Optional[Type] = None) -> CPUArray:
     """Alias for `np.frombuffer`, but expects the shape as an argument"""
@@ -72,6 +83,16 @@ def cpu_frombuffer_serial(buffer: bytes, dtype: Optional[Type] = None) -> CPUArr
     else:
         return np.frombuffer(buffer, dtype=dtype)
 
+def cpu_csr_frombuffer(buffer: bytes, shape: Tuple[int], lens: Tuple[int], dtype: Optional[Type] = None) -> CPUCSRArray:
+    """Given the 1D buffer of a CSR array, rebuilds it from the given lengths and shape"""
+    assert len(lens) == 3
+    d_len, i_len, p_len = lens
+    assert len(buffer) == d_len + i_len + p_len
+    data = cpu_frombuffer_serial(buffer[:d_len], dtype)
+    indices = cpu_frombuffer_serial(buffer[d_len:d_len+i_len], np.int64)
+    pointers = cpu_frombuffer_serial(buffer[d_len+i_len:], np.int64)
+    return sp.csr_array((data, indices, pointers), shape=shape)
+
 cpu_dump: Callable[[str, CPUArray], None] = lambda path, data: np.save(path, data, allow_pickle=True)
 """Replacement for Joblib `dump`, it seems to not do what I expect it to"""
 
@@ -86,3 +107,7 @@ cpu_int_zeros: Callable[[Tuple[int]], IntegerCPUArray] = lambda shape: np.zeros(
 """Always returns zero array with `np.int32`, regardless of global data type"""
 
 cpu_cast_float: Callable[[Any], Any] = lambda val: _CPU_DTYPE(val)
+
+cpu_coo_array: Callable[[List[int], List[int], List[Any], Tuple[int]], CPUCOOArray] = \
+    lambda rows, cols, data, shape: sp.coo_array((data, (rows, cols)), shape=shape, dtype=_CPU_DTYPE)
+cpu_coo_to_csr: Callable[[CPUCOOArray], CPUCSRArray] = lambda inp: inp.tocsr()
