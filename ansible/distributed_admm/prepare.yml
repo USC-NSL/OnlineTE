@@ -47,13 +47,17 @@
       creates: "{{path_venv}}/bin/activate"
 
   - name: PIP install UV
-    command: "{{path_venv}}/bin/python -m pip install uv"
+    ansible.builtin.shell: "{{path_venv}}/bin/python -m pip install uv"
   
   - name: UV install requirements
-    command: chdir="{{path_home}}" "{{path_venv}}/bin/python -m pip install -r requirements.txt"
+    ansible.builtin.shell: "{{path_venv}}/bin/python -m uv pip install -r requirements.txt"
+    args:
+      chdir: "{{path_home}}"
 
   - name: Compile protobuffs
-    command: chdir="{{path_home}}" "{{path_venv}}/bin/python protos/__init__.py"
+    ansible.builtin.shell: "{{path_venv}}/bin/python protos/__init__.py"
+    args:
+      chdir: "{{path_home}}"
 
 - name: Copy TE Worker Service File
   hosts: workers_group
