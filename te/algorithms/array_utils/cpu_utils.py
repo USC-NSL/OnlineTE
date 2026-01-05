@@ -1,7 +1,8 @@
 import numpy as np
 import scipy.sparse as sp
+from utils.logging import as_warning
 from te.algorithms.array_utils import get_global_precision, DOUBLE_PRECISION, SINGLE_PRECISION, HALF_PRECISION
-from typing import Tuple, Callable, Any, Optional, Type, List
+from typing import Tuple, Callable, Any, Optional, Type, List, Union
 
 CPUArray = np.ndarray
 """Alias for `numpy.ndarray`, an array that lives on the RAM. Plenty of space usually."""
@@ -9,6 +10,8 @@ CPUCOOArray = sp.coo_array
 """Alias for `scipy.sparse.coo_matrix`"""
 CPUCSRArray = sp.csr_array
 """Alias for `scipy.sparse.csr_matrix`"""
+CPUCSCArray = sp.csc_array
+"""Alias for `scipy.sparse.csc_matrix`"""
 DoublePrecisionCPUArray = np.ndarray
 """
 Alias for `numpy.ndarray`.
@@ -37,7 +40,17 @@ everything takes forever and eats a lot of memory.
 
 
 _CPU_DTYPE = None
-"""Every Numpy array that we instantiate must adhere to this data type"""
+"""Every Numpy array that we instantiate must adhere to this data type unless specified otherwise"""
+
+
+def is_float_array(thing: CPUArray) -> bool:
+    """
+    Return `True`, if the array contains float-16/32/64 data type.
+    We implicitly assume that any such array needs to be cast to the 
+    current global float precision.
+    """
+    dt = thing.dtype
+    return dt == np.float16 or dt == np.float32 or dt == np.float64
 
 
 def set_cpu_float_precision():
@@ -60,14 +73,17 @@ def cpu_mmap(path: str, shape: Tuple[int], mode: str, dtype: Optional[Type] = No
     else:
         return np.lib.format.open_memmap(shape=shape, filename=path, mode=mode, dtype=dtype)
 
-def cpu_array(thing: Any) -> CPUArray:
-    """Create a copy of an array-like thing"""
-    if isinstance(thing, (CPUArray, BooleanCPUArray, DoublePrecisionCPUArray, IntegerCPUArray)):
-        return np.array(thing, dtype=_CPU_DTYPE)
+def cpu_array(thing: Any) -> Union[CPUArray, CPUCOOArray, CPUCSRArray]:
+    """Create a copy of an array-like thing with similar sparsity"""
+    if isinstance(thing, CPUArray):
+        if is_float_array(thing):
+            return np.array(thing, dtype=_CPU_DTYPE)
+        return thing.copy()
     elif isinstance(thing, (list, tuple)):
         return np.array(thing, dtype=_CPU_DTYPE)
     elif isinstance(thing, (CPUCOOArray, CPUCSRArray)):
-        return thing.toarray()
+        return thing.copy()
+    raise ValueError(f'Unknown matrix type: {type(thing)}')
 
 def cpu_frombuffer(buffer: bytes, shape: Tuple[int], dtype: Optional[Type] = None) -> CPUArray:
     """Alias for `np.frombuffer`, but expects the shape as an argument"""
@@ -108,6 +124,11 @@ cpu_int_zeros: Callable[[Tuple[int]], IntegerCPUArray] = lambda shape: np.zeros(
 
 cpu_cast_float: Callable[[Any], Any] = lambda val: _CPU_DTYPE(val)
 
-cpu_coo_array: Callable[[List[int], List[int], List[Any], Tuple[int]], CPUCOOArray] = \
-    lambda rows, cols, data, shape: sp.coo_array((data, (rows, cols)), shape=shape, dtype=_CPU_DTYPE)
-cpu_coo_to_csr: Callable[[CPUCOOArray], CPUCSRArray] = lambda inp: inp.tocsr()
+def cpu_coo_array(rows: List[int], cols: List[int], data: List[Any], shape: Tuple[int]) -> CPUCOOArray:
+    if _CPU_DTYPE != np.float16:
+        return sp.coo_array((data, (rows, cols)), shape=shape, dtype=_CPU_DTYPE)
+    print(as_warning("Sparse float16 array requested. Will return a dense array instead ..."))
+    return cpu_array(sp.coo_array((data, (rows, cols)), shape=shape).toarray())
+
+cpu_coo_to_csr: Callable[[CPUCOOArray], CPUCSRArray] = lambda inp: inp.tocsr() if isinstance(inp, CPUCOOArray) else inp
+cpu_coo_to_csc: Callable[[CPUCOOArray], CPUCSCArray] = lambda inp: inp.tocsc() if isinstance(inp, CPUCOOArray) else inp

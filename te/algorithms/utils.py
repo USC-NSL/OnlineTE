@@ -1,13 +1,7 @@
 import contextlib
 import numpy as np
-try:
-    import cupy as cp
-except ModuleNotFoundError:
-    import numpy as cp
-    cp.get_array_module = lambda x: np
 import seaborn as sns
 import networkx as nx
-import te.constants
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 from typing import Optional, Type
@@ -107,30 +101,6 @@ def get_solution_maximum_utilization(assignments: np.ndarray, graph: nx.DiGraph)
         if u < this_u:
             u = this_u
     return u
-
-
-all_elements_within_threshold = lambda x, thresh, mod: mod.all(mod.abs(x) < thresh)
-
-
-def careful_norm(x: np.ndarray, scaled: bool = False, axis: Optional[int] = None) -> float:
-    mod = cp.get_array_module(x)
-    if scaled:
-        scale_factor = np.sqrt(x.size)
-        if all_elements_within_threshold(x, te.constants.MINIMUM_NORM / scale_factor, mod):
-            return 0
-        return mod.linalg.norm(x) / scale_factor
-    if all_elements_within_threshold(x, te.constants.MINIMUM_NORM, mod) and axis is None:
-        return 0
-    return mod.linalg.norm(x, axis=axis)
-
-
-def careful_norm_squared(x: np.ndarray, axis: Optional[int] = None) -> float:
-    mod = cp.get_array_module(x)
-    if all_elements_within_threshold(x, te.constants.MINIMUM_NORM, mod) and axis is None:
-        return 0
-    if axis is None:
-        return mod.dot(x, x)
-    return mod.linalg.norm(x, axis=axis) ** 2
 
 
 def test_mlu(lp_cls: Type[TrafficEngineeringLP], graph: nx.DiGraph, tm: TrafficMatrixBase, 

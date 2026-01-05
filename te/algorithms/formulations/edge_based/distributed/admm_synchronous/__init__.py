@@ -4,6 +4,7 @@ from typing import Optional, Literal
 from dataclasses import dataclass
 from te.algorithms.base import SolverParams
 from te.algorithms.array_utils import SINGLE_PRECISION
+from utils.logging import as_warning
 
 import warnings
 warnings.filterwarnings("error")
@@ -44,6 +45,9 @@ class SynchADMMSolverParams(SolverParams):
         self._left_column_share = 0.5
         if self.Beta is not None:
             assert self.Beta > 0, "L1 penalty coefficient must be strictly greater than 0"
+        if self.Rho > self.Eta:
+            as_warning(f"Outer ADMM step size (`Rho`) = {self.Rho} is strictly larger "
+                       f"than inner ADMM step size (`Eta`) = {self.Eta}.\nThis is almost never beneficial.")
 
 
 def add_synch_solver_params_parser(parser: jsonargparse.ArgumentParser):

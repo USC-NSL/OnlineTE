@@ -1,9 +1,9 @@
 import networkx as nx
 from joblib import Parallel, delayed
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Union
 from topologies.utils import get_edge_indexing, Commodity
 from te.algorithms.utils import as_info
-from te.algorithms.array_utils.cpu_utils import cpu_coo_array, cpu_coo_to_csr, CPUCSRArray
+from te.algorithms.array_utils.cpu_utils import cpu_coo_array, cpu_coo_to_csr, cpu_coo_to_csc, CPUCSRArray, CPUCSCArray, CPUArray
 from te.algorithms.sub_algorithms.utils import (get_slice_starts_and_exclusive_ends, get_number_of_required_workers,
                                                 NUM_PROCS)
 
@@ -28,7 +28,26 @@ def _get_feasible_flow_assignment(edge_indexing: Dict[Tuple[int, int], int], gra
     return rows, cols, data
 
 
-def get_feasible_flow_assignment(graph: nx.DiGraph, commodities: List[Commodity]) -> CPUCSRArray:
+def get_feasible_flow_assignment(
+    graph: nx.DiGraph,
+    commodities: List[Commodity],
+    csc: bool = False
+) -> Union[CPUCSRArray, CPUCSCArray, CPUArray]:
+    """
+    Create an assignment that satisfies all demands by routing everything on
+    the first shortest path between source and destination.
+
+    This is usually a pretty sparse matrix, and as such we return CSC/CSR by
+    default.
+
+    Note
+    ----
+    `scipy.sparse` currently, does not support `float16` data types.
+    However, many times we do benefit from using `float16` when running
+    things on a GPU.
+    Currently, we do not wish to port this to Pytorch, and as such we just
+    take the memory hit and return a dense array when `float16` is used.
+    """
     N = len(graph.edges())
     K = len(commodities)
     EDGE_INDEXING = get_edge_indexing(graph)
@@ -50,4 +69,7 @@ def get_feasible_flow_assignment(graph: nx.DiGraph, commodities: List[Commodity]
             rows.extend(_row)
             cols.extend(_col)
             data.extend(_data)
+
+    if csc:
+        return cpu_coo_to_csc(cpu_coo_array(rows, cols, data, (N, K)))
     return cpu_coo_to_csr(cpu_coo_array(rows, cols, data, (N, K)))

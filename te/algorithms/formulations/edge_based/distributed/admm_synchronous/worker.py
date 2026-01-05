@@ -7,15 +7,12 @@ from te.algorithms.array_utils.cpu_utils import CPUArray, BooleanCPUArray, CPUCS
 from ..base import DistributedSolverNodeBase, DistributedSolverNodeParams
 from . import SynchADMMSolverParams
 from .base import SynchADMMWorkerBackendBase
-# from te.algorithms.sub_algorithms.pgd import do_plain_pgd
 from te.algorithms.sub_algorithms.pgd import do_memory_efficient_pgd
-# TODO: Test this one a bit more ...
-# from te.algorithms.sub_algorithms.pgd import do_nesterov_pgd
 from te.algorithms.sub_algorithms.lasso import sparse_range_lasso
 
 
 class DenseSolver:
-    def __init__(self, X_0: CPUArray, NNT: CPUArray, mask: BooleanCPUArray, 
+    def __init__(self, X_0: CPUCSRArray, NNT: CPUArray, mask: BooleanCPUArray, 
                  pgd_step: float, pgd_iters: int):
         self._X_0 = X_0
         self._NNT = NNT
@@ -26,7 +23,7 @@ class DenseSolver:
         self._pgd_iters = pgd_iters
 
     def _get_current_C(self, sharing_bias: CPUArray) -> CPUArray:
-        return self._NNT @ (self._X_ek - self._X_0 - np.expand_dims(sharing_bias, axis=1))
+        return self._NNT @ (self._X_ek - self._X_0 - np.expand_dims(sharing_bias, axis=1)) + self._X_0
 
     @property
     def X_ek(self) -> CPUArray:
@@ -36,7 +33,6 @@ class DenseSolver:
         self._lambda_ek = do_memory_efficient_pgd(
             lambda_block=self._lambda_ek, 
             c_block=self._get_current_C(sharing_bias),
-            x_block_0=self._X_0, 
             nnt=self._NNT,
             step_size=self._pgd_step, 
             n_iter=self._pgd_iters, 
@@ -154,7 +150,8 @@ class SynchADMMWorkerNode(DistributedSolverNodeBase):
             X_EK = self._dense_solver.update(self._sharing_bias_cached)
         else:
             X_EK = self._sparse_solver.update(self._sharing_bias_cached)
-        return time.perf_counter_ns() - start, np.mean(X_EK, axis=1)
+        means = np.mean(X_EK, axis=1)
+        return (time.perf_counter_ns() - start) // 1000, means
     
     def set_active_commodity_count(self, K: int):
         self._K = K
