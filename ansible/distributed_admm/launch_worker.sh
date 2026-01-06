@@ -32,9 +32,9 @@ trap _kill SIGKILL
 
 if [ "${TE_MULTICAST}" = "0" ]; then
   echo "Using gRPC backend"
-  "${VENV_HOME}/bin/python" -m te.algorithms.formulations.edge_based_distributed_admm.worker "${WORKER_ID}" &
+  "${VENV_HOME}/bin/python" -m te.algorithms.formulations.edge_based.distributed.admm_synchronous.worker "${WORKER_ID}" &
 else
-"${VENV_HOME}/bin/python" -m te.algorithms.formulations.edge_based_distributed_admm.worker "${WORKER_ID}" --multicast &
+"${VENV_HOME}/bin/python" -m te.algorithms.formulations.edge_based.distributed.admm_synchronous.worker "${WORKER_ID}" --multicast &
   echo "Using UDP multicast backend"
 fi
 

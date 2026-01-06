@@ -12,7 +12,7 @@ from ...base import RPCParams
 from ...utils import (serialized_message_to_array, array_to_serialized_message,
                       rebuild_chunked_array, chunk_big_array, get_optional_field,
                       GRPC_ARRAY_STREAM_MAX_LEN)
-from ..controller_backends.udp_multicast_backend import TLVRPCMessages
+from ..controller_backends.multicast_tlv import TLVRPCMessages
 
 import protos.array.array_pb2 as array_messages
 from protos.distributed_lp.distributed_lp_pb2_grpc import DistributedADMMSolverServicer, add_DistributedADMMSolverServicer_to_server
