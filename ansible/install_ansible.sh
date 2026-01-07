@@ -20,6 +20,15 @@ forks = 10
 # on multiple separate XDCs
 local_tmp = /tmp/ansible/tmp
 
+# fact caching to file instead of in memory
+fact_caching = jsonfile
+
+# set directory/location of fact cache files
+fact_caching_connection = /tmp/.ansible/fc
+
+# ask ansible to gather facts only when necessary
+gathering = smart
+
 [ssh_connection]
 
 # connection optimization that increases speed significantly

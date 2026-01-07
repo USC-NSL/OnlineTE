@@ -25,5 +25,5 @@
     command: chdir="{{path_home}}" "{{path_venv}}/bin/python protos/__init__.py"
 
   - name: Give EXEC Premission To Launcher
-    command: chmod +x "{{path_launch}}"
+    command: chdir="{{path_home}}" chmod +x "{{path_launch}}"
     when: "'workers_group' in group_names"
