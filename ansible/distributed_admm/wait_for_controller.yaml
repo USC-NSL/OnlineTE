@@ -3,7 +3,7 @@
 - name: Set Multicast ENV
   hosts: workers_group
   gather_facts: false
-  become: true
+  remote_user: "{{ lookup('env', 'SPHERE_USER') }}"
   vars:
     runtime_env:
       - key: TE_MULTICAST
@@ -23,7 +23,7 @@
 
 - name: Start-Wait-Stop TE Workers
   hosts: workers_group
-  remote_user: aghavidel
+  remote_user: "{{ lookup('env', 'SPHERE_USER') }}"
   gather_facts: false
   vars:
     upto: "{{num_hosts}}"
@@ -44,7 +44,7 @@
 
 - name: Get Controller Plot
   hosts: controller_group
-  remote_user: aghavidel
+  remote_user: "{{ lookup('env', 'SPHERE_USER') }}"
   gather_facts: false
   tasks:
     - name: Get `res.png`

@@ -13,10 +13,11 @@
 
 - name: Copy TE Worker Service File
   hosts: workers_group
-  become: true
+  remote_user: "{{ lookup('env', 'SPHERE_USER') }}"
   gather_facts: false
   vars:
     path_home: "{{ lookup('env', 'SPHERE_HOME') }}"
+    path_launch: "{{ lookup('env', 'LAUNCH_FILE' )}}"
     path_service: "{{ lookup('env', 'SERVICE_FILE' )}}"
     worker_env:
       - key: WORKER_ID
@@ -40,15 +41,6 @@
       shell: ". /etc/environment"
     - name: Allow Service To Linger
       command: sudo loginctl enable-linger aghavidel
-
-- name: Enable TE Worker Service
-  hosts: workers_group
-  gather_facts: false
-  remote_user: "{{ lookup('env', 'SPHERE_USER') }}"
-  vars: 
-    path_home: "{{ lookup('env', 'SPHERE_HOME') }}"
-    path_launch: "{{ lookup('env', 'LAUNCH_FILE' )}}"
-  tasks:
     - name: Give EXEC Premission To Launcher
       command: chdir="{{path_home}}" chmod +x "{{path_launch}}"
     - name: Restart Systemd (User Level)

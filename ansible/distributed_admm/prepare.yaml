@@ -1,8 +1,8 @@
 ---
 # Prepare controller/worker nodes from scratch (i.e. assume no packages are installed)
-- name: Configure APT dependencies
+- name: Prepare Nodes
   hosts: controller_group:workers_group
-  become: true
+  remote_user: "{{ lookup('env', 'SPHERE_USER') }}"
   tasks:
   - name: Gather Package Facts
     package_facts:
@@ -21,48 +21,47 @@
         - python3-venv
       state: present
 
-- name: Clone repo and configure PIP
-  hosts: controller_group:workers_group
-  gather_facts: false
-  remote_user: "{{ lookup('env', 'SPHERE_USER') }}"
-  vars: 
-    access_token: "{{ lookup('env', 'GIT_ACCESS_TOKEN') }}"
-    path_home: "{{ lookup('env', 'SPHERE_HOME') }}"
-    path_venv: "{{ lookup('env', 'VENV_HOME') }}"
-    branch: "{{ lookup('env', 'GIT_BRANCH') }}"
-  
-  tasks:
-  - name: Clone repo with force
-    ansible.builtin.git:
-      repo: https://{{access_token}}@github.com/USC-NSL/DistributedTE.git
-      clone: true
-      force: true
-      dest: "{{path_home}}"
-      version: "{{branch}}"
-  
-  - name: Create a Python virtual environment
-    ansible.builtin.command:
-      cmd: python3 -m venv "{{path_venv}}"
-    args:
-      creates: "{{path_venv}}/bin/activate"
+  - name: Clone repo and configure PIP
+    hosts: controller_group:workers_group
+    gather_facts: false
+    vars: 
+      access_token: "{{ lookup('env', 'GIT_ACCESS_TOKEN') }}"
+      path_home: "{{ lookup('env', 'SPHERE_HOME') }}"
+      path_venv: "{{ lookup('env', 'VENV_HOME') }}"
+      branch: "{{ lookup('env', 'GIT_BRANCH') }}"
+    
+    tasks:
+    - name: Clone repo with force
+      ansible.builtin.git:
+        repo: https://{{access_token}}@github.com/USC-NSL/DistributedTE.git
+        clone: true
+        force: true
+        dest: "{{path_home}}"
+        version: "{{branch}}"
+    
+    - name: Create a Python virtual environment
+      ansible.builtin.command:
+        cmd: python3 -m venv "{{path_venv}}"
+      args:
+        creates: "{{path_venv}}/bin/activate"
 
-  - name: PIP install UV
-    ansible.builtin.shell: "{{path_venv}}/bin/python -m pip install uv"
-  
-  - name: UV install requirements
-    ansible.builtin.shell: "{{path_venv}}/bin/python -m uv pip install -r requirements.txt"
-    args:
-      chdir: "{{path_home}}"
+    - name: PIP install UV
+      ansible.builtin.shell: "{{path_venv}}/bin/python -m pip install uv"
+    
+    - name: UV install requirements
+      ansible.builtin.shell: "{{path_venv}}/bin/python -m uv pip install -r requirements.txt"
+      args:
+        chdir: "{{path_home}}"
 
-  - name: Compile protobuffs
-    ansible.builtin.shell: "{{path_venv}}/bin/python protos/__init__.py"
-    args:
-      chdir: "{{path_home}}"
+    - name: Compile protobuffs
+      ansible.builtin.shell: "{{path_venv}}/bin/python protos/__init__.py"
+      args:
+        chdir: "{{path_home}}"
 
 - name: Copy TE Worker Service File
   hosts: workers_group
   gather_facts: false
-  become: true
+  remote_user: "{{ lookup('env', 'SPHERE_USER') }}"
   vars: 
     path_home: "{{ lookup('env', 'SPHERE_HOME') }}"
     path_service: "{{ lookup('env', 'SERVICE_FILE' )}}"

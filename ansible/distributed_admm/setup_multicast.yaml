@@ -2,7 +2,7 @@
 # Setup UDP multicast on a predefined group across the whole network
 - name: Configure APT dependencies
   hosts: controller_group:workers_group
-  become: true
+  remote_user: "{{ lookup('env', 'SPHERE_USER') }}"
   tasks:
 
   - name: Gather Package Facts
@@ -16,14 +16,14 @@
 
 - name: Create Multicast Group For Controller
   hosts: controller_group
-  become: true
+  remote_user: "{{ lookup('env', 'SPHERE_USER') }}"
   tasks:
   - name: Add Group 224.0.0.10
     command: sudo smcroutectl add eth0 {{ansible_default_ipv4.address}} 224.0.0.10 eth0
 
 - name: Join Multicast Group On Workers
   hosts: workers_group
-  become: true
+  remote_user: "{{ lookup('env', 'SPHERE_USER') }}"
   tasks:
     - name: Join Group 224.0.0.10
       command: sudo smcroutectl join eth0 224.0.0.10
