@@ -77,7 +77,7 @@
       chdir: "{{path_home}}"
   tasks:
     - name: Copy TE Worker Service File To Systemd
-      command: chdir="{{path_home}}" sudo cp "{{path_service}}" /etc/systemd/user
+      command: chdir="{{path_home}}" sudo cp ./"{{path_service}}" /etc/systemd/user
     
     - name: Set WORKER_ID Env-Var
       ansible.builtin.lineinfile:
@@ -94,7 +94,7 @@
       command: sudo loginctl enable-linger "{{ lookup('env', 'SPHERE_USER') }}"
     
     - name: Give EXEC Premission To Launcher
-      command: chdir="{{path_home}}" chmod +x "{{path_launch}}"
+      command: chdir="{{path_home}}" chmod +x ./"{{path_launch}}"
     
     - name: Restart Systemd (User Level)
       command: systemctl --user daemon-reload
