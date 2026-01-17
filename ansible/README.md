@@ -39,3 +39,19 @@ ansible-playbook -i hosts distributed_admm/prepare.yaml
 # Start <n> worker nodes (n <= N) for one experiment
 ansible-playbook -i hosts distributed_admm/wait_for_controller --extra-vars "upto=<n>"
 ```
+
+## Note: Multicast
+A simple IP multicast backend seems to be the most efficient method of communication, as our messages are small and we can afford redundancy.
+
+The playbook `setup_multicast.yaml` can help set this up (we use `smcroute`, and we really only need one group per domain).
+
+Once IP multicast is set up, one can test it by:
+```sh
+# On the gatherer nodes
+# Often scatter-address is 224.0.0.10
+iperf -s -u -B <scatter-address>
+# On each worker node
+iperf -c -u <scatter-address>
+```
+
+Switching to multicast over `gRPC` is goverend by setting the environment variable `TE_MULTICAST` to `1` instead of the default `0`.

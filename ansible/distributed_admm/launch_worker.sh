@@ -34,8 +34,8 @@ if [ "${TE_MULTICAST}" = "0" ]; then
   echo "Using gRPC backend"
   "${VENV_HOME}/bin/python" -m te.algorithms.formulations.edge_based.distributed.admm_synchronous.worker "${WORKER_ID}" &
 else
-"${VENV_HOME}/bin/python" -m te.algorithms.formulations.edge_based.distributed.admm_synchronous.worker "${WORKER_ID}" --multicast &
   echo "Using UDP multicast backend"
+  "${VENV_HOME}/bin/python" -m te.algorithms.formulations.edge_based.distributed.admm_synchronous.worker "${WORKER_ID}" --multicast &
 fi
 
 popd

@@ -1,10 +1,11 @@
 import os
+import sys
 import subprocess
 from typing import Tuple
 
 PROTO_PATH = os.path.dirname(os.path.realpath(__file__))
 
-COMPILE_PROTO = f'python3 -m grpc_tools.protoc -I {PROTO_PATH} ' \
+COMPILE_PROTO = f'{sys.executable} -m grpc_tools.protoc -I {PROTO_PATH} ' \
                 '--python_out={pyout} --pyi_out={pyiout} --grpc_python_out={grpcout} {protobuf}'
 
 DEPENDENCIES = [

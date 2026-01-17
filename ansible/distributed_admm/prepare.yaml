@@ -67,9 +67,17 @@
     path_home: "{{ lookup('env', 'SPHERE_HOME') }}"
     path_service: "{{ lookup('env', 'SERVICE_FILE' )}}"
     path_launch: "{{ lookup('env', 'LAUNCH_FILE' )}}"
+    path_venv: "{{ lookup('env', 'VENV_HOME') }}"
+    enable_multicast: "{{ lookup('env', 'TE_MULTICAST') }}"
     worker_env:
       - key: WORKER_ID
         value: "{{worker_id}}"
+      - key: SPHERE_HOME
+        value: "{{path_home}}"
+      - key: VENV_HOME
+        value: "{{path_venv}}"
+      - key: TE_MULTICAST
+        value: "{{enable_multicast}}"
   module_defaults:
     ansible.builtin.shell:
       chdir: "{{path_home}}"
@@ -96,5 +104,10 @@
     - name: Give EXEC Premission To Launcher
       command: chdir="{{path_home}}" chmod +x ./"{{path_launch}}"
     
+- name: Restart system control
+  hosts: workers_group
+  gather_facts: false
+  remote_user: "{{ lookup('env', 'SPHERE_USER') }}"
+  tasks:
     - name: Restart Systemd (User Level)
       command: systemctl --user daemon-reload
