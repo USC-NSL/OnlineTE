@@ -1,0 +1,44 @@
+topo: Interoute
+# topo: Claranet
+tm_seed: 12345
+objective: MLU
+report_unsat: True
+synch:
+  num_workers: 5
+  # num_workers: 1
+  local: True
+  mlu_backend: pdlp
+  SolverParams:
+    InnerLoopRounds: 5
+    OuterLoopRounds: 100
+    SwitchIterations: 1
+    Precision: single
+    Eta: 0.2
+    Beta: 8e-5
+    X0Type: PSEUDO_INVERSE
+    # X0Type: CSR_SHORTEST_PATH
+  PDLPMLUParams:
+    Threads: 1
+
+# topo: B4
+# # topo: Claranet
+# # tm_seed: 12345
+# tm_path: B4.json_real_36_1.0_traffic-matrix.pkl
+# objective: MLU
+# report_unsat: True
+# feas_tol: 1e-1
+# synch:
+#   # num_workers: 5
+#   num_workers: 1
+#   local: True
+#   mlu_backend: pdlp
+#   SolverParams:
+#     InnerLoopRounds: 5
+#     OuterLoopRounds: 100
+#     Precision: single
+#     Eta: 0.05
+#     Rho: 0.1
+#     Gamma: 1.0
+#     Beta: 4e-5
+#   PDLPMLUParams:
+#     Threads: 1

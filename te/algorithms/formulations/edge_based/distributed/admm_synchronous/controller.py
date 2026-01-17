@@ -16,7 +16,7 @@ from te.algorithms.array_utils.cpu_utils import (CPUArray, BooleanCPUArray, CPUC
 from te.algorithms.utils import get_solution_maximum_utilization
 # TODO: Finish the `SharingWrapper` for the inner loop
 from te.algorithms.sub_algorithms.admm import ADMMWrapper
-from te.algorithms.sub_algorithms.feasible_assignment import get_feasible_flow_assignment, InitialSolutionType
+from te.algorithms.sub_algorithms.feasible_assignment import get_feasible_flow_assignment
 from te.algorithms.sub_algorithms.admm_consensus_test import outer_admm_consensus_test, inner_admm_consensus_test
 from te.algorithms.sub_algorithms.link_capacity_test import check_capacity_constraint
 from te.algorithms.sub_algorithms.flow_conservation_test import check_flow_conservation
