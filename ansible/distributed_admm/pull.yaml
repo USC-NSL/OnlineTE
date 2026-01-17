@@ -25,7 +25,9 @@
       version: "{{branch}}"
   
   - name: Compile protobuffs
-    command: chdir="{{path_home}}" "{{path_venv}}/bin/python protos/__init__.py"
+    ansible.builtin.shell: "{{path_venv}}/bin/python protos/__init__.py"
+    args:
+      chdir: "{{path_home}}"
 
   - name: Give EXEC Premission To Launcher
     command: chdir="{{path_home}}" chmod +x ./"{{path_launch}}"
