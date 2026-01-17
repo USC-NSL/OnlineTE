@@ -13,3 +13,4 @@ sympy>=1.13.1
 ortools>=9.12.4544
 jsonargparse==4.43.0
 dotenv==0.9.9
+pyparsing==3.2.2
