@@ -11,7 +11,7 @@ if [[ -z "${VENV_HOME}" ]]; then
     exit 1
 fi
 
-pushd $"{SPHERE_HOME}"
+pushd "${SPHERE_HOME}"
 
 if [[ -z "${WORKER_ID}" ]]; then
   >&2 echo "WORKER_ID environment variable is not set. Will refuse to proceed."
