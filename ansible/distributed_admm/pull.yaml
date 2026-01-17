@@ -20,6 +20,8 @@
       repo: https://{{access_token}}@github.com/USC-NSL/DistributedTE.git
       clone: true
       force: true
+      dest: "{{path_home}}"
+      version: "{{branch}}"
   
   - name: Compile protobuffs
     command: chdir="{{path_home}}" "{{path_venv}}/bin/python protos/__init__.py"
