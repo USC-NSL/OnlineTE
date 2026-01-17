@@ -3,7 +3,7 @@ import numpy as np
 import networkx as nx
 import asyncio.exceptions
 from collections import defaultdict
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Union
 from te.algorithms.base import *
 from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
@@ -11,13 +11,12 @@ from topologies.utils import get_graph_M_matrix, get_adjacency_null_space, get_c
 from utils.exceptions import SolutionInterrupted
 from utils.logging import as_info, as_success, log_subsection_separator, ShortTQDM
 from te.algorithms.array_utils import set_global_precision
-from te.algorithms.array_utils.cpu_utils import (CPUArray, BooleanCPUArray, CPUCSRArray,
-                                                 cpu_array, cpu_zeros, cpu_double_array, 
-                                                 set_cpu_float_precision)
+from te.algorithms.array_utils.cpu_utils import (CPUArray, BooleanCPUArray, CPUCSRArray, CPUCSCArray,
+                                                 cpu_array, cpu_zeros, cpu_double_array, set_cpu_float_precision)
 from te.algorithms.utils import get_solution_maximum_utilization
 # TODO: Finish the `SharingWrapper` for the inner loop
 from te.algorithms.sub_algorithms.admm import ADMMWrapper
-from te.algorithms.sub_algorithms.feasible_assignment import get_feasible_flow_assignment
+from te.algorithms.sub_algorithms.feasible_assignment import get_feasible_flow_assignment, InitialSolutionType
 from te.algorithms.sub_algorithms.admm_consensus_test import outer_admm_consensus_test, inner_admm_consensus_test
 from te.algorithms.sub_algorithms.link_capacity_test import check_capacity_constraint
 from te.algorithms.sub_algorithms.flow_conservation_test import check_flow_conservation
@@ -63,7 +62,7 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
         self._mlu_solver: Optional[ControllerMLUSolver] = None
 
         self._X_ek: Optional[CPUArray] = None
-        self._X_ek_start: Optional[CPUCSRArray] = None
+        self._X_ek_start: Optional[Union[CPUCSCArray, CPUCSRArray, CPUArray]] = None
         self._Z_e_start: Optional[CPUArray] = None
         self._X_ek_sum_e: Optional[CPUArray] = None
         self._outer_admm_wrapper: Optional[ADMMWrapper] = None
@@ -140,7 +139,7 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
 
     @record_cpu_runtime('Feasible-Assignment')
     def _set_initial_feasible_solution(self):
-        self._X_ek_start = get_feasible_flow_assignment(self._graph, self._commodity_list)
+        self._X_ek_start = get_feasible_flow_assignment(self._graph, self._commodity_list, self._solver_params.X0Type)
         self._Z_e_start = np.sum(self._X_ek_start, axis=1)
     
     def _set_NULL_M(self):

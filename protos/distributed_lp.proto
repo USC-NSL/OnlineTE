@@ -24,14 +24,6 @@ message UpdateMessage {
     int32 xid = 2;
 }
 
-message MaxFlowUpdateMessage {
-    SerializedNumpyArrayMessage J_bar_e = 1;
-    SerializedNumpyArrayMessage f_e = 2;
-    SerializedNumpyArrayMessage X_bar_e = 3;
-    SerializedNumpyArrayMessage TAU_e = 4;
-    int32 xid = 5;
-}
-
 message NetworkUpdateRequest {
     int32 epoch = 1;
     int32 xid = 2;
@@ -55,12 +47,12 @@ message SolverParameters {
     optional float Eta = 4;
     optional float Gamma = 5;
     optional float Beta = 6;
-    optional bool UseSparseBasis = 7;
-    optional int32 SwitchIterations = 8;
-    optional float ConvTol = 9;
-    optional string Precision = 10;
-    optional int32 TMSeed = 11;
-    optional int32 NumWorkers = 12;
+    optional int32 SwitchIterations = 7;
+    optional float ConvTol = 8;
+    optional string Precision = 9;
+    optional int32 TMSeed = 10;
+    optional int32 NumWorkers = 11;
+    optional string X0Type = 12;
 }
 
 message ActiveCommodityCount {

@@ -246,9 +246,11 @@ class TrafficEngineeringLPEvaluationParams(SolverParams):
     TopologyName: str
         Name of the topology that we are solving on.
         The name is just for logging.
-    Seed: int
+    Seed: Optional[int] = None
         Any RNG will be initialized to this seed to make the
         evaluations reproducible.
+    TMPath: str
+        Path to the TM to use for tests.
     Objective: TEObjective
         The particular TE objective we want to solve for.
         Defaults to MLU.
@@ -292,7 +294,8 @@ class TrafficEngineeringLPEvaluationParams(SolverParams):
     be given.
     """
     TopologyName: str
-    Seed: int
+    Seed: Optional[int] = None
+    TMPath: Optional[str] = None
     Objective: TEObjective = TEObjective.MLU
     ScaleFactor: float = 10.0
     FloatResolution: float = te.constants.FLOAT_RES

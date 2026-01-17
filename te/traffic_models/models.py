@@ -3,9 +3,13 @@ Besides our base classes, this code essentially mirrors that of `NCFlow`.
 Please see: https://github.com/netcontract/ncflow/blob/master/lib/traffic_matrix.py
 """
 
-
+import os
+import pickle
 import numpy as np
 import networkx as nx
+import te.constants
+from te import TE_PATH
+from numpy.typing import DTypeLike
 from dataclasses import dataclass
 from typing import Tuple, Optional, Type
 from .base import TrafficMatrixBase, TrafficMatrixParamsBase, traffic_matrix, traffic_matrix_param
@@ -218,3 +222,71 @@ class BimodalTrafficMatrix(TrafficMatrixBase):
         np.fill_diagonal(tm, 0.0)
 
         self.tm = tm
+
+
+@traffic_matrix_param('File')
+@dataclass
+class FilebackedTrafficMatrixParams(TrafficMatrixParamsBase):
+    """
+    Parameters defining a traffic matrix backed by a file.
+
+    Attributes
+    ----------
+    path: str
+        Path to load the traffic matrix from
+    scale: Optional[float]
+        If present, the traffic matrix will be divided by this value
+        element-wise. If `None`, the matrix is normalized between
+        0 and 1 by dividing by the maximum value.
+        Defaults to `1.0`.
+    dtype: DTypeLike
+        Data type to cast the array into after reading it.
+        Defaults to `np.float64`.
+    """
+    path: str
+    scale: Optional[float] = 1.0
+    dtype: DTypeLike = np.float64
+
+
+@traffic_matrix
+class FilebackedTrafficMatrix(TrafficMatrixBase):
+    def __init__(self, tm: Optional[np.ndarray] = None, seed: Optional[int] = None, 
+                 params: Optional[FilebackedTrafficMatrixParams] = None):
+        super().__init__(tm, seed, params)
+        self._expected_cap: Optional[float] = None
+        self._initial_max: Optional[float] = None
+
+    @classmethod
+    def type(cls) -> str:
+        return 'Filebacked'
+    
+    @property
+    def name(self) -> str:
+        PARAMS: FilebackedTrafficMatrixParams = self.params
+
+        return f'Filebacked_{PARAMS.scale}_{str(PARAMS.dtype)}_{PARAMS.path}'
+    
+    def _make_tm(self):
+        assert self.params is not None
+        PARAMS: FilebackedTrafficMatrixParams = self.params
+        path = PARAMS.path
+        if not os.path.exists(path):
+            path = os.path.join(TE_PATH, te.constants.TM_DIR, path)
+            
+        with open(path, "rb") as tm_file:
+            tm = pickle.load(tm_file)
+            print(tm)
+            assert isinstance(tm, np.ndarray), 'TM object is not a Numpy array'
+            np.fill_diagonal(tm, 0)
+            self._initial_max = tm.max()
+            if PARAMS.scale is not None:
+                tm = tm / PARAMS.scale
+            else:
+                tm = tm / tm.max()
+            self.tm = tm.astype(PARAMS.dtype)
+            # TODO: Change this. It is here to match TEAL
+            self._expected_cap = 5000 / self._initial_max
+    
+    @property
+    def expected_cap(self) -> float:
+        return self._expected_cap

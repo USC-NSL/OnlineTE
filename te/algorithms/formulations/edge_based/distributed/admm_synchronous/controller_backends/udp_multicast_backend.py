@@ -3,10 +3,10 @@ import socket
 import asyncio
 import numpy as np
 import te.constants
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 from dataclasses import dataclass
 from utils.exceptions import SolutionInterrupted
-from te.algorithms.array_utils.cpu_utils import CPUArray, BooleanCPUArray, CPUCSRArray
+from te.algorithms.array_utils.cpu_utils import CPUArray, BooleanCPUArray, CPUCSRArray, CPUCSCArray
 from .. import SynchADMMSolverParams
 from ...base import RPCParams
 from ..base import SynchADMMControllerBackendBase
@@ -139,10 +139,15 @@ class MulticastControllerBackend(SynchADMMControllerBackendBase):
         return self._event_loop.run_until_complete(self._are_network_nodes_ready())
 
     async def _initialize_worker_nodes(self, solver_params: SynchADMMSolverParams, basis: CPUArray, 
-                                       initial_feasible_solution: CPUCSRArray, in_out_mask: Optional[BooleanCPUArray] = None):
+                                       initial_feasible_solution: Union[CPUCSRArray, CPUCSCArray, CPUArray],
+                                       in_out_mask: Optional[BooleanCPUArray] = None):
         NUM_WORKERS = self.number_of_nodes
         NULL_M = basis
         NUM_COLS = initial_feasible_solution.shape[1]
+
+        # TODO: Maybe handle the case of partial partitions
+        assert NUM_COLS % NUM_WORKERS == 0, \
+            f"Cannot handle partial partitions yet! ({initial_feasible_solution.shape[1]} % {NUM_WORKERS})"
 
         CHUNK_INDICES = np.array_split(np.arange(NUM_COLS), NUM_WORKERS)
         X_EK_START_CHUNKS = [initial_feasible_solution[:, chunk[0]:chunk[-1]+1] for chunk in CHUNK_INDICES]
@@ -173,7 +178,8 @@ class MulticastControllerBackend(SynchADMMControllerBackendBase):
             ])
     
     def initialize_worker_nodes(self, solver_params: SynchADMMSolverParams, basis: CPUArray, 
-                                initial_feasible_solution: CPUCSRArray, in_out_mask: Optional[BooleanCPUArray] = None):
+                                initial_feasible_solution: Union[CPUCSRArray, CPUCSCArray, CPUArray],
+                                in_out_mask: Optional[BooleanCPUArray] = None):
         self._event_loop.run_until_complete(self._initialize_worker_nodes(solver_params, basis, initial_feasible_solution, in_out_mask))
     
     async def _update_demands(self, updated_feasible_solution: CPUArray):

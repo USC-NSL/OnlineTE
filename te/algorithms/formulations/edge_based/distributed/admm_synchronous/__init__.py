@@ -4,6 +4,7 @@ from typing import Optional, Literal
 from dataclasses import dataclass
 from te.algorithms.base import SolverParams
 from te.algorithms.array_utils import SINGLE_PRECISION
+from te.algorithms.sub_algorithms.feasible_assignment import InitialSolutionType
 from utils.logging import as_warning
 
 import warnings
@@ -30,8 +31,6 @@ class SynchADMMSolverParams(SolverParams):
     If not `None`, then an alternating shrinkage algorithm is
     used to solve the inner loop problems instead.
     """
-    UseSparseBasis: bool = False
-    """Use a sparse null space basis, but sacrifice orthonormality"""
     SwitchIterations: int = 2
     """Number of iterations for each switch-level problem"""
     ConvTol: float = 1e-3
@@ -40,6 +39,8 @@ class SynchADMMSolverParams(SolverParams):
     """Floating point operation precision"""
     TMSeed: int = te.constants.DEFAULT_SEED
     """Traffic matrix RNG seed"""
+    X0Type: InitialSolutionType = InitialSolutionType.PSEUDO_INVERSE
+    """Initial feasible solution type"""
 
     def __post_init__(self):
         self._left_column_share = 0.5

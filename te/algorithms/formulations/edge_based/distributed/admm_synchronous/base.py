@@ -1,7 +1,7 @@
 from abc import abstractmethod
-from typing import Tuple, Optional, Callable
+from typing import Tuple, Optional, Callable, Union
 from ..base import CommunicationBackendBase
-from te.algorithms.array_utils.cpu_utils import CPUArray, BooleanCPUArray, CPUCSRArray
+from te.algorithms.array_utils.cpu_utils import CPUArray, BooleanCPUArray, CPUCSRArray, CPUCSCArray
 from te.algorithms.base import SolverParams
 
 
@@ -11,7 +11,8 @@ class SynchADMMControllerBackendBase(CommunicationBackendBase):
         return True
     
     @abstractmethod
-    def initialize_worker_nodes(self, solver_params: SolverParams, basis: CPUArray, initial_feasible_solution: CPUCSRArray,
+    def initialize_worker_nodes(self, solver_params: SolverParams, basis: CPUArray, 
+                                initial_feasible_solution: Union[CPUCSRArray, CPUCSCArray, CPUArray],
                                 in_out_mask: Optional[BooleanCPUArray] = None):
         """Initialize worker nodes with solver parameters and initial feasible solution (X_ek_0)"""
 
@@ -48,10 +49,10 @@ class SynchADMMWorkerBackendBase(CommunicationBackendBase):
         return True
 
     @property
-    def set_initial_feasible_solution(self) -> Callable[[CPUCSRArray], None]:
+    def set_initial_feasible_solution(self) -> Callable[[Union[CPUCSRArray, CPUCSCArray, CPUArray]], None]:
         return self._set_initial_feasible_solution
     @set_initial_feasible_solution.setter
-    def set_initial_feasible_solution(self, f: Callable[[CPUCSRArray], None]):
+    def set_initial_feasible_solution(self, f: Callable[[Union[CPUCSRArray, CPUCSCArray, CPUArray]], None]):
         self._set_initial_feasible_solution = f
 
     @property

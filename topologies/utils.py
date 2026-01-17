@@ -11,15 +11,16 @@ import networkx as nx
 from scipy.linalg import null_space
 from typing import Dict, Tuple, Union, List, Optional
 from topologies import (
-    TOPOLOGIES_PATH, TOPOLOGY_ZOO_DIR_NAME, 
+    TOPOLOGIES_PATH, TOPOLOGY_ZOO_DIR_NAME, TOPOLOGY_REPO_DIR_NAME,
     TOPOLOGY_ZOO_INDEX_FILE_NAME
 )
 from te.traffic_models.base import TrafficMatrixBase, Commodity
 from te.traffic_models.models import UniformTrafficMatrix, UniformTrafficMatrixParams
 from utils.logging import as_warning
-# from numba.typed import Dict
+from networkx.readwrite import json_graph
 
 
+TOPOLOGY_REPO_PATH = os.path.join(TOPOLOGIES_PATH, TOPOLOGY_REPO_DIR_NAME)
 TOPOLGOY_ZOO_PATH = os.path.join(TOPOLOGIES_PATH, TOPOLOGY_ZOO_DIR_NAME)
 TOPOLOGY_ZOO_INDEX_PATH = os.path.join(TOPOLOGIES_PATH, TOPOLOGY_ZOO_INDEX_FILE_NAME)
 
@@ -77,6 +78,23 @@ def load_zoo_topology(name: str, seed: Optional[int] = None) -> nx.DiGraph:
         print(as_warning(f"Removing {g.number_of_edges() - new_g.number_of_edges()} parallel edges"))
 
     return new_g.to_directed()
+
+
+def load_repo_topology(name: str) -> Optional[nx.DiGraph]:
+    fname = os.path.join(TOPOLOGY_REPO_PATH, f'{name}.json')
+    if not os.path.exists(fname):
+        print(f'Could not find {fname}')
+        return None
+    with open(fname) as f:
+        data = json.load(f)
+    return json_graph.node_link_graph(data, edges='links')
+
+
+def load_topology(name: str, seed: Optional[int] = None) -> Tuple[nx.DiGraph, bool]:
+    topo = load_repo_topology(name)
+    if topo is None:
+        return load_zoo_topology(name, seed), False
+    return topo, True
 
 
 def _get_graph_list_to_join(n_nodes: int, num: int = 1, seed: Optional[int] = None) -> List[nx.DiGraph]:

@@ -42,10 +42,11 @@ class TShortestPaths:
     For this, we also keep `beta_k` which is the number of available paths for the
     commodity `k`. Assignments beyond `beta_k` need to pinned to 0.
     """
-    def __init__(self, T: int, graph: nx.DiGraph):
+    def __init__(self, T: int, graph: nx.DiGraph, edge_disjoint: bool = False):
         self._T: int = T
         self._K: int = graph.number_of_nodes() * (graph.number_of_nodes() - 1)
         self._N: int = graph.number_of_edges()
+        self._edge_disjoint = edge_disjoint
         self._graph: nx.DiGraph = graph
         self._alpha_k: Optional[np.ndarray] = None
         self._beta_k: Optional[np.ndarray] = None
@@ -85,6 +86,7 @@ class TShortestPaths:
     @staticmethod
     def _get_paths(edge_indexing: Dict[Tuple[int, int], int], 
                    max_paths: int,
+                   edge_disjoint: bool,
                    graph: nx.DiGraph,
                    commodity_slice: List[Tuple[int, int]], 
                    alpha_slice: np.ndarray, 
@@ -97,9 +99,14 @@ class TShortestPaths:
         for k, item in enum:
             src, dst = item
             assert src != dst
-            for t, path in enumerate(islice(nx.shortest_simple_paths(graph, src, dst), max_paths)):
-                for i in range(len(path) - 1):
-                    alpha_slice[k, edge_indexing[(path[i], path[i+1])], t] = True
+            if not edge_disjoint:
+                for t, path in enumerate(islice(nx.shortest_simple_paths(graph, src, dst), max_paths)):
+                    for i in range(len(path) - 1):
+                        alpha_slice[k, edge_indexing[(path[i], path[i+1])], t] = True
+            else:
+                for t, path in enumerate(islice(sorted(nx.edge_disjoint_paths(graph, src, dst), key=lambda path: len(path)), max_paths)):
+                    for i in range(len(path) - 1):
+                        alpha_slice[k, edge_indexing[(path[i], path[i+1])], t] = True
             beta_slice[k] = t+1
 
     def get_initial_total_flow(self, demands: np.ndarray) -> np.ndarray:
@@ -126,7 +133,7 @@ class TShortestPaths:
         if K <= MAX_NUMBER_OF_COMMODITIES_PER_CORE:
             alpha_k = np.zeros(dtype=bool, shape=(K, self._N, self._T))
             beta_k = np.zeros(dtype=np.int32, shape=(K,))
-            TShortestPaths._get_paths(EDGE_INDEXING, T, graph, commodities, alpha_k, beta_k)
+            TShortestPaths._get_paths(EDGE_INDEXING, T, self._edge_disjoint, graph, commodities, alpha_k, beta_k)
         else:
             with contextlib.closing(TempHelper(TEMP_FOLDER_NAME)) as tp:
                 alpha_path = tp.get_file_path(MEMMAP_FILE_NAME_ALPHA)
@@ -137,7 +144,7 @@ class TShortestPaths:
                 print(as_info(f'Spawning {nprocs} workers to get path assignments'))
                 Parallel(n_jobs=nprocs)\
                     (delayed(TShortestPaths._get_paths)\
-                        (EDGE_INDEXING, T, graph, commodities[item[0]:item[1]], 
+                        (EDGE_INDEXING, T, self._edge_disjoint, graph, commodities[item[0]:item[1]], 
                          ALPHA_KET[item[0]:item[1], :, :], 
                          BETA_K[item[0]:item[1]], index)
                         for index, item in enumerate(slices))
@@ -223,35 +230,38 @@ def random_path_assignment(K: int, T: int, beta: np.ndarray, seed: Optional[int]
 
 
 if __name__ == '__main__':
-    from topologies.utils import load_zoo_topology
+    from topologies.utils import load_zoo_topology, load_topology
     # topo_name = 'Claranet'
     # topo_name = 'Forthnet'
-    topo_name = 'Interoute'
+    # topo_name = 'Interoute'
     # topo_name = 'Kdl'
+    topo_name = 'B4'
 
     # Create the paths and save them
-    T = 16
-    SEED = 12345
-    graph = load_zoo_topology(topo_name)
-    obj = TShortestPaths(T, graph)
+    # T = 16
+    T = 4
+    # SEED = 12345
+    # graph = load_zoo_topology(topo_name)
+    graph, _ = load_topology(topo_name)
+    obj = TShortestPaths(T, graph, edge_disjoint=True)
     obj.make()
     obj.save(name=topo_name)
 
     # Load it again
-    obj: TShortestPaths = TShortestPaths.load(graph, T, topo_name)
+    # obj: TShortestPaths = TShortestPaths.load(graph, T, topo_name)
 
-    # Check if they make sense using a random path assignment
-    Y = random_path_assignment(obj.K, obj.T, obj.beta, SEED)
-    assert np.allclose(np.sum(Y, axis=0), 1)
-    DEMANDS = np.ones(shape=(obj.K,))
-    commodity_list = []
-    for i in range(graph.number_of_nodes()):
-        for j in range(graph.number_of_nodes()):
-            if i == j:
-                continue
-            commodity_list.append(Commodity(i, j, 1.0))
-    X = path_based_to_edge_based(Y, obj.alpha, DEMANDS)
-    eval_params = TrafficEngineeringLPEvaluationParams(
-        TopologyName=topo_name, Seed=SEED, FeasibilityTolerance=1e-8
-    )
-    check_flow_conservation(X, graph, commodity_list, eval_params)
+    # # Check if they make sense using a random path assignment
+    # Y = random_path_assignment(obj.K, obj.T, obj.beta, SEED)
+    # assert np.allclose(np.sum(Y, axis=0), 1)
+    # DEMANDS = np.ones(shape=(obj.K,))
+    # commodity_list = []
+    # for i in range(graph.number_of_nodes()):
+    #     for j in range(graph.number_of_nodes()):
+    #         if i == j:
+    #             continue
+    #         commodity_list.append(Commodity(i, j, 1.0))
+    # X = path_based_to_edge_based(Y, obj.alpha, DEMANDS)
+    # eval_params = TrafficEngineeringLPEvaluationParams(
+    #     TopologyName=topo_name, Seed=SEED, FeasibilityTolerance=1e-8
+    # )
+    # check_flow_conservation(X, graph, commodity_list, eval_params)

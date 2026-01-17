@@ -28,6 +28,7 @@ class GurobiPathBasedTE(TrafficEngineeringLP):
         self._objective: Optional[gurobipy.LinExpr] = None
         self._commodity_list: List[Commodity] = traffic_to_commodity(self._traffic)
         self._X_ek: Optional[np.ndarray] = None
+        self._splits: Optional[np.ndarray] = None
 
         self._path_object: Optional[TShortestPaths] = None
         self._demands: np.ndarray = np.array([commodity.demand for commodity in self._commodity_list])
@@ -97,6 +98,7 @@ class GurobiPathBasedTE(TrafficEngineeringLP):
         for k in range(K):
             for t in range(T):
                 Y_TK[t, k] = ASSIGNMENTS[(t, k)].X
+        self._splits = Y_TK
         self._X_ek = path_based_to_edge_based(Y_TK, ALPHA_K, DEMANDS)
     
     def _make_variables(self):
@@ -244,6 +246,7 @@ class GurobiPathBasedTE(TrafficEngineeringLP):
         raise NotImplementedError
     
     def add_solution_elements(self, solution: TrafficEngineeringLPSolution):
+        # print(self._splits)
         raise NotImplementedError
 
 

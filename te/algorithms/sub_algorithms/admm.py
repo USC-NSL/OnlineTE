@@ -1,7 +1,7 @@
 import enum
 import math
 import numpy as np
-from typing import Optional
+from typing import Optional, Tuple
 from te.algorithms.array_utils.cpu_utils import CPUArray, cpu_array, cpu_zeros
 
 

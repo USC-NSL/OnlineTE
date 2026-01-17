@@ -1,18 +1,19 @@
 import sys
 import time
 import numpy as np
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
 from te.algorithms.array_utils import set_global_precision
-from te.algorithms.array_utils.cpu_utils import CPUArray, BooleanCPUArray, CPUCSRArray, cpu_zeros, cpu_array, set_cpu_float_precision
+from te.algorithms.array_utils.cpu_utils import CPUArray, BooleanCPUArray, CPUCSRArray, CPUCSCArray, cpu_zeros, cpu_array, set_cpu_float_precision
 from ..base import DistributedSolverNodeBase, DistributedSolverNodeParams
 from . import SynchADMMSolverParams
 from .base import SynchADMMWorkerBackendBase
 from te.algorithms.sub_algorithms.pgd import do_memory_efficient_pgd
 from te.algorithms.sub_algorithms.lasso import sparse_range_lasso
+from te.algorithms.sub_algorithms.feasible_assignment import InitialSolutionType
 
 
 class DenseSolver:
-    def __init__(self, X_0: CPUCSRArray, NNT: CPUArray, mask: BooleanCPUArray, 
+    def __init__(self, X_0: Union[CPUCSRArray, CPUCSCArray, CPUArray], NNT: CPUArray, mask: BooleanCPUArray, 
                  pgd_step: float, pgd_iters: int):
         self._X_0 = X_0
         self._NNT = NNT
@@ -43,7 +44,7 @@ class DenseSolver:
 
 
 class SparseSolver:
-    def __init__(self, X_0: CPUArray, NNT: CPUArray, mask: BooleanCPUArray, 
+    def __init__(self, X_0: Union[CPUCSRArray, CPUCSCArray, CPUArray], NNT: CPUArray, mask: BooleanCPUArray, 
                  admm_step: float, admm_iters: int, l1_threshold: float):
         self._X_0 = X_0
         self._NNT = NNT
@@ -87,7 +88,7 @@ class SynchADMMWorkerNode(DistributedSolverNodeBase):
         self._NNT_M: Optional[CPUArray] = None
         self._MASK_M_chunk: Optional[BooleanCPUArray] = None
 
-        self._X_ek_start_chunk: Optional[CPUCSRArray] = None
+        self._X_ek_start_chunk: Optional[Union[CPUCSRArray, CPUCSCArray, CPUArray]] = None
         self._sharing_bias_cached: Optional[CPUArray] = None
 
         self._dense_solver: Optional[DenseSolver] = None
@@ -111,7 +112,7 @@ class SynchADMMWorkerNode(DistributedSolverNodeBase):
     def run(self):
         self.backend.wait()
     
-    def set_initial_feasible_solution(self, X: CPUCSRArray):
+    def set_initial_feasible_solution(self, X: Union[CPUCSRArray, CPUCSCArray, CPUArray]):
         self._X_ek_start_chunk = X
         self._NUM_EDGES, self._CHUNK_LEN = self._X_ek_start_chunk.shape
     
@@ -139,6 +140,10 @@ class SynchADMMWorkerNode(DistributedSolverNodeBase):
             )
     
     def set_solver_parameters(self, new_params: SynchADMMSolverParams):
+        # TODO: This is so unclean ... there should be a better way
+        if isinstance(new_params.X0Type, str):
+            new_params.X0Type = InitialSolutionType(new_params.X0Type)
+        
         self._solver_params = new_params
         set_global_precision(precision=new_params.Precision)
         set_cpu_float_precision()
