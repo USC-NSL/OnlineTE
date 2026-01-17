@@ -9,6 +9,7 @@
     path_home: "{{ lookup('env', 'SPHERE_HOME') }}"
     path_venv: "{{ lookup('env', 'VENV_HOME') }}"
     path_launch: "{{ lookup('env', 'LAUNCH_FILE' )}}"
+    branch: "{{ lookup('env', 'GIT_BRANCH') }}"
   module_defaults:
     ansible.builtin.shell:
       chdir: "{{path_home}}"
