@@ -122,21 +122,24 @@ class MulticastControllerBackend(SynchADMMControllerBackendBase):
         self._scatter_socket.close()
         self.killed = True
 
+    def wait(self):
+        pass
+
     async def is_node_ready(self, worker_id: int) -> bool:
         try:
             res = await self._worker_stubs[worker_id].QueryState(Empty())
             return res.ready
         except grpc.aio._call.AioRpcError:
             return False
-    
-    async def _are_network_nodes_ready(self) -> bool:
-        results = await asyncio.gather(*[self.is_node_ready(i) for i in range(self.number_of_nodes)])
+
+    async def _are_all_workers_reachable(self) -> bool:
+        results = await asyncio.gather(*[self.is_node_ready(i) for i in range(self.number_of_workers)])
         return all(results)
-    
-    def are_network_nodes_ready(self):
+
+    def are_all_workers_reachable(self):
         if not self.is_alive:
-            return False
-        return self._event_loop.run_until_complete(self._are_network_nodes_ready())
+            return None
+        return self._event_loop.run_until_complete(self._are_all_workers_reachable())
 
     async def _initialize_worker_nodes(self, solver_params: SynchADMMSolverParams, basis: CPUArray, 
                                        initial_feasible_solution: Union[CPUCSRArray, CPUCSCArray, CPUArray],
@@ -212,10 +215,9 @@ class MulticastControllerBackend(SynchADMMControllerBackendBase):
     def get_X_ek_sum(self):
         return self._event_loop.run_until_complete(self._get_X_ek_sum())
     
-    def do_network_update(self, epoch: int, F_e: Optional[CPUArray] = None):
+    def do_network_update(self, epoch: int):
         self.update_xid()
-        message = distributed_lp_messages.NetworkUpdateRequest(epoch=epoch, xid=self.current_xid, 
-                                                               F_e=array_to_serialized_message(F_e))
+        message = distributed_lp_messages.NetworkUpdateRequest(epoch=epoch, xid=self.current_xid)
         packet = TLVRPCMessages.serialize_do_inner_loop(message)
         self._scatter_socket.sendto(packet, self.SCATTER_ADDRESS)
         responses = [None for _ in range(self.number_of_nodes)]
@@ -236,14 +238,12 @@ class MulticastControllerBackend(SynchADMMControllerBackendBase):
             raise SolutionInterrupted
         runtimes, serialized_y_bar_chunks = zip(*list([(res.runtime_ns, res.means) for res in responses]))
         return max(runtimes), np.mean([serialized_message_to_array(chunk) for chunk in serialized_y_bar_chunks], axis=0)
-    
-    def reconvene_network_updates(self, P_bar_t: CPUArray, Y_bar_t: CPUArray, u_t: CPUArray):
-        self.update_xid()
+   
+    def reconvene_network_updates(self, sharing_mean_1: CPUArray, sharing_mean_2: CPUArray, sharing_dual: CPUArray): 
         message = distributed_lp_messages.UpdateMessage(
-            P_bar_t = array_to_serialized_message(P_bar_t),
-            Y_bar_t = array_to_serialized_message(Y_bar_t),
-            u_t = array_to_serialized_message(u_t),
-            xid = self.current_xid
+            sharing_bias=array_to_serialized_message(
+                sharing_mean_1 - sharing_mean_2 + sharing_dual
+            )
         )
         for _ in range(self._rpc_params.UpdateCopyCount):
             self._scatter_socket.sendto(TLVRPCMessages.serialize_update_network_nodes(message), self.SCATTER_ADDRESS)

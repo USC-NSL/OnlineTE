@@ -27,6 +27,8 @@ class MulticastWorkerBackendParams(RPCParams):
     """Multicast group address to scatter to all worker nodes"""
     ScatterPort: int = te.constants.DEFAULT_SCATTER_PORT
     """UDP port to bind for multicasting"""
+    TTL: int = 2
+    """UDP packet TTL. Should be at least 2."""
     Timeout: float = 5.0
     """Timeout when waiting for controller updates"""
 
@@ -118,8 +120,7 @@ class MulticastWorkerBackend(SynchADMMWorkerBackendBase):
                         else:
                             self._xid = request.xid
                         if update_type == TLVRPCMessages.DoInnerLoops:
-                            F_e = serialized_message_to_array(get_optional_field(request, 'F_e'))
-                            runtime, means = self.do_inner_loop_update(request.epoch, F_e)
+                            runtime, means = self.do_inner_loop_update(request.epoch)
                             response = distributed_lp_messages.NetworkUpdateResponse(
                                 worker_id=self.worker_id, runtime_ns=runtime, 
                                 means=array_to_serialized_message(means),
@@ -128,9 +129,7 @@ class MulticastWorkerBackend(SynchADMMWorkerBackendBase):
                             self._gather_socket.sendto(response.SerializeToString(), addr)
                         elif update_type == TLVRPCMessages.UpdateNetworkNodes:
                             self.update_cached_values(
-                                serialized_message_to_array(request.u_t),
-                                serialized_message_to_array(request.P_bar_t),
-                                serialized_message_to_array(request.Y_bar_t)
+                                serialized_message_to_array(request.sharing_bias)
                             )
                         else:
                             raise ValueError(f'Unexpected update type: {update_type}')
