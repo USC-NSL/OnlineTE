@@ -3,7 +3,7 @@ grpcio-tools==1.68.0
 gurobipy>=12.0.1
 joblib>=1.4.0
 matplotlib>=3.9.4
-networkx==3.4.2
+networkx==3.2.1
 numpy>=2.0.2
 protobuf==5.29.3
 scipy>=1.10.0

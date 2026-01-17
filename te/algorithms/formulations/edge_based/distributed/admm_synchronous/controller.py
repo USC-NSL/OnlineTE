@@ -367,7 +367,7 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
             congested_ratio=congested_ratio,
             unsat_commodities=unsat_commodities,
             congested_links=congested_links,
-            density=np.count_nonzero(np.clip(X_EK)) / X_EK.size
+            density=np.count_nonzero(X_EK) / X_EK.size
         )
 
     def get_solution_commodity_list(self) -> List[Tuple[Commodity, Commodity]]:
