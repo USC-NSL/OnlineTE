@@ -239,11 +239,13 @@ class MulticastControllerBackend(SynchADMMControllerBackendBase):
         runtimes, serialized_y_bar_chunks = zip(*list([(res.runtime_ns, res.means) for res in responses]))
         return max(runtimes), np.mean([serialized_message_to_array(chunk) for chunk in serialized_y_bar_chunks], axis=0)
    
-    def reconvene_network_updates(self, sharing_mean_1: CPUArray, sharing_mean_2: CPUArray, sharing_dual: CPUArray): 
+    def reconvene_network_updates(self, sharing_mean_1: CPUArray, sharing_mean_2: CPUArray, sharing_dual: CPUArray):
+        self.update_xid()
         message = distributed_lp_messages.UpdateMessage(
             sharing_bias=array_to_serialized_message(
                 sharing_mean_1 - sharing_mean_2 + sharing_dual
-            )
+            ),
+            xid=self.current_xid
         )
         for _ in range(self._rpc_params.UpdateCopyCount):
             self._scatter_socket.sendto(TLVRPCMessages.serialize_update_network_nodes(message), self.SCATTER_ADDRESS)
