@@ -281,7 +281,7 @@ def add_mcast_params(parser: jsonargparse.ArgumentParser):
                                help='IP Multicast Communication Backend Parameters')
 
 def parse_mcast_params(args: jsonargparse.Namespace) -> MulticastControllerBackendParams:
-    return MulticastControllerBackendParams.make_from_args(args)
+    return MulticastControllerBackendParams.make_from_args(args.Mcast)
 
 def generate_mcast_worker_params(
     controller_params: MulticastControllerBackendParams

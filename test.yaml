@@ -23,6 +23,8 @@ synch:
   PDLPMLUParams:
     Threads: 1
   comm_backend: mcast
+  Mcast:
+    UpdateCopyCount: 1
 
 # topo: B4
 # # topo: Claranet

@@ -207,7 +207,7 @@ def add_asyn_grpc_params(parser: jsonargparse.ArgumentParser):
                                help='Asynchronous gRPC Communication Backend Parameters')
 
 def parse_asyn_grpc_params(args: jsonargparse.Namespace) -> AsynchronousgRPCControllerBackendParams:
-    return AsynchronousgRPCControllerBackendParams.make_from_args(args)
+    return AsynchronousgRPCControllerBackendParams.make_from_args(args.AsyngRPC)
 
 def generate_asyn_grpc_worker_params(
     controller_params: AsynchronousgRPCControllerBackendParams
