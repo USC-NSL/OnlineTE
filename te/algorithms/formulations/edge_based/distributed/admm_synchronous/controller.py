@@ -234,7 +234,7 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
         # TODO: Try to make the workers return aggregate flows as well
         # max_run, self._Y_bar_t = self.backend.do_network_update(epoch)
         max_run, self._sharing_mean_1 = self.backend.do_network_update(epoch)
-        return max_run
+        return max_run * 1000
 
     @record_cpu_runtime('Sharing-Mean')    
     def _update_sharing_mean(self):
