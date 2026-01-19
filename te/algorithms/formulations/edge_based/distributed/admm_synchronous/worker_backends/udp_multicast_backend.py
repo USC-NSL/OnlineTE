@@ -51,6 +51,7 @@ class MulticastWorkerBackend(SynchADMMWorkerBackendBase):
         
         self._handler_loop: Optional[threading.Thread] = None
         self._xid = None
+        self._last_response: Optional[distributed_lp_messages.NetworkUpdateResponse] = None
     
     @classmethod
     def backend_name(cls) -> str:
@@ -121,12 +122,12 @@ class MulticastWorkerBackend(SynchADMMWorkerBackendBase):
                             self._xid = request.xid
                         if update_type == TLVRPCMessages.DoInnerLoops:
                             runtime, means = self.do_inner_loop_update(request.epoch)
-                            response = distributed_lp_messages.NetworkUpdateResponse(
+                            self._last_response = distributed_lp_messages.NetworkUpdateResponse(
                                 worker_id=self.worker_id, runtime_ns=runtime, 
                                 means=array_to_serialized_message(means),
                                 xid=request.xid
                             )
-                            self._gather_socket.sendto(response.SerializeToString(), addr)
+                            self._gather_socket.sendto(self._last_response.SerializeToString(), addr)
                         elif update_type == TLVRPCMessages.UpdateNetworkNodes:
                             self.update_cached_values(
                                 serialized_message_to_array(request.sharing_bias)
@@ -135,7 +136,8 @@ class MulticastWorkerBackend(SynchADMMWorkerBackendBase):
                             raise ValueError(f'Unexpected update type: {update_type}')
                         buffer = buffer[consumed_length:]
                 except socket.timeout:
-                    pass
+                    if self._last_response is not None:
+                        self._gather_socket.sendto(self._last_response.SerializeToString(), addr)
         except OSError as e:
             print(f'Error in gatherer loop: {e}')
         finally:
