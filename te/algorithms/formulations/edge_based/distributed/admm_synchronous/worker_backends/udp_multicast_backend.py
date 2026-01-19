@@ -29,7 +29,7 @@ class MulticastWorkerBackendParams(RPCParams):
     """UDP port to bind for multicasting"""
     TTL: int = 2
     """UDP packet TTL. Should be at least 2."""
-    Timeout: float = 5.0
+    Timeout: float = 1.0
     """Timeout when waiting for controller updates"""
 
     def __post_init__(self):
@@ -51,6 +51,7 @@ class MulticastWorkerBackend(SynchADMMWorkerBackendBase):
         
         self._handler_loop: Optional[threading.Thread] = None
         self._xid = None
+        self._last_response: Optional[bytes] = None
     
     @classmethod
     def backend_name(cls) -> str:
@@ -126,7 +127,8 @@ class MulticastWorkerBackend(SynchADMMWorkerBackendBase):
                                 means=array_to_serialized_message(means),
                                 xid=request.xid
                             )
-                            self._gather_socket.sendto(response.SerializeToString(), addr)
+                            self._last_response = response.SerializeToString()
+                            self._gather_socket.sendto(self._last_response, addr)
                         elif update_type == TLVRPCMessages.UpdateNetworkNodes:
                             self.update_cached_values(
                                 serialized_message_to_array(request.sharing_bias)
@@ -135,7 +137,8 @@ class MulticastWorkerBackend(SynchADMMWorkerBackendBase):
                             raise ValueError(f'Unexpected update type: {update_type}')
                         buffer = buffer[consumed_length:]
                 except socket.timeout:
-                    pass
+                    if self._last_response:
+                        self._gather_socket.sendto(self._last_response, addr)
         except OSError as e:
             print(f'Error in gatherer loop: {e}')
         finally:
