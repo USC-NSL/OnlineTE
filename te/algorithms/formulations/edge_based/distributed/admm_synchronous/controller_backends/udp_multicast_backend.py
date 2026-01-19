@@ -87,7 +87,6 @@ class MulticastControllerBackend(SynchADMMControllerBackendBase):
 
         self._gethered_results = []
         self._gather_done = asyncio.Event()
-        self._weights: Optional[List[int]] = None
 
         self._xid = 0
     
@@ -148,8 +147,8 @@ class MulticastControllerBackend(SynchADMMControllerBackendBase):
         NUM_WORKERS = self.number_of_nodes
         NULL_M = basis
         NUM_COLS = initial_feasible_solution.shape[1]
+        assert NUM_COLS % NUM_WORKERS == 0
         CHUNK_INDICES = np.array_split(np.arange(NUM_COLS), NUM_WORKERS)
-        self._weights = [x.shape[0] for x in CHUNK_INDICES]
         X_EK_START_CHUNKS = [initial_feasible_solution[:, chunk[0]:chunk[-1]+1] for chunk in CHUNK_INDICES]
         MASK_EK_CHUNKS = None if in_out_mask is None else np.array_split(in_out_mask, NUM_WORKERS, axis=1)
         WORKERS = self._worker_stubs
@@ -227,7 +226,7 @@ class MulticastControllerBackend(SynchADMMControllerBackendBase):
                 if res.xid < self.current_xid:
                     continue
                 responses[res.worker_id] = res
-                if res.worker_id is remaining_workers:
+                if res.worker_id in remaining_workers:
                     remaining_workers.remove(res.worker_id)
             except socket.timeout:
                 # This could be a lost packet ...
@@ -237,8 +236,7 @@ class MulticastControllerBackend(SynchADMMControllerBackendBase):
         if not self.is_alive:
             raise SolutionInterrupted
         runtimes, serialized_y_bar_chunks = zip(*list([(res.runtime_ns, res.means) for res in responses]))
-        return max(runtimes), np.average([serialized_message_to_array(chunk) for chunk in serialized_y_bar_chunks], 
-                                         axis=0, weights=self._weights).astype(get_global_precision())
+        return max(runtimes), np.mean([serialized_message_to_array(chunk) for chunk in serialized_y_bar_chunks], axis=0)
    
     def reconvene_network_updates(self, sharing_mean_1: CPUArray, sharing_mean_2: CPUArray, sharing_dual: CPUArray):
         self.update_xid()

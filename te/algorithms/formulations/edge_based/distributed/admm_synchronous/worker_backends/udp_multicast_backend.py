@@ -136,8 +136,9 @@ class MulticastWorkerBackend(SynchADMMWorkerBackendBase):
                             raise ValueError(f'Unexpected update type: {update_type}')
                         buffer = buffer[consumed_length:]
                 except socket.timeout:
-                    if self._last_response is not None:
-                        self._gather_socket.sendto(self._last_response.SerializeToString(), addr)
+                    # if self._last_response is not None:
+                    #     self._gather_socket.sendto(self._last_response.SerializeToString(), addr)
+                    pass
         except OSError as e:
             print(f'Error in gatherer loop: {e}')
         finally:

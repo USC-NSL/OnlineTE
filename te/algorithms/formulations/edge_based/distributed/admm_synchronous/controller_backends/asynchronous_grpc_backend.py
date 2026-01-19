@@ -35,7 +35,6 @@ class AsynchronousgRPCControllerBackend(SynchADMMControllerBackendBase):
             DistributedADMMSolverStub(ch) for ch in self._worker_channels
         ]
         self._event_loop = asyncio.get_event_loop()
-        self._weights: Optional[List[int]] = None
     
     def start(self):
         self.is_alive = True
@@ -84,8 +83,8 @@ class AsynchronousgRPCControllerBackend(SynchADMMControllerBackendBase):
         NUM_WORKERS = self.number_of_workers
         NULL_M = basis
         NUM_COLS = initial_feasible_solution.shape[1]
+        assert NUM_COLS % NUM_WORKERS == 0
         CHUNK_INDICES = np.array_split(np.arange(NUM_COLS), NUM_WORKERS)
-        self._weights = [x.shape[0] for x in CHUNK_INDICES]
         X_EK_START_CHUNKS = [initial_feasible_solution[:, chunk[0]:chunk[-1]+1] for chunk in CHUNK_INDICES]
         MASK_EK_CHUNKS = None if in_out_mask is None else np.array_split(in_out_mask, NUM_WORKERS, axis=1)
         WORKERS = self._worker_stubs
@@ -153,8 +152,7 @@ class AsynchronousgRPCControllerBackend(SynchADMMControllerBackendBase):
             stub.DoNetworkUpdate(message) for stub in self._worker_stubs
         ])
         runtimes, serialized_x_bar_chunks = zip(*list([(res.runtime_ns, res.means) for res in responses]))
-        return max(runtimes), np.average([serialized_message_to_array(chunk) for chunk in serialized_x_bar_chunks], 
-                                         axis=0, weights=self._weights).astype(get_global_precision())
+        return max(runtimes), np.mean([serialized_message_to_array(chunk) for chunk in serialized_x_bar_chunks], axis=0)
     
     def do_network_update(self, epoch: int):
         message = distributed_lp_messages.NetworkUpdateRequest(epoch=epoch)
