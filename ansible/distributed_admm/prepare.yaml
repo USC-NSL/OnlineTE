@@ -2,6 +2,7 @@
 # Prepare controller/worker nodes from scratch (i.e. assume no packages are installed)
 - name: Configure APT dependencies
   hosts: controller_group:workers_group
+  serial: 100
   become: true
   tasks:
   - name: Gather Package Facts
@@ -23,6 +24,7 @@
 
 - name: Clone repo and configure PIP
   hosts: controller_group:workers_group
+  serial: 100
   gather_facts: false
   remote_user: "{{ lookup('env', 'SPHERE_USER') }}"
   vars: 
@@ -61,7 +63,7 @@
 
 - name: Copy TE Worker Service File
   hosts: workers_group
-  gather_facts: false
+  serial: 100
   become: true
   vars: 
     path_home: "{{ lookup('env', 'SPHERE_HOME') }}"
@@ -85,7 +87,9 @@
       chdir: "{{path_home}}"
   tasks:
     - name: Copy TE Worker Service File To Systemd
-      command: chdir="{{path_home}}" sudo cp ./"{{path_service}}" /etc/systemd/user
+      ansible.builtin.copy:
+        src: "{{path_home}}/{{path_service}}"
+        dest: /etc/systemd/user
     
     - name: Set WORKER_ID Env-Var
       ansible.builtin.lineinfile:
@@ -106,6 +110,7 @@
     
 - name: Restart system control
   hosts: workers_group
+  serial: 100
   gather_facts: false
   remote_user: "{{ lookup('env', 'SPHERE_USER') }}"
   tasks:

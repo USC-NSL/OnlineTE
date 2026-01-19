@@ -2,6 +2,7 @@
 # Playbook for updating code only
 - name: Pull changes
   hosts: controller_group:workers_group
+  serial: 100
   gather_facts: false
   remote_user: "{{ lookup('env', 'SPHERE_USER') }}"
   vars: 
