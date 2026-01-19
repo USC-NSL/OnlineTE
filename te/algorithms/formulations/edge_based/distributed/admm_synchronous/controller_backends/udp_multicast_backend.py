@@ -221,14 +221,14 @@ class MulticastControllerBackend(SynchADMMControllerBackendBase):
         packet = TLVRPCMessages.serialize_do_inner_loop(message)
         self._scatter_socket.sendto(packet, self.SCATTER_ADDRESS)
         responses = [None for _ in range(self.number_of_nodes)]
-        remaining_workers = self.number_of_nodes
+        remaining_workers = set(range(self.number_of_nodes))
         while self.is_alive and remaining_workers > 0:
             try:
                 # TODO: For now, assume the response fits in a single packet, but that may not be the case ...
                 res = distributed_lp_messages.NetworkUpdateResponse.FromString(
                     self._scatter_socket.recv(40960))
                 responses[res.worker_id] = res
-                remaining_workers -= 1
+                remaining_workers.remove(res.worker_id)
             except socket.timeout:
                 # This could be a lost packet ...
                 # Since the update is idempotent, we can just send it again
