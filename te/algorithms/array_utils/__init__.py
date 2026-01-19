@@ -24,7 +24,7 @@ def set_global_precision(precision: str):
     _GLOBAL_PRECISION = precision
 
 
-def get_global_precision() -> str:
+def get_global_precision():
     global _GLOBAL_PRECISION
     assert _GLOBAL_PRECISION is not None
     return _GLOBAL_PRECISION

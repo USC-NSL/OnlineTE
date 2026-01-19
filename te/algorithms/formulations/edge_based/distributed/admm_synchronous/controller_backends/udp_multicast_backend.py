@@ -6,7 +6,7 @@ import te.constants
 from typing import List, Optional, Tuple, Union
 from dataclasses import dataclass
 from utils.exceptions import SolutionInterrupted
-from te.algorithms.array_utils.cpu_utils import CPUArray, BooleanCPUArray, CPUCSRArray, CPUCSCArray
+from te.algorithms.array_utils.cpu_utils import CPUArray, BooleanCPUArray, CPUCSRArray, CPUCSCArray, get_global_precision
 from .. import SynchADMMSolverParams
 from ...base import RPCParams
 from ..base import SynchADMMControllerBackendBase
@@ -87,6 +87,7 @@ class MulticastControllerBackend(SynchADMMControllerBackendBase):
 
         self._gethered_results = []
         self._gather_done = asyncio.Event()
+        self._weights: Optional[List[int]] = None
 
         self._xid = 0
     
@@ -147,12 +148,8 @@ class MulticastControllerBackend(SynchADMMControllerBackendBase):
         NUM_WORKERS = self.number_of_nodes
         NULL_M = basis
         NUM_COLS = initial_feasible_solution.shape[1]
-
-        # TODO: Maybe handle the case of partial partitions
-        assert NUM_COLS % NUM_WORKERS == 0, \
-            f"Cannot handle partial partitions yet! ({initial_feasible_solution.shape[1]} % {NUM_WORKERS})"
-
         CHUNK_INDICES = np.array_split(np.arange(NUM_COLS), NUM_WORKERS)
+        self._weights = [x.shape[0] for x in CHUNK_INDICES]
         X_EK_START_CHUNKS = [initial_feasible_solution[:, chunk[0]:chunk[-1]+1] for chunk in CHUNK_INDICES]
         MASK_EK_CHUNKS = None if in_out_mask is None else np.array_split(in_out_mask, NUM_WORKERS, axis=1)
         WORKERS = self._worker_stubs
@@ -240,7 +237,8 @@ class MulticastControllerBackend(SynchADMMControllerBackendBase):
         if not self.is_alive:
             raise SolutionInterrupted
         runtimes, serialized_y_bar_chunks = zip(*list([(res.runtime_ns, res.means) for res in responses]))
-        return max(runtimes), np.mean([serialized_message_to_array(chunk) for chunk in serialized_y_bar_chunks], axis=0)
+        return max(runtimes), np.average([serialized_message_to_array(chunk) for chunk in serialized_y_bar_chunks], 
+                                         axis=0, weights=self._weights).astype(get_global_precision())
    
     def reconvene_network_updates(self, sharing_mean_1: CPUArray, sharing_mean_2: CPUArray, sharing_dual: CPUArray):
         self.update_xid()

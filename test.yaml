@@ -1,15 +1,14 @@
-topo: Cogentco
-# topo: Interoute
+# topo: Cogentco
+topo: Interoute
 # topo: Claranet
 tm_seed: 12345
 objective: MLU
 report_unsat: True
-scale_factor: 20.0
-# scale_factor: 10.0
+# scale_factor: 20.0
+scale_factor: 10.0
 synch:
   num_workers: 197
-  # num_workers: 1
-  # local: True
+  local: True
   mlu_backend: pdlp
   SolverParams:
     InnerLoopRounds: 5
@@ -22,9 +21,9 @@ synch:
     # X0Type: CSR_SHORTEST_PATH
   PDLPMLUParams:
     Threads: 1
-  comm_backend: mcast
-  Mcast:
-    UpdateCopyCount: 3
+  # comm_backend: mcast
+  # Mcast:
+  #   UpdateCopyCount: 3
 
 # topo: B4
 # # topo: Claranet
