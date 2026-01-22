@@ -9,16 +9,17 @@ scale_factor: 50.0
 # scale_factor: 20.0
 # scale_factor: 10.0
 synch:
-  num_workers: 87
+  num_workers: 251
   # num_workers: 49
   # local: True
   mlu_backend: pdlp
   SolverParams:
-    InnerLoopRounds: 5
+    InnerLoopRounds: 6
     OuterLoopRounds: 100
     SwitchIterations: 1
     Precision: single
-    Eta: 0.2
+    # Rho: 0.1
+    Eta: 0.1
     # Beta: 8e-5
     X0Type: PSEUDO_INVERSE
     # X0Type: CSR_SHORTEST_PATH

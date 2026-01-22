@@ -287,6 +287,10 @@ class TrafficEngineeringLPEvaluationParams(SolverParams):
         problem class actually implemented and provided it.
     PLTOutputPath: Optional[str] = `'res.png'`
         Path to the output file for all `PLT` plots.
+    CheckConservation: bool = False
+        Check flow conservation on transit nodes. Many of our algorithms
+        give flow conservation _regardless_, so we usually don't even need
+        to check it.
     
     Note
     ----
@@ -307,6 +311,7 @@ class TrafficEngineeringLPEvaluationParams(SolverParams):
     SaveSol: bool = False
     TraceOutputPath: Optional[str] = 'res.txt'
     PLTOutputPath: Optional[str] = 'res.png'
+    CheckConservation: bool = False
 
     def __post_init__(self):
         # UPDATE: We will prevent both tolerances being given, it makes reasoning about things difficult ...

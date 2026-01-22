@@ -8,7 +8,8 @@ from te.algorithms.array_utils.cpu_utils import CPUArray
 from te.algorithms.sub_algorithms.simplex_projection import project_onto_probability_simplex, project_onto_probability_orthant
 
 
-def do_memory_efficient_pgd(lambda_block: CPUArray, c_block: CPUArray, nnt: CPUArray, 
+def do_memory_efficient_pgd(lambda_block: CPUArray, x_block: CPUArray, nnt: CPUArray,
+                            bias: CPUArray, x_block_0: CPUArray,
                             step_size: float, n_iter: int, mask: CPUArray) -> CPUArray:
     """
     A variant of our plain PGD algorithm that does the bare minimum to handle
@@ -17,10 +18,8 @@ def do_memory_efficient_pgd(lambda_block: CPUArray, c_block: CPUArray, nnt: CPUA
     bias (i.e. Y_tk) between iterations.
     """
     for _ in range(n_iter):
-        lambda_block -= step_size * (nnt @ lambda_block + c_block)
-        correction = np.clip(np.multiply(lambda_block, mask), a_min=None, a_max=0)
-        np.clip(lambda_block, a_min=0, a_max=None, out=lambda_block)
-        lambda_block += correction
+        lambda_block -= step_size * (nnt @ (lambda_block + x_block - np.expand_dims(bias, axis=1)) + x_block_0)
+        np.maximum(lambda_block, 0, out=lambda_block, where=~mask)
     return lambda_block
 
 
@@ -59,9 +58,7 @@ try:
         """
         for _ in range(n_iter):
             lambda_block = zip_map([nnt, lambda_block, c_block], lambda nn, l, c: l - step_size * (nn @ l + c))
-            correction = zip_map([lambda_block, mask], lambda l, m: cp.clip(cp.multiply(l, m), a_min=None, a_max=0))
-            zip_map([lambda_block], lambda l: cp.clip(l, a_min=0, a_max=None, out=l))
-            lambda_block = zip_map([lambda_block, correction], lambda l, c: l + c)
+            zip_map([lambda_block, mask], lambda l, m: np.maximum(l, 0, out=l, where=~m))
         return lambda_block
 
 except ModuleNotFoundError:

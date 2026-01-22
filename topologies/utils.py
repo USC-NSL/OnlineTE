@@ -83,7 +83,7 @@ def load_zoo_topology(name: str, seed: Optional[int] = None) -> nx.DiGraph:
 def load_repo_topology(name: str) -> Optional[nx.DiGraph]:
     fname = os.path.join(TOPOLOGY_REPO_PATH, f'{name}.json')
     if not os.path.exists(fname):
-        print(f'Could not find {fname}')
+        print(as_warning(f'Could not find {fname} in the topology repository. Falling back to Topology Zoo ...'))
         return None
     with open(fname) as f:
         data = json.load(f)

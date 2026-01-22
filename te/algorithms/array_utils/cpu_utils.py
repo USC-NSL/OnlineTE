@@ -1,5 +1,6 @@
 import numpy as np
 import scipy.sparse as sp
+import scipy.linalg.blas as sblas
 from utils.logging import as_warning
 from te.algorithms.array_utils import get_global_precision, DOUBLE_PRECISION, SINGLE_PRECISION, HALF_PRECISION
 from typing import Tuple, Callable, Any, Optional, Type, List, Union
@@ -121,6 +122,8 @@ cpu_int_array: Callable[[Any], IntegerCPUArray] = lambda input: np.array(input, 
 """Create a copy of an array-like thing that is always `np.int32`, regardles of global data type"""
 cpu_int_zeros: Callable[[Tuple[int]], IntegerCPUArray] = lambda shape: np.zeros(shape=shape, dtype=np.int32)
 """Always returns zero array with `np.int32`, regardless of global data type"""
+cpu_bool_zeros: Callable[[Tuple[int]], BooleanCPUArray] = lambda shape: np.zeros(shape=shape, dtype=bool)
+"""Always returns zero array with Boolean values, regardless of global data type"""
 
 cpu_cast_float: Callable[[Any], Any] = lambda val: _CPU_DTYPE(val)
 
@@ -132,3 +135,13 @@ def cpu_coo_array(rows: List[int], cols: List[int], data: List[Any], shape: Tupl
 
 cpu_coo_to_csr: Callable[[CPUCOOArray], CPUCSRArray] = lambda inp: inp.tocsr() if isinstance(inp, CPUCOOArray) else inp
 cpu_coo_to_csc: Callable[[CPUCOOArray], CPUCSCArray] = lambda inp: inp.tocsc() if isinstance(inp, CPUCOOArray) else inp
+
+
+def cpu_symm(alpha: float, a: CPUArray, b: CPUArray, beta: float = 0, c: Optional[CPUArray] = None, side: int = 0,
+             lower: bool = True, overwrite_c: bool = False) -> CPUArray:
+    if a.dtype == np.float32:
+        return sblas.ssymm(alpha=alpha, a=a, b=b, beta=beta, c=c, side=side, lower=lower, overwrite_c=overwrite_c)
+    elif a.dtype == np.float64:
+        return sblas.dsymm(alpha=alpha, a=a, b=b, beta=beta, c=c, side=side, lower=lower, overwrite_c=overwrite_c)
+    else:
+        raise ValueError(f'BLAS `symm` operation not implemented for {a.dtype}')

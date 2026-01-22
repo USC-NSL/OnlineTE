@@ -183,7 +183,8 @@ def show_violation_severity(violations: List[Violation], number_of_commodities: 
 
 def _check_centralized_flow_conservation(
         shift: int, flows: np.ndarray, graph: nx.DiGraph, 
-        commodities: List[Commodity], feasibility_tol: Optional[float],
+        commodities: List[Commodity], check_transit: bool,
+        feasibility_tol: Optional[float],
         feasibility_ratio: Optional[float] = None
     ) -> Tuple[List[Violation], Set[int]]:
 
@@ -199,8 +200,9 @@ def _check_centralized_flow_conservation(
         for e, edge in enumerate(graph.edges()):
             flow_out[edge[0]].append(flows[e, k])
             flow_in[edge[1]].append(flows[e, k])
-
-        for v in graph.nodes():
+        
+        nodes_to_check = graph.nodes() if check_transit else [SOURCE, DESTINATION]
+        for v in nodes_to_check:
             fout = sum(flow_out[v])
             fin  = sum(flow_in[v])
 
@@ -257,12 +259,18 @@ def check_flow_conservation(
     K = len(commodities)
     slices = get_slice_starts_and_exclusive_ends(K, MAX_NUMBER_OF_WORKERS, MAX_NUMBER_OF_COMMODITIES_PER_CORE)
 
+    if eval_params.CheckConservation:
+        print(as_info("Will check transit node flow conservation")) 
+    else:
+        print(as_warning("Transit node flow conservation will be skipped! Make sure you actually intend for this!")) 
+
     # We'll accumulate the set of unsatisfied commodity indices
     unsatisfied_commodities: Set[int] = set()
 
     if K <= MAX_NUMBER_OF_COMMODITIES_PER_CORE:
         violations, unsatisfied_commodities = _check_centralized_flow_conservation(
             0, flows, graph, commodities, 
+            check_transit=eval_params.CheckConservation,
             feasibility_tol=eval_params.FeasibilityTolerance,
             feasibility_ratio=eval_params.FeasibilityRatio)
     else:
@@ -276,7 +284,9 @@ def check_flow_conservation(
             violations_it = Parallel(n_jobs=nprocs, return_as='generator')\
                 (delayed(_check_centralized_flow_conservation)\
                     (begin, X_KE[:, begin:end], graph, commodities[begin:end],
-                     eval_params.FeasibilityTolerance, eval_params.FeasibilityRatio)
+                     eval_params.CheckConservation,
+                     eval_params.FeasibilityTolerance,
+                     eval_params.FeasibilityRatio)
                     for begin, end in slices)
             violations = []
             for item in violations_it:

@@ -33,14 +33,17 @@ class DenseSolver:
     def update(self, sharing_bias: CPUArray) -> CPUArray:
         self._lambda_ek = do_memory_efficient_pgd(
             lambda_block=self._lambda_ek, 
-            c_block=self._get_current_C(sharing_bias),
+            x_block=self._X_ek,
             nnt=self._NNT,
+            bias=sharing_bias,
+            x_block_0=self._X_0,
             step_size=self._pgd_step, 
             n_iter=self._pgd_iters, 
             mask=self._mask
         )
         self._X_ek += self._NNT @ (self._lambda_ek - np.expand_dims(sharing_bias, axis=1))
         return self._X_ek
+
 
 
 class SparseSolver:

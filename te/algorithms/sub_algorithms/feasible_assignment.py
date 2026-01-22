@@ -67,7 +67,7 @@ def _get_feasible_pseudoinv_flow_assignment(
     commodity_list: List[Commodity], pinv: CPUArray
 ) -> CPUArray:
     rows, cols, data = [], [], []
-    N, M = pinv.shape
+    _, M = pinv.shape
     for k, commodity in enumerate(commodity_list):
         SOURCE = commodity.source
         DESTINATION = commodity.destination

@@ -6,15 +6,11 @@ from joblib import Parallel, delayed
 from typing import Optional, Dict, Tuple, List
 from itertools import islice
 from te import TE_PATH
-from te.algorithms.array_utils.cpu_utils import cpu_mmap
-from te.algorithms.base import Commodity, TrafficEngineeringLPEvaluationParams
-from te.algorithms.sub_algorithms.flow_conservation_test import check_flow_conservation
+from topologies.utils import load_topology
+from te.algorithms.array_utils.cpu_utils import cpu_mmap, cpu_bool_zeros, cpu_int_zeros, IntegerCPUArray, BooleanCPUArray
 from te.algorithms.sub_algorithms.utils import (get_slice_starts_and_exclusive_ends, get_number_of_required_workers,
-                                                TempHelper, NUM_PROCS)
+                                                NUM_PROCS, TempHelper)
 from utils.logging import as_info, as_warning, as_fail, ShortTQDMEnumerate
-
-
-# TODO: Fix the return type hints, use `CPUArray` instead ...
 
 
 PATH_FOLDER = os.path.join(TE_PATH, "paths")
@@ -42,14 +38,17 @@ class TShortestPaths:
     For this, we also keep `beta_k` which is the number of available paths for the
     commodity `k`. Assignments beyond `beta_k` need to pinned to 0.
     """
-    def __init__(self, T: int, graph: nx.DiGraph, edge_disjoint: bool = False):
-        self._T: int = T
-        self._K: int = graph.number_of_nodes() * (graph.number_of_nodes() - 1)
-        self._N: int = graph.number_of_edges()
+    def __init__(self, alpha: BooleanCPUArray, beta: IntegerCPUArray, edge_disjoint: bool = False,
+                 name: Optional[str] = None):
+        K, N, T = alpha.shape
+        assert beta.shape == (K,)
+        self._alpha_k = alpha
+        self._beta_k = beta
         self._edge_disjoint = edge_disjoint
-        self._graph: nx.DiGraph = graph
-        self._alpha_k: Optional[np.ndarray] = None
-        self._beta_k: Optional[np.ndarray] = None
+        self._T: int = T
+        self._K: int = K
+        self._N: int = N
+        self._name = name
     
     @property
     def T(self) -> int:
@@ -67,21 +66,39 @@ class TShortestPaths:
         return self._N
     
     @property
-    def graph(self) -> nx.DiGraph:
-        """The `nx.DiGraph` object of the topology"""
-        return self._graph
-    
-    @property
     def alpha(self) -> np.ndarray:
+    # def alpha(self) -> COO3D:
         """Path matrix, a boolean `K x N x T` array"""
         assert self._alpha_k is not None
         return self._alpha_k
     
     @property
-    def beta(self) -> np.ndarray:
+    def beta(self) -> IntegerCPUArray:
         """Number of available paths for each commodity, an integer `K` vector"""
         assert self._beta_k is not None
         return self._beta_k
+    
+    @property
+    def edge_disjoint(self) -> bool:
+        """Whether the path object contanis edge-disjoint shortest paths or not"""
+        return self._edge_disjoint
+
+    @property
+    def name(self) -> Optional[str]:
+        """Name of this path object"""
+        return self._name
+    
+    def set_name(self, name: str):
+        assert self._name is None
+        self._name = name
+    
+    @property
+    def file_name(self) -> str:
+        if self._name is None:
+            name = "paths"
+        else:
+            name = self._name
+        return f"{name}.npz" if not self._edge_disjoint else f"{name}_disjoint.npz"
 
     @staticmethod
     def _get_paths(edge_indexing: Dict[Tuple[int, int], int], 
@@ -109,89 +126,113 @@ class TShortestPaths:
                         alpha_slice[k, edge_indexing[(path[i], path[i+1])], t] = True
             beta_slice[k] = t+1
 
+    @staticmethod
+    def get_expected_file_name_for_topology(topo_name: str, edge_disjoint: bool):
+        return f"{topo_name}.npz" if not edge_disjoint else f"{topo_name}_disjoint.npz"
+
     def get_initial_total_flow(self, demands: np.ndarray) -> np.ndarray:
         """
         Returns the total flow over each edge, when all commodities are
-        routed on the first shortest path.
+        routed on the first path.
         """
         return np.einsum('ij,i->j', self._alpha_k[:, :, 0], demands)
     
-    def make(self):
-        """Creates the path matrix and sets the `alpha` attribute"""
-        K = self.K
-        T = self.T
-        E = self.N
-        EDGE_INDEXING = {edge: e for e, edge in enumerate(self.graph.edges(data=False))}
+    @classmethod
+    def make_from_graph(cls, graph: nx.DiGraph, T: int, edge_disjoint: bool = False):
+        """Create a path object from an arbitrary graph"""
+        M = graph.number_of_nodes()
+        K = M * (M - 1)
+        N = graph.number_of_edges()
+        EDGE_INDEXING = {edge: e for e, edge in enumerate(graph.edges(data=False))}
         slices = get_slice_starts_and_exclusive_ends(K, MAX_NUMBER_OF_WORKERS, MAX_NUMBER_OF_COMMODITIES_PER_CORE)
         commodities = []
-        for src in range(self.graph.number_of_nodes()):
-            for dst in range(self.graph.number_of_nodes()):
+        for src in range(M):
+            for dst in range(M):
                 if src == dst:
                     continue
                 commodities.append((src, dst))
 
         if K <= MAX_NUMBER_OF_COMMODITIES_PER_CORE:
-            alpha_k = np.zeros(dtype=bool, shape=(K, self._N, self._T))
-            beta_k = np.zeros(dtype=np.int32, shape=(K,))
-            TShortestPaths._get_paths(EDGE_INDEXING, T, self._edge_disjoint, graph, commodities, alpha_k, beta_k)
+            alpha_k = cpu_bool_zeros((K, N, T))
+            beta_k = cpu_int_zeros((K,))
+            TShortestPaths._get_paths(EDGE_INDEXING, T, edge_disjoint, graph, commodities, alpha_k, beta_k)
         else:
             with contextlib.closing(TempHelper(TEMP_FOLDER_NAME)) as tp:
                 alpha_path = tp.get_file_path(MEMMAP_FILE_NAME_ALPHA)
                 beta_path = tp.get_file_path(MEMMAP_FILE_NAME_BETA)
-                ALPHA_KET = cpu_mmap(alpha_path, (K, E, T), 'w+', bool)
+                ALPHA_KET = cpu_mmap(alpha_path, (K, N, T), 'w+', bool)
                 BETA_K = cpu_mmap(beta_path, (K,), 'w+', np.int32)
                 nprocs = get_number_of_required_workers(K, MAX_NUMBER_OF_WORKERS, MAX_NUMBER_OF_COMMODITIES_PER_CORE)
                 print(as_info(f'Spawning {nprocs} workers to get path assignments'))
                 Parallel(n_jobs=nprocs)\
                     (delayed(TShortestPaths._get_paths)\
-                        (EDGE_INDEXING, T, self._edge_disjoint, graph, commodities[item[0]:item[1]], 
+                        (EDGE_INDEXING, T, edge_disjoint, graph, commodities[item[0]:item[1]], 
                          ALPHA_KET[item[0]:item[1], :, :], 
                          BETA_K[item[0]:item[1]], index)
                         for index, item in enumerate(slices))
                 del ALPHA_KET
                 del BETA_K
-                alpha_k = np.load(alpha_path, allow_pickle=False)
-                beta_k = np.load(beta_path, allow_pickle=False)
-        
-        self._alpha_k = alpha_k
-        self._beta_k = beta_k
-
-    def save(self, name: str):
-        """Save the `alpha` array in `.npy` format"""
-        file_name = f'{name}.npy'
-        with open(os.path.join(PATH_FOLDER, file_name), 'wb') as f:
-            np.save(f, self.alpha)
-            np.save(f, self.beta)
-
+                alpha_k: BooleanCPUArray = np.load(alpha_path, allow_pickle=False)
+                beta_k: IntegerCPUArray = np.load(beta_path, allow_pickle=False)
+        return cls(alpha_k, beta_k, edge_disjoint)
+    
     @classmethod
-    def load(cls, graph: nx.DiGraph, T: int, topo_name: Optional[str] = None, save_as: Optional[str] = None):
-        # TODO: Maybe check the graph hash to make sure these are the same things?
-        if topo_name is not None:
-            path = os.path.join(PATH_FOLDER, f'{topo_name}.npy')
-            try:
-                with open(path, 'rb') as f:
-                    alpha = np.load(f, allow_pickle=False)
-                    beta = np.load(f, allow_pickle=False)
-            except OSError:
-                raise ValueError(as_fail(f'No path file for {topo_name} exists!'))
-            k, n, t = np.shape(alpha)
-            assert (k == (graph.number_of_nodes() * (graph.number_of_nodes() - 1))) and \
-                   (n == graph.number_of_edges()), 'Topology size mismatch!'
+    def make_from_topo_name(cls, topo_name: str, T: int, edge_disjoint: bool = False):
+        graph, _ = load_topology(topo_name)
+        obj = cls.make_from_graph(graph, T, edge_disjoint)
+        obj.set_name(topo_name)
+        return obj
+
+    def save(self, compressed: bool = False):
+        """Save the `alpha` and `beta` arrays in `.npz` format"""
+        if not os.path.exists(PATH_FOLDER):
+            os.mkdir(PATH_FOLDER)
+        save_fn = np.savez if not compressed else np.savez_compressed
+        save_fn(
+            os.path.join(PATH_FOLDER, self.file_name),
+            alpha = self.alpha,
+            beta = self.beta,
+            edge_disjoint = self.edge_disjoint
+        )
+    
+    @classmethod
+    def load_from_file(cls, file_name: str, T: Optional[int] = None):
+        if file_name.endswith('.npz'):
+            name = file_name[:-4]
+        path = os.path.join(PATH_FOLDER, f'{name}.npz')
+        try:
+            loader = np.load(path)
+            alpha = loader['alpha']
+            beta = loader['beta']
+            edge_disjoint = loader['edge_disjoint']
+        except (OSError, FileNotFoundError):
+            return None
+        _, _, t = np.shape(alpha)
+        if T is not None:
             if t < T:
                 raise ValueError(as_fail(f'Given path file does not contain enough paths! ({t} < {T})'))
             elif t > T:
                 print(as_warning(f'Will only use the first {T} paths (instead of total {t})'))
-            obj = TShortestPaths(T, graph)
-            obj._alpha_k = alpha[:, :, :T]
-            obj._beta_k = np.clip(beta, a_min=0, a_max=T)
         else:
-            obj = TShortestPaths(T, graph)
-            obj.make()
-        
-        if save_as is not None:
-            obj.save(save_as)
-        
-        return obj
+            print(as_info(f"File defines {t} paths at most"))
+        alpha_k = alpha[:, :, :T]
+        beta_k = np.clip(beta, a_min=0, a_max=T)
+        return cls(alpha_k, beta_k, edge_disjoint, name)
+    
+    def scale_down(self, new_T: int):
+        """
+        Change the maximum number of paths to a smaller value.
+
+        Note
+        ----
+        This is a very lazy function. It merely changes the view into the
+        `alpha` array, it does not reclaim the allocated memory.
+        """
+        # TODO: Fix the above.
+        assert new_T < self.T
+        self._alpha_k = self._alpha_k[:, :, :new_T]
+        self._beta_k = np.clip(self._beta_k, a_min=0, a_max=new_T)
+        self._T = new_T
 
 
 def path_based_to_edge_based(Y_tk: np.ndarray, alpha: np.ndarray, D_k: np.ndarray) -> np.ndarray:
@@ -229,39 +270,40 @@ def random_path_assignment(K: int, T: int, beta: np.ndarray, seed: Optional[int]
     return Y_tk / sums[np.newaxis, :]
 
 
+def get_or_make_path_object_for_topology_name(topo_name: str, T: int, edge_disjoint: bool, compress_if_new: bool = False):
+    recompute = False
+    expected_name = TShortestPaths.get_expected_file_name_for_topology(topo_name, edge_disjoint)
+    try:
+        obj = TShortestPaths.load_from_file(expected_name, T)
+        if obj is None:
+            print(as_info(f"Couldn't find a matching file for these parameters. Making path object from scratch."))
+            recompute = True
+        else:
+            if edge_disjoint and not obj.edge_disjoint:
+                print(as_warning(f"Current file is not actually edge-disjointed! Will recompute and overwrite."))
+                recompute = True
+            elif not edge_disjoint and obj.edge_disjoint:
+                recompute = True
+                print(as_warning(f"Current file is edge-disjointed rather than SPF! Will recompute and overwrite."))
+    except ValueError as e:
+        print(as_warning(str(e)))
+        recompute = True
+    finally:
+        if recompute:
+            obj = TShortestPaths.make_from_topo_name(topo_name, T, edge_disjoint)
+            obj.save(compress_if_new)
+        else:
+            print(as_info(f"Path object {expected_name} was loaded without computation."))
+        return obj
+
+
 if __name__ == '__main__':
-    from topologies.utils import load_zoo_topology, load_topology
-    # topo_name = 'Claranet'
-    # topo_name = 'Forthnet'
-    # topo_name = 'Interoute'
-    # topo_name = 'Kdl'
-    topo_name = 'B4'
+    import argparse
+    parser = argparse.ArgumentParser('Compute paths for topologies')
+    parser.add_argument('topo_name', type=str, help='Topology name (without the postfix of .json, .gml, etc.)')
+    parser.add_argument('T', type=int, help='Maximum number of paths per commodity')
+    parser.add_argument('--disjoint', action='store_true', help='Use only edge-disjoint paths')
+    parser.add_argument('--compress', action='store_true', help='Compress the result in case we compute a new array and need to save it')
+    args = parser.parse_args()
 
-    # Create the paths and save them
-    # T = 16
-    T = 4
-    # SEED = 12345
-    # graph = load_zoo_topology(topo_name)
-    graph, _ = load_topology(topo_name)
-    obj = TShortestPaths(T, graph, edge_disjoint=True)
-    obj.make()
-    obj.save(name=topo_name)
-
-    # Load it again
-    # obj: TShortestPaths = TShortestPaths.load(graph, T, topo_name)
-
-    # # Check if they make sense using a random path assignment
-    # Y = random_path_assignment(obj.K, obj.T, obj.beta, SEED)
-    # assert np.allclose(np.sum(Y, axis=0), 1)
-    # DEMANDS = np.ones(shape=(obj.K,))
-    # commodity_list = []
-    # for i in range(graph.number_of_nodes()):
-    #     for j in range(graph.number_of_nodes()):
-    #         if i == j:
-    #             continue
-    #         commodity_list.append(Commodity(i, j, 1.0))
-    # X = path_based_to_edge_based(Y, obj.alpha, DEMANDS)
-    # eval_params = TrafficEngineeringLPEvaluationParams(
-    #     TopologyName=topo_name, Seed=SEED, FeasibilityTolerance=1e-8
-    # )
-    # check_flow_conservation(X, graph, commodity_list, eval_params)
+    get_or_make_path_object_for_topology_name(args.topo_name, args.T, args.disjoint)
