@@ -33,8 +33,8 @@ class SynchADMMSolverParams(SolverParams):
     """
     SwitchIterations: int = 2
     """Number of iterations for each switch-level problem"""
-    ConvTol: float = 1e-3
-    """Objective convergence tolerance"""
+    ConvTol: float = 1e-2
+    """ADMM convergence tolerance"""
     Precision: Literal['double', 'single', 'half'] = SINGLE_PRECISION
     """Floating point operation precision"""
     TMSeed: int = te.constants.DEFAULT_SEED

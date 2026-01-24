@@ -332,7 +332,11 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
                     float(get_solution_maximum_utilization(self._X_ek_sum_e, self._graph))
                 )
                 # Inner loop infeasibility is usually very small, no need to bother with it!
-                self._objective_gap_trace.append(self._outer_admm_wrapper.infeasibility)
+                err = self._outer_admm_wrapper.infeasibility
+                self._objective_gap_trace.append(err)
+                if err < PARAMS.ConvTol:
+                    print(as_success("Crossed the convergance bound. Breaking early ..."))
+                    break
             self._set_X_ek()
             return time.time() - t
         except ControllerMLUException as e:

@@ -18,7 +18,29 @@ def do_memory_efficient_pgd(lambda_block: CPUArray, x_block: CPUArray, nnt: CPUA
     bias (i.e. Y_tk) between iterations.
     """
     for _ in range(n_iter):
+        # TODO: This can be optimized slightly if `x_block_0` is a least-squares solution ...
         lambda_block -= step_size * (nnt @ (lambda_block + x_block - np.expand_dims(bias, axis=1)) + x_block_0)
+        np.maximum(lambda_block, 0, out=lambda_block, where=~mask)
+    return lambda_block
+
+
+def do_dual_pgd(lambda_block: CPUArray, lambda_sum_block: CPUArray,
+                nnt: CPUArray, bias: CPUArray, x_block_0: CPUArray,
+                step_size: float, n_iter: int, mask: CPUArray) -> CPUArray:
+    """
+    A variant of our plain PGD algorithm that only uses dual variables.
+    This gets away with one giant matrix multiplication for updating the primal
+    solution, which can basically cut the runtime in half.
+    On the other hand, it increases memory usage by one-third, since we must keep
+    the old dual solution instead of the old primal solution.
+
+    Note
+    ----
+    The solver that calls this _MUST_ use `PSEUDO_INVERSE` solution for the
+    initial feasible assignment.
+    """
+    for _ in range(n_iter):
+        lambda_block -= step_size * (nnt @ (lambda_block + lambda_sum_block - np.expand_dims(bias, axis=1)) + x_block_0)
         np.maximum(lambda_block, 0, out=lambda_block, where=~mask)
     return lambda_block
 

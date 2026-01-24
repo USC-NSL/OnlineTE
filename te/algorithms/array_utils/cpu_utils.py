@@ -39,7 +39,7 @@ with this, since if we mistakenly cast it to float, things still work fine but s
 everything takes forever and eats a lot of memory.
 """
 
-
+# TODO: We are probably being _TOO_ careful with demanding that this value start from `None`
 _CPU_DTYPE = None
 """Every Numpy array that we instantiate must adhere to this data type unless specified otherwise"""
 
