@@ -117,6 +117,8 @@ class MulticastWorkerBackend(SynchADMMWorkerBackendBase):
                             self._xid = request.xid
                         elif self.current_xid >= request.xid:
                             buffer = buffer[consumed_length:]
+                            self._gather_socket.sendto(self._last_response.SerializeToString(), addr)
+                            print(f'[{self.current_xid}] Old XID ({request.xid}) from controller. Repeating last reponse.')
                             continue
                         else:
                             self._xid = request.xid

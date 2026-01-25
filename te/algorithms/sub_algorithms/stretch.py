@@ -13,6 +13,6 @@ def get_average_stretch(commodity_list: List[Commodity], edge_based_assignment: 
     for k, commodity in enumerate(commodity_list):
         if commodity.demand <= te.constants.FLOAT_RES:
             continue
-        average_delay = aggregate[k] / commodity.demand
+        average_delay = aggregate[k] / (commodity.demand + 1e-3)
         stretch.append(average_delay / shortest_path_lens[commodity.source][commodity.destination])
     return cpu_array(stretch)

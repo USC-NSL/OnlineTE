@@ -10,24 +10,27 @@ scale_factor: 50.0
 # scale_factor: 10.0
 synch:
   num_workers: 251
+  # num_workers: 174
   # num_workers: 49
   # local: True
   mlu_backend: pdlp
   SolverParams:
-    InnerLoopRounds: 6
-    OuterLoopRounds: 100
+    InnerLoopRounds: 10
+    OuterLoopRounds: 400
     SwitchIterations: 1
     Precision: single
-    # Rho: 0.1
-    Eta: 0.1
+    # Precision: double
+    # Rho: 0.2
+    Eta: 0.2
+    # Gamma: 0.5
     # Beta: 8e-5
     X0Type: PSEUDO_INVERSE
     # X0Type: CSR_SHORTEST_PATH
   PDLPMLUParams:
     Threads: 1
-  comm_backend: mcast
-  Mcast:
-    UpdateCopyCount: 1
+  # comm_backend: mcast
+  # Mcast:
+  #   UpdateCopyCount: 1
 
 # topo: B4
 # # topo: Claranet

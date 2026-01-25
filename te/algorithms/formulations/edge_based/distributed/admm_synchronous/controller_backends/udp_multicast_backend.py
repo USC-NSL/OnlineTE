@@ -231,7 +231,8 @@ class MulticastControllerBackend(SynchADMMControllerBackendBase):
             except socket.timeout:
                 # This could be a lost packet ...
                 # Since the update is idempotent, we can just send it again
-                print(as_warning(f"Timeout on network gather ({remaining_workers}/{self.number_of_nodes} workers remaining)"))
+                print(as_warning(f"[XID: {self.current_xid}] Timeout on network gather ({len(remaining_workers)}/{self.number_of_nodes} workers remaining)"))
+                print(as_warning(f"No response from: {remaining_workers}"))
                 self._scatter_socket.sendto(packet, self.SCATTER_ADDRESS)
         if not self.is_alive:
             raise SolutionInterrupted
