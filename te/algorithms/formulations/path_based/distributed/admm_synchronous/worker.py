@@ -3,7 +3,7 @@ import time
 import numpy as np
 from typing import Optional, Tuple
 from te.algorithms.array_utils import set_global_precision
-from te.algorithms.array_utils.cpu_utils import (CPUArray, IntegerCPUArray, BooleanCPUArray, 
+from te.algorithms.array_utils.cpu_utils import (CPUArray, IntegerCPUArray, BooleanCPUArray, cpu_cast_float,
                                                  cpu_zeros, cpu_array, set_cpu_float_precision)
 from te.algorithms.formulations.edge_based.distributed.base import DistributedSolverNodeBase, DistributedSolverNodeParams
 from . import SynchADMMSolverParams

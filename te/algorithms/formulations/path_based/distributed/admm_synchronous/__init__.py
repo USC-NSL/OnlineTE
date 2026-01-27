@@ -4,9 +4,14 @@ from typing import Optional, Literal
 from dataclasses import dataclass
 from te.algorithms.base import SolverParams
 from te.algorithms.array_utils import SINGLE_PRECISION
+from numba.core.errors import NumbaTypeSafetyWarning
 
 import warnings
 warnings.filterwarnings("error")
+# TODO: This warning is raised in all of the sparse algorithms under
+#       `sub_algorithms/paths` for handling path mask multiplication
+#       and edge-based mean. See how we can resolve it.
+warnings.simplefilter('ignore', category=NumbaTypeSafetyWarning)
 """This is mostly to catch overflow, they can be devistating!"""
 
 @dataclass

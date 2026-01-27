@@ -1,24 +1,40 @@
 import os
-import contextlib
+import pickle
 import numpy as np
 import networkx as nx
+from dataclasses import dataclass
 from joblib import Parallel, delayed
 from typing import Optional, Dict, Tuple, List
 from itertools import islice
 from te import TE_PATH
 from topologies.utils import load_topology
-from te.algorithms.array_utils.cpu_utils import cpu_mmap, cpu_bool_zeros, cpu_int_zeros, IntegerCPUArray, BooleanCPUArray
-from te.algorithms.sub_algorithms.utils import (get_slice_starts_and_exclusive_ends, get_number_of_required_workers,
-                                                NUM_PROCS, TempHelper)
+from numba import njit, prange
+from te.algorithms.array_utils.cpu_utils import IntegerCPUArray, cpu_zeros
+from te.algorithms.sub_algorithms.utils import get_slice_starts_and_exclusive_ends, get_number_of_required_workers, NUM_PROCS
 from utils.logging import as_info, as_warning, as_fail, ShortTQDMEnumerate
+
+
+@dataclass
+class PathMask:
+    shape: Tuple[int, int, int]
+    rows: List[IntegerCPUArray]
+    cols: List[IntegerCPUArray]
+
+    def __post_init__(self):
+        K = self.shape[0]
+        assert len(self.rows) == K
+        assert len(self.cols) == K
+    
+    def reduce_max_path(self, new_T: int):
+        for i in range(len(self.rows)):
+            mask = self.cols[i] < new_T
+            self.cols[i] = self.cols[i][mask]
+            self.rows[i] = self.rows[i][mask]
 
 
 PATH_FOLDER = os.path.join(TE_PATH, "paths")
 MAX_NUMBER_OF_COMMODITIES_PER_CORE = 5000
 MAX_NUMBER_OF_WORKERS = min(24, NUM_PROCS)
-TEMP_FOLDER_NAME = 'K_shortest_paths'
-MEMMAP_FILE_NAME_ALPHA = 'ALPHA_KET.npy'
-MEMMAP_FILE_NAME_BETA = 'BETA_KET.npy'
 
 
 class TShortestPaths:
@@ -38,7 +54,7 @@ class TShortestPaths:
     For this, we also keep `beta_k` which is the number of available paths for the
     commodity `k`. Assignments beyond `beta_k` need to pinned to 0.
     """
-    def __init__(self, alpha: BooleanCPUArray, beta: IntegerCPUArray, edge_disjoint: bool = False,
+    def __init__(self, alpha: PathMask, beta: IntegerCPUArray, edge_disjoint: bool = False,
                  name: Optional[str] = None):
         K, N, T = alpha.shape
         assert beta.shape == (K,)
@@ -66,9 +82,8 @@ class TShortestPaths:
         return self._N
     
     @property
-    def alpha(self) -> np.ndarray:
-    # def alpha(self) -> COO3D:
-        """Path matrix, a boolean `K x N x T` array"""
+    def alpha(self) -> PathMask:
+        """Path matrix, a boolean `K x N x T` array (although stored as NNZ indices)"""
         assert self._alpha_k is not None
         return self._alpha_k
     
@@ -92,13 +107,19 @@ class TShortestPaths:
         assert self._name is None
         self._name = name
     
+    def downscale(self, new_T: int):
+        assert new_T < self.T
+        self.alpha.reduce_max_path(new_T)
+        np.clip(self.beta, a_min=0, a_max=new_T, out=self.beta)
+        self._T = new_T
+    
     @property
     def file_name(self) -> str:
         if self._name is None:
             name = "paths"
         else:
             name = self._name
-        return f"{name}.npz" if not self._edge_disjoint else f"{name}_disjoint.npz"
+        return f"{name}.pkl" if not self._edge_disjoint else f"{name}_disjoint.pkl"
 
     @staticmethod
     def _get_paths(edge_indexing: Dict[Tuple[int, int], int], 
@@ -106,9 +127,10 @@ class TShortestPaths:
                    edge_disjoint: bool,
                    graph: nx.DiGraph,
                    commodity_slice: List[Tuple[int, int]], 
-                   alpha_slice: np.ndarray, 
-                   beta_slice: np.ndarray,
-                   index: Optional[int] = 0):
+                   index: Optional[int] = 0) -> Tuple[List[IntegerCPUArray], List[IntegerCPUArray], IntegerCPUArray]:
+        alpha_rows_slice = []
+        alpha_cols_slice = []
+        beta_slice = IntegerCPUArray(shape=(len(commodity_slice),))
         if index == 0:
             enum = ShortTQDMEnumerate(commodity_slice)
         else:
@@ -116,19 +138,22 @@ class TShortestPaths:
         for k, item in enum:
             src, dst = item
             assert src != dst
-            if not edge_disjoint:
-                for t, path in enumerate(islice(nx.shortest_simple_paths(graph, src, dst), max_paths)):
-                    for i in range(len(path) - 1):
-                        alpha_slice[k, edge_indexing[(path[i], path[i+1])], t] = True
-            else:
-                for t, path in enumerate(islice(sorted(nx.edge_disjoint_paths(graph, src, dst), key=lambda path: len(path)), max_paths)):
-                    for i in range(len(path) - 1):
-                        alpha_slice[k, edge_indexing[(path[i], path[i+1])], t] = True
+            rows = []
+            cols = []
+            path_enum = enumerate(islice(nx.shortest_simple_paths(graph, src, dst), max_paths)) if not edge_disjoint else \
+                        enumerate(islice(sorted(nx.edge_disjoint_paths(graph, src, dst), key=lambda path: len(path)), max_paths))
+            for t, path in path_enum:
+                for i in range(len(path) - 1):
+                    rows.append(edge_indexing[(path[i], path[i+1])])
+                    cols.append(t)
+            alpha_rows_slice.append(np.array(rows, dtype=np.int32))
+            alpha_cols_slice.append(np.array(cols, dtype=np.int32))
             beta_slice[k] = t+1
+        return alpha_rows_slice, alpha_cols_slice, beta_slice
 
     @staticmethod
     def get_expected_file_name_for_topology(topo_name: str, edge_disjoint: bool):
-        return f"{topo_name}.npz" if not edge_disjoint else f"{topo_name}_disjoint.npz"
+        return f"{topo_name}.pkl" if not edge_disjoint else f"{topo_name}_disjoint.pkl"
 
     def get_initial_total_flow(self, demands: np.ndarray) -> np.ndarray:
         """
@@ -141,8 +166,8 @@ class TShortestPaths:
     def make_from_graph(cls, graph: nx.DiGraph, T: int, edge_disjoint: bool = False):
         """Create a path object from an arbitrary graph"""
         M = graph.number_of_nodes()
-        K = M * (M - 1)
         N = graph.number_of_edges()
+        K = M * (M - 1)
         EDGE_INDEXING = {edge: e for e, edge in enumerate(graph.edges(data=False))}
         slices = get_slice_starts_and_exclusive_ends(K, MAX_NUMBER_OF_WORKERS, MAX_NUMBER_OF_COMMODITIES_PER_CORE)
         commodities = []
@@ -153,27 +178,21 @@ class TShortestPaths:
                 commodities.append((src, dst))
 
         if K <= MAX_NUMBER_OF_COMMODITIES_PER_CORE:
-            alpha_k = cpu_bool_zeros((K, N, T))
-            beta_k = cpu_int_zeros((K,))
-            TShortestPaths._get_paths(EDGE_INDEXING, T, edge_disjoint, graph, commodities, alpha_k, beta_k)
+            rows, cols, beta_k = TShortestPaths._get_paths(EDGE_INDEXING, T, edge_disjoint, graph, commodities)
+            betas = [beta_k]
         else:
-            with contextlib.closing(TempHelper(TEMP_FOLDER_NAME)) as tp:
-                alpha_path = tp.get_file_path(MEMMAP_FILE_NAME_ALPHA)
-                beta_path = tp.get_file_path(MEMMAP_FILE_NAME_BETA)
-                ALPHA_KET = cpu_mmap(alpha_path, (K, N, T), 'w+', bool)
-                BETA_K = cpu_mmap(beta_path, (K,), 'w+', np.int32)
-                nprocs = get_number_of_required_workers(K, MAX_NUMBER_OF_WORKERS, MAX_NUMBER_OF_COMMODITIES_PER_CORE)
-                print(as_info(f'Spawning {nprocs} workers to get path assignments'))
-                Parallel(n_jobs=nprocs)\
-                    (delayed(TShortestPaths._get_paths)\
-                        (EDGE_INDEXING, T, edge_disjoint, graph, commodities[item[0]:item[1]], 
-                         ALPHA_KET[item[0]:item[1], :, :], 
-                         BETA_K[item[0]:item[1]], index)
-                        for index, item in enumerate(slices))
-                del ALPHA_KET
-                del BETA_K
-                alpha_k: BooleanCPUArray = np.load(alpha_path, allow_pickle=False)
-                beta_k: IntegerCPUArray = np.load(beta_path, allow_pickle=False)
+            nprocs = get_number_of_required_workers(K, MAX_NUMBER_OF_WORKERS, MAX_NUMBER_OF_COMMODITIES_PER_CORE)
+            print(as_info(f'Spawning {nprocs} workers to get path assignments'))
+            ls = Parallel(n_jobs=nprocs)(delayed(TShortestPaths._get_paths)\
+                (EDGE_INDEXING, T, edge_disjoint, graph, commodities[item[0]:item[1]], index)
+                for index, item in enumerate(slices))
+            rows, cols, betas = [], [], []
+            for row, col, beta in ls:
+                rows.extend(row)
+                cols.extend(col)
+                betas.extend(beta)
+        alpha_k = PathMask((K, N, T), rows, cols)
+        beta_k = np.hstack(betas)
         return cls(alpha_k, beta_k, edge_disjoint)
     
     @classmethod
@@ -182,71 +201,43 @@ class TShortestPaths:
         obj = cls.make_from_graph(graph, T, edge_disjoint)
         obj.set_name(topo_name)
         return obj
+    
+    def as_dict(self):
+        d = {
+            'shape': self.alpha.shape,
+            'beta': self.beta,
+            'edge_disjoint': self.edge_disjoint
+        }
+        d.update({f'rows_{k}': self.alpha.rows[k] for k in range(self.K)})
+        d.update({f'cols_{k}': self.alpha.cols[k] for k in range(self.K)})
+        return d
 
-    def save(self, compressed: bool = False):
-        """Save the `alpha` and `beta` arrays in `.npz` format"""
+    def save(self):
         if not os.path.exists(PATH_FOLDER):
             os.mkdir(PATH_FOLDER)
-        save_fn = np.savez if not compressed else np.savez_compressed
-        save_fn(
-            os.path.join(PATH_FOLDER, self.file_name),
-            alpha = self.alpha,
-            beta = self.beta,
-            edge_disjoint = self.edge_disjoint
-        )
+        with open(os.path.join(PATH_FOLDER, self.file_name), 'wb') as f:
+            pickle.dump(self, f)
     
-    @classmethod
-    def load_from_file(cls, file_name: str, T: Optional[int] = None):
-        if file_name.endswith('.npz'):
-            name = file_name[:-4]
-        path = os.path.join(PATH_FOLDER, f'{name}.npz')
+    @staticmethod
+    def load_from_file(file_name: str, T: Optional[int] = None):
+        if file_name.endswith('.pkl'):
+            file_name = file_name[:-4]
+        path = os.path.join(PATH_FOLDER, f'{file_name}.pkl')
         try:
-            loader = np.load(path)
-            alpha = loader['alpha']
-            beta = loader['beta']
-            edge_disjoint = loader['edge_disjoint']
+            with open(path, 'rb') as f:
+                obj: TShortestPaths = pickle.load(f)
         except (OSError, FileNotFoundError):
             return None
-        _, _, t = np.shape(alpha)
+        t = obj.T
         if T is not None:
             if t < T:
                 raise ValueError(as_fail(f'Given path file does not contain enough paths! ({t} < {T})'))
             elif t > T:
                 print(as_warning(f'Will only use the first {T} paths (instead of total {t})'))
+                obj.downscale(T)
         else:
             print(as_info(f"File defines {t} paths at most"))
-        alpha_k = alpha[:, :, :T]
-        beta_k = np.clip(beta, a_min=0, a_max=T)
-        return cls(alpha_k, beta_k, edge_disjoint, name)
-    
-    def scale_down(self, new_T: int):
-        """
-        Change the maximum number of paths to a smaller value.
-
-        Note
-        ----
-        This is a very lazy function. It merely changes the view into the
-        `alpha` array, it does not reclaim the allocated memory.
-        """
-        # TODO: Fix the above.
-        assert new_T < self.T
-        self._alpha_k = self._alpha_k[:, :, :new_T]
-        self._beta_k = np.clip(self._beta_k, a_min=0, a_max=new_T)
-        self._T = new_T
-
-
-def path_based_to_edge_based(Y_tk: np.ndarray, alpha: np.ndarray, D_k: np.ndarray) -> np.ndarray:
-    """
-    Given the path-based assignment `Y_tk` over paths described by the `alpha`
-    matrix. Remember that `alpha` is a 3D matrix where the first axis indexes 
-    over commodities, and the inner two axis index over edge and path index.
-    To produce an edge-based assignment, we would do:
-
-        X_ek = sum_t (alpha_ket Y_tk D_k)
-    
-    This translates succiently into an Einstein sum.
-    """
-    return np.einsum('kij,jk,k->ik', alpha, Y_tk, D_k)
+        return obj
 
 
 def get_path_unavailability_mask(beta: np.ndarray, T: int) -> np.ndarray:
@@ -269,8 +260,7 @@ def random_path_assignment(K: int, T: int, beta: np.ndarray, seed: Optional[int]
     sums = np.sum(Y_tk, axis=0)
     return Y_tk / sums[np.newaxis, :]
 
-
-def get_or_make_path_object_for_topology_name(topo_name: str, T: int, edge_disjoint: bool, compress_if_new: bool = False):
+def get_or_make_path_object_for_topology_name(topo_name: str, T: int, edge_disjoint: bool):
     recompute = False
     expected_name = TShortestPaths.get_expected_file_name_for_topology(topo_name, edge_disjoint)
     try:
@@ -291,10 +281,212 @@ def get_or_make_path_object_for_topology_name(topo_name: str, T: int, edge_disjo
     finally:
         if recompute:
             obj = TShortestPaths.make_from_topo_name(topo_name, T, edge_disjoint)
-            obj.save(compress_if_new)
+            obj.save()
         else:
             print(as_info(f"Path object {expected_name} was loaded without computation."))
         return obj
+
+
+"""
+The following functions implement matrix multiplication with the path mask
+array `alpha` in an efficient manner.
+Without these, multiplication would be done with `Numpy` which calls generic
+`BLAS` backends, and these backends would be extremely inefficient since:
+- They would implicitly case `alpha` to a `float` array during multiplication.
+- They would not take advantage of `alpha` being sparse.
+These implementations can make efficient use of both of these properties. In
+particular:
+- Knowing `alpha` is Boolean valued, reduces multiplications to a branch statement. These
+  branch statements are efficient since miss-predictions are rare because of `alpha` being
+  sparse.
+- Branch miss-predictions can be removed entirely by just iterating over non-zero elements
+  of `alpha`. Since `alpha` is Boolean valued and indices are 32-bit integers at least, doing
+  this can increase memory usage as it effectively use 64 bits of data to address 1 bit, but
+  on larger topologies, `alpha` is even more sparse (on `Kdl`, less than 1 percent of the
+  entries in `alpha` are `True`).
+"""
+
+
+@njit(parallel=True)
+def get_initial_total_flow_nnz(rows: List[np.ndarray], cols: List[np.ndarray], shape: Tuple[int, int, int], D_k: np.ndarray) -> np.ndarray:
+    """
+    Returns the total flow over each edge, when all commodities are
+    routed evenly on all paths.
+    """
+    K, N, T = shape
+    output = np.zeros((N,), dtype=D_k.dtype)
+    for k in prange(K):
+        tmp = np.zeros((N,), dtype=D_k.dtype)
+        d_val = D_k[k]/T
+        row = rows[k]
+        nnz = len(row)
+        if nnz == 0:
+            continue
+        for i in range(nnz):
+            n = row[i]
+            tmp[n] += d_val
+        output += tmp
+    return output
+
+
+@njit(parallel=True)
+def path_based_to_edge_based_nnz(Y_tk: np.ndarray, rows: List[np.ndarray], cols: List[np.ndarray], N: int, D_k: np.ndarray) -> np.ndarray:
+    """
+    Implements `D_k * alpha_k Y_k` for each `k` by iterating over non-zero entries.
+    On larger topologies, this implementation greatly outperforms `path_based_to_edge_based`.
+    """
+    K = len(rows)
+    output = np.zeros((N, K), dtype=Y_tk.dtype)
+    
+    for k in prange(K):
+        d_val = D_k[k]
+        row = rows[k]
+        col = cols[k]
+        nnz = len(row)
+        if nnz == 0:
+            continue
+        for i in range(nnz):
+            n = row[i]
+            t = col[i]
+            output[n, k] += Y_tk[t, k] * d_val 
+    return output
+
+
+@njit(parallel=True)
+def path_based_to_edge_based_mean_nnz(Y_tk: np.ndarray, rows: List[np.ndarray], cols: List[np.ndarray], N: int, D_k: np.ndarray) -> np.ndarray:
+    """
+    Implements `D_k * alpha_k Y_k` averaged over all `k` by only iterating non-zero entries.
+    On larger topologies, this implementation greatly outperforms `path_based_to_edge_based_mean`.
+    """
+    K = len(rows)
+    output = np.zeros((N,), dtype=Y_tk.dtype)
+
+    for k in prange(K):
+        d_val = D_k[k]
+        row = rows[k]
+        col = cols[k]
+        nnz = len(row)
+        tmp = np.zeros((N,), dtype=Y_tk.dtype)
+        for i in range(nnz):
+            n = row[i]
+            t = col[i]
+            tmp[n] += d_val * Y_tk[t, k]
+        output += tmp
+    return output / K
+
+
+@njit(parallel=True)
+def path_based_projection_nnz(Y_tk: np.ndarray, rows: List[np.ndarray], cols: List[np.ndarray], N: int, D_k: np.ndarray) -> np.ndarray:
+    """
+    Implements `D_k^2 * (alpha_k^T alpha_k) Y_k` for each `k` by only iterating non-zero entries.
+    """
+    T, K = Y_tk.shape
+    output = np.zeros((T, K), dtype=Y_tk.dtype)
+
+    for k in prange(K):
+        d_val = D_k[k]
+        row = rows[k]
+        col = cols[k]
+        nnz = len(row)
+        tmp = np.zeros((N,), dtype=Y_tk.dtype)
+        for i in range(nnz):
+            n = row[i]
+            t = col[i]
+            tmp[n] += Y_tk[t, k]
+        for i in range(nnz):
+            n = row[i]
+            t = col[i]
+            output[t, k] += tmp[n] * d_val ** 2
+    return output
+
+
+@njit
+def path_based_transpose_product_nnz(X_ek: np.ndarray, rows: List[np.ndarray], cols: List[np.ndarray], T: int, D_k: np.ndarray):
+    _, K = X_ek.shape
+    output = np.zeros((K, T), dtype=X_ek.dtype)
+    for k in prange(K):
+        d_val = D_k[k]
+        row = rows[k]
+        col = cols[k]
+        nnz = len(row)
+        for i in range(nnz):
+            n = row[i]
+            t = col[i]
+            output[k, t] += X_ek[n, k] * d_val
+    return output.T
+
+
+def warm_start_jit(rows: List[np.ndarray], cols: List[np.ndarray], shape: Tuple[int, int, int]):
+    K, N, T = shape
+    D_k = cpu_zeros((K,))
+    X_ek = cpu_zeros((N, K))
+    Y_tk = cpu_zeros((T, K))
+    get_initial_total_flow_nnz(rows, cols, shape, D_k)
+    path_based_to_edge_based_nnz(Y_tk, rows, cols, N, D_k)
+    path_based_to_edge_based_mean_nnz(Y_tk, rows, cols, N, D_k)
+    path_based_projection_nnz(Y_tk, rows, cols, N, D_k)
+    path_based_transpose_product_nnz(X_ek, rows, cols, T, D_k)
+
+
+"""
+The following are older implementations with a dense `alpha`.
+At some point, they were used for debugging ...
+"""
+# @njit(paralel=True)
+# def get_initial_total_flow(alpha: np.ndarray, D_k: np.ndarray) -> np.ndarray:
+#     """
+#     Returns the total flow over each edge, when all commodities are
+#     routed evenly on all paths.
+#     """
+#     K, N, T = alpha.shape
+#     output = cpu_zeros((N,))
+#     for k in prange(K):
+#         d_val = D_k[k]/T
+#         for n in prange(N):
+#             acc = 0.0
+#             for t in range(T):
+#                 if alpha[k, n, t]:
+#                     acc += d_val
+#             output[n] += acc
+#     return output
+
+# @njit(parallel=True)
+# def path_based_to_edge_based(Y_tk: np.ndarray, alpha: np.ndarray, D_k: np.ndarray) -> np.ndarray:
+#     """
+#     Efficiently implements `D_k * alpha_k Y_k` for each `k`.
+#     This quickly translates path-based assignments to edge-based.
+#     """
+#     K, N, T = alpha.shape
+#     output = np.zeros((N, K), dtype=Y_tk.dtype)
+    
+#     for k in prange(K):
+#         d_val = D_k[k]
+#         for n in prange(N):
+#             acc = 0.0
+#             for t in range(T):
+#                 if alpha[k, n, t]:
+#                     acc += Y_tk[t, k]
+#             output[n, k] = acc * d_val
+#     return output
+
+# @njit(parallel=True)
+# def path_based_to_edge_based_mean(Y_tk: np.ndarray, alpha: np.ndarray, D_k: np.ndarray) -> np.ndarray:
+#     """
+#     Efficiently implements `D_k * alpha_k Y_k` averaged over all `k`.
+#     This quickly returns the mean edge-based assignment from the path-based assignments.
+#     """
+#     K, N, T = alpha.shape
+#     output = np.zeros((N,), dtype=Y_tk.dtype)
+
+#     for n in prange(N):
+#         for k in prange(K):
+#             d_val = D_k[k]
+#             acc = 0.0
+#             for t in range(T):
+#                 if alpha[k, n, t]:
+#                     acc += Y_tk[t, k]
+#             output[n] += acc * d_val
+#     return output / K
 
 
 if __name__ == '__main__':
@@ -303,7 +495,6 @@ if __name__ == '__main__':
     parser.add_argument('topo_name', type=str, help='Topology name (without the postfix of .json, .gml, etc.)')
     parser.add_argument('T', type=int, help='Maximum number of paths per commodity')
     parser.add_argument('--disjoint', action='store_true', help='Use only edge-disjoint paths')
-    parser.add_argument('--compress', action='store_true', help='Compress the result in case we compute a new array and need to save it')
     args = parser.parse_args()
 
     get_or_make_path_object_for_topology_name(args.topo_name, args.T, args.disjoint)

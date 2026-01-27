@@ -20,7 +20,7 @@ from te.algorithms.sub_algorithms.admm import ADMMWrapper
 from te.algorithms.sub_algorithms.admm_consensus_test import outer_admm_consensus_test, inner_admm_consensus_test
 from te.algorithms.sub_algorithms.link_capacity_test import check_capacity_constraint
 from te.algorithms.sub_algorithms.flow_conservation_test import check_flow_conservation
-from te.algorithms.sub_algorithms.paths import TShortestPaths
+from te.algorithms.sub_algorithms.paths import TShortestPaths, get_or_make_path_object_for_topology_name
 from te.algorithms.statistics.helpers import record_cpu_runtime, record_return_value
 from . import SynchADMMSolverParams
 from .base import SynchADMMControllerBackendBase
@@ -43,7 +43,7 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
         self._graph = problem_description.Graph
         self._M = get_graph_M_matrix(self._graph)
         self._traffic = problem_description.TM
-        self._solver_params = solver_params
+        self._solver_params: SynchADMMSolverParams = solver_params
         self._rng = np.random.default_rng(seed=solver_params.TMSeed)
         self._commodity_list = traffic_to_commodity(self._traffic)
 
@@ -90,8 +90,12 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
             raise SolutionInterrupted
         print(as_success("All worker nodes are reachable"))
         # First, load all path configurations
-        self._path_object = TShortestPaths.load(graph=self._graph, T=self._solver_params.NumberOfPathsPerCommodity,
-                                                topo_name=self._problem_description.EvalParams.TopologyName)
+        self._path_object = get_or_make_path_object_for_topology_name(
+            topo_name=self._problem_description.EvalParams.TopologyName,
+            T=self._solver_params.NumberOfPathsPerCommodity,
+            # TODO: Add option for this ...
+            edge_disjoint=False
+        )
         # Set the demands
         self._D_k: np.ndarray = cpu_array([commodity.demand for commodity in self._commodity_list])
         # Initialize the algorithm
@@ -189,6 +193,7 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
     def _make_variables(self):
         assert self._mlu_solver is not None
         self._mlu_solver._make_variables()
+
     def _get_F(self) -> np.ndarray:
         return self._outer_admm_wrapper.get_X_step_bias()
     
@@ -214,8 +219,9 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
         # TODO: Try to make the workers return aggregate flows as well
         # max_run, self._Y_bar_t = self.backend.do_network_update(epoch)
         max_run, self._sharing_mean_1 = self.backend.do_network_update(epoch)
-        return max_run
-    
+        return max_run * 1000
+
+    @record_cpu_runtime('Sharing-Mean')
     def _update_sharing_mean(self):
         assert self._mlu_solver is not None
 
@@ -311,7 +317,11 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
                     float(get_solution_maximum_utilization(self._X_ek_sum_e, self._graph))
                 )
                 # Inner loop infeasibility is usually very small, no need to bother with it!
-                self._objective_gap_trace.append(self._outer_admm_wrapper.infeasibility)
+                err = self._outer_admm_wrapper.infeasibility
+                self._objective_gap_trace.append(err)
+                if err < PARAMS.ConvTol:
+                    print(as_success("Crossed the convergance bound. Breaking early ..."))
+                    break
             self._set_X_ek()
             return time.time() - t
         except ControllerMLUException as e:
@@ -346,7 +356,7 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
             congested_ratio=congested_ratio,
             unsat_commodities=unsat_commodities,
             congested_links=congested_links,
-            density=np.count_nonzero(np.clip(X_EK)) / X_EK.size
+            density=np.count_nonzero(X_EK) / X_EK.size
         )
 
     def get_solution_commodity_list(self) -> List[Tuple[Commodity, Commodity]]:
