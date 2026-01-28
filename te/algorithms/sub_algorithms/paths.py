@@ -9,7 +9,7 @@ from itertools import islice
 from te import TE_PATH
 from topologies.utils import load_topology
 from numba import njit, prange
-from te.algorithms.array_utils.cpu_utils import IntegerCPUArray, cpu_zeros
+from te.algorithms.array_utils.cpu_utils import IntegerCPUArray, cpu_zeros, cpu_int_zeros
 from te.algorithms.sub_algorithms.utils import get_slice_starts_and_exclusive_ends, get_number_of_required_workers, NUM_PROCS
 from utils.logging import as_info, as_warning, as_fail, ShortTQDMEnumerate
 
@@ -24,12 +24,16 @@ class PathMask:
         K = self.shape[0]
         assert len(self.rows) == K
         assert len(self.cols) == K
+        # Check the first element at least to be kind of sure ....
+        assert self.rows[0].dtype == np.int32
+        assert self.cols[0].dtype == np.int32
     
     def reduce_max_path(self, new_T: int):
         for i in range(len(self.rows)):
             mask = self.cols[i] < new_T
             self.cols[i] = self.cols[i][mask]
             self.rows[i] = self.rows[i][mask]
+        self.shape = (self.shape[0], self.shape[1], new_T)
 
 
 PATH_FOLDER = os.path.join(TE_PATH, "paths")
@@ -130,7 +134,7 @@ class TShortestPaths:
                    index: Optional[int] = 0) -> Tuple[List[IntegerCPUArray], List[IntegerCPUArray], IntegerCPUArray]:
         alpha_rows_slice = []
         alpha_cols_slice = []
-        beta_slice = IntegerCPUArray(shape=(len(commodity_slice),))
+        beta_slice = cpu_int_zeros((len(commodity_slice),))
         if index == 0:
             enum = ShortTQDMEnumerate(commodity_slice)
         else:
@@ -154,13 +158,6 @@ class TShortestPaths:
     @staticmethod
     def get_expected_file_name_for_topology(topo_name: str, edge_disjoint: bool):
         return f"{topo_name}.pkl" if not edge_disjoint else f"{topo_name}_disjoint.pkl"
-
-    def get_initial_total_flow(self, demands: np.ndarray) -> np.ndarray:
-        """
-        Returns the total flow over each edge, when all commodities are
-        routed on the first path.
-        """
-        return np.einsum('ij,i->j', self._alpha_k[:, :, 0], demands)
     
     @classmethod
     def make_from_graph(cls, graph: nx.DiGraph, T: int, edge_disjoint: bool = False):
@@ -201,16 +198,6 @@ class TShortestPaths:
         obj = cls.make_from_graph(graph, T, edge_disjoint)
         obj.set_name(topo_name)
         return obj
-    
-    def as_dict(self):
-        d = {
-            'shape': self.alpha.shape,
-            'beta': self.beta,
-            'edge_disjoint': self.edge_disjoint
-        }
-        d.update({f'rows_{k}': self.alpha.rows[k] for k in range(self.K)})
-        d.update({f'cols_{k}': self.alpha.cols[k] for k in range(self.K)})
-        return d
 
     def save(self):
         if not os.path.exists(PATH_FOLDER):
@@ -308,16 +295,16 @@ particular:
 
 
 @njit(parallel=True)
-def get_initial_total_flow_nnz(rows: List[np.ndarray], cols: List[np.ndarray], shape: Tuple[int, int, int], D_k: np.ndarray) -> np.ndarray:
+def get_initial_total_flow_nnz(rows: List[np.ndarray], beta: np.ndarray, shape: Tuple[int, int, int], D_k: np.ndarray) -> np.ndarray:
     """
     Returns the total flow over each edge, when all commodities are
     routed evenly on all paths.
     """
-    K, N, T = shape
+    K, N, _ = shape
     output = np.zeros((N,), dtype=D_k.dtype)
     for k in prange(K):
         tmp = np.zeros((N,), dtype=D_k.dtype)
-        d_val = D_k[k]/T
+        d_val = D_k[k]/beta[k]
         row = rows[k]
         nnz = len(row)
         if nnz == 0:
@@ -416,16 +403,33 @@ def path_based_transpose_product_nnz(X_ek: np.ndarray, rows: List[np.ndarray], c
     return output.T
 
 
-def warm_start_jit(rows: List[np.ndarray], cols: List[np.ndarray], shape: Tuple[int, int, int]):
+@njit
+def path_based_transpose_vector_product_nnz(X_e: np.ndarray, rows: List[np.ndarray], cols: List[np.ndarray], T: int, D_k: np.ndarray):
+    K = D_k.shape[0]
+    output = np.zeros((K, T), dtype=X_e.dtype)
+    for k in prange(K):
+        d_val = D_k[k]
+        row = rows[k]
+        col = cols[k]
+        nnz = len(row)
+        for i in range(nnz):
+            n = row[i]
+            t = col[i]
+            output[k, t] += X_e[n] * d_val
+    return output.T
+
+
+def warm_start_jit(rows: List[np.ndarray], cols: List[np.ndarray], shape: Tuple[int, int, int], beta: IntegerCPUArray):
     K, N, T = shape
     D_k = cpu_zeros((K,))
     X_ek = cpu_zeros((N, K))
     Y_tk = cpu_zeros((T, K))
-    get_initial_total_flow_nnz(rows, cols, shape, D_k)
+    get_initial_total_flow_nnz(rows, beta, shape, D_k)
     path_based_to_edge_based_nnz(Y_tk, rows, cols, N, D_k)
     path_based_to_edge_based_mean_nnz(Y_tk, rows, cols, N, D_k)
     path_based_projection_nnz(Y_tk, rows, cols, N, D_k)
     path_based_transpose_product_nnz(X_ek, rows, cols, T, D_k)
+    path_based_transpose_vector_product_nnz(X_ek[:, 0], rows, cols, T, D_k)
 
 
 """

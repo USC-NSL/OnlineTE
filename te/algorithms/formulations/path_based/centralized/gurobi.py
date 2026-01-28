@@ -10,7 +10,7 @@ from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
 from te.algorithms.sub_algorithms.link_capacity_test import check_capacity_constraint
 from te.algorithms.sub_algorithms.flow_conservation_test import check_flow_conservation
 from utils.logging import as_info, as_fail, ShortTQDMEnumerate, ShortTQDM
-from te.algorithms.sub_algorithms.paths import TShortestPaths, path_based_to_edge_based
+from te.algorithms.sub_algorithms.paths import TShortestPaths, path_based_to_edge_based_nnz, get_or_make_path_object_for_topology_name
 from ...edge_based.centralized import make_model
 from . import GurobiPathBasedSolverParams
 
@@ -29,6 +29,7 @@ class GurobiPathBasedTE(TrafficEngineeringLP):
         self._commodity_list: List[Commodity] = traffic_to_commodity(self._traffic)
         self._X_ek: Optional[np.ndarray] = None
         self._splits: Optional[np.ndarray] = None
+        self._capacities: List[float] = [c_e for _, _, c_e in self._graph.edges.data('capacity')]
 
         self._path_object: Optional[TShortestPaths] = None
         self._demands: np.ndarray = np.array([commodity.demand for commodity in self._commodity_list])
@@ -37,10 +38,10 @@ class GurobiPathBasedTE(TrafficEngineeringLP):
         self._initialize()
     
     def _initialize(self):
-        self._path_object = TShortestPaths.load(
-            graph=self._graph, 
+        self._path_object = get_or_make_path_object_for_topology_name(
+            topo_name=self._problem_description.EvalParams.TopologyName,
             T=self._solver_params.NumberOfPathsPerCommodity,
-            topo_name=self._problem_description.EvalParams.TopologyName
+            edge_disjoint=False
         )
     
     @property
@@ -89,17 +90,16 @@ class GurobiPathBasedTE(TrafficEngineeringLP):
         raise NotImplementedError
 
     def _set_X_ek(self):
-        K = len(self._commodity_list)
-        T = self._solver_params.NumberOfPathsPerCommodity
+        ALPHA_K = self._path_object.alpha
+        K, N, T = ALPHA_K.shape
         ASSIGNMENTS = self._Y_tk
         DEMANDS = self._demands
         Y_TK = np.ndarray(shape=(T, K))
-        ALPHA_K = self._path_object.alpha
         for k in range(K):
             for t in range(T):
                 Y_TK[t, k] = ASSIGNMENTS[(t, k)].X
         self._splits = Y_TK
-        self._X_ek = path_based_to_edge_based(Y_TK, ALPHA_K, DEMANDS)
+        self._X_ek = path_based_to_edge_based_nnz(Y_TK, ALPHA_K.rows, ALPHA_K.cols, N, DEMANDS)
     
     def _make_variables(self):
         assert self._model is None and self._Y_tk is None
@@ -122,28 +122,36 @@ class GurobiPathBasedTE(TrafficEngineeringLP):
     def _add_constraints(self):
         assert self._model is not None and self._Y_tk is not None
 
-        T = self._solver_params.NumberOfPathsPerCommodity
         MODEL = self._model
-        GRAPH = self._graph
         Y_TK = self._Y_tk
+        CAPS = self._capacities
         ALPHA_K = self._path_object.alpha
         BETA_K = self._path_object.beta
         UTILITY = self._utility
         COMMODITIES = self._commodity_list
-        K = len(COMMODITIES)
+        K, N, T = ALPHA_K.shape
 
         # Capacity constraint
         print(as_info("Adding capacity constraints"))
-        capacity_constraints: List[gurobipy.Constr] = []
-        for e, (_, _, c_e) in ShortTQDMEnumerate(GRAPH.edges.data('capacity')):
-            total_flow = gurobipy.LinExpr()
-            for k, commodity in enumerate(COMMODITIES):
-                D_K = commodity.demand
-                for t in range(T):
-                    if ALPHA_K[k, e, t]:
-                        total_flow.addTerms(D_K, Y_TK[(t, k)])
-            capacity_constraints.append(MODEL.addConstr(total_flow <= UTILITY * c_e))
-        self._capacity_constraints = capacity_constraints
+        # for e, (_, _, c_e) in ShortTQDMEnumerate(GRAPH.edges.data('capacity')):
+        #     total_flow = gurobipy.LinExpr()
+        #     for k, commodity in enumerate(COMMODITIES):
+        #         D_K = commodity.demand
+        #         for t in range(T):
+        #             if ALPHA_K[k, e, t]:
+        #                 total_flow.addTerms(D_K, Y_TK[(t, k)])
+        #     capacity_constraints.append(MODEL.addConstr(total_flow <= UTILITY * c_e))
+        total_flows = [gurobipy.LinExpr() for _ in range(N)]
+        for k, commodity in ShortTQDMEnumerate(COMMODITIES):
+            D_K = commodity.demand
+            rows = ALPHA_K.rows[k]
+            cols = ALPHA_K.cols[k]
+            nnz = len(rows)
+            for i in range(nnz):
+                e = rows[i]
+                t = cols[i]
+                total_flows[e].addTerms(D_K, Y_TK[(t, k)])
+        self._capacity_constraints = [MODEL.addConstr(total_flow <= UTILITY * CAPS[e]) for e, total_flow in enumerate(total_flows)]
 
         # Demand constraint
         print(as_info("Adding demand constraints"))
@@ -214,7 +222,7 @@ class GurobiPathBasedTE(TrafficEngineeringLP):
             congested_ratio=congested_ratio,
             unsat_commodities=unsat_commodities,
             congested_links=congested_links,
-            density=np.count_nonzero(np.clip(self._X_ek)) / self._X_ek.size
+            density=np.count_nonzero(self._X_ek) / self._X_ek.size
         )
     
     def get_solution_commodity_list(self) -> List[Tuple[Commodity, Commodity]]:

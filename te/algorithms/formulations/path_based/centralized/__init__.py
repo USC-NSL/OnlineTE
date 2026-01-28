@@ -4,4 +4,4 @@ from ...edge_based.centralized import GurobiSolverParams
 
 @dataclass
 class GurobiPathBasedSolverParams(GurobiSolverParams):
-    NumberOfPathsPerCommodity: int = 16
+    NumberOfPathsPerCommodity: int = 8

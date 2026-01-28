@@ -1,6 +1,8 @@
 from te.algorithms.formulations.helper import *
 # TODO: Replace this with the `distributed.aggregate import *` when that file is ready ...
 from te.algorithms.formulations.path_based.distributed.admm_synchronous.helper import *
+# TODO: Fix this import. We shouldn't need it just to unpickle the paths ...
+from te.algorithms.sub_algorithms.paths import TShortestPaths, PathMask # noqa
 
 
 if __name__ == '__main__':

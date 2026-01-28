@@ -1,4 +1,5 @@
 import grpc
+import asyncio
 import protos.path_based_distributed_lp.path_based_distributed_lp_pb2 as distributed_lp_messages
 from typing import Optional, Iterator
 from dataclasses import dataclass
@@ -79,8 +80,14 @@ class NetworkWorkerNodeListener(DistributedADMMSolverServicer):
         self._backend = backend
         self._id = backend.worker_id
     
-    def SetAlpha(self, request_iterator: Iterator[array_messages.Chunk], context):
-        self._backend.set_path_mask(rebuild_chunked_array(request_iterator))
+    def SetAlphaShape(self, request: array_messages.ArrayShape, context):
+        self._backend.set_path_mask_shape(tuple(request.dims))
+        return Empty()
+    def SetAlphaRows(self, request_iterator: Iterator[array_messages.SerializedNumpyArrayMessage], context):
+        self._backend.set_path_mask_rows(serialized_message_to_array_list(request_iterator))
+        return Empty()
+    def SetAlphaCols(self, request_iterator: Iterator[array_messages.SerializedNumpyArrayMessage], context):
+        self._backend.set_path_mask_cols(serialized_message_to_array_list(request_iterator))
         return Empty()
     def SetBeta(self, request_iterator: Iterator[array_messages.Chunk], context):
         self._backend.set_path_count(rebuild_chunked_array(request_iterator))
@@ -123,4 +130,8 @@ class NetworkWorkerNodeListener(DistributedADMMSolverServicer):
     
     def SetActiveCommodityCount(self, request: distributed_lp_messages.ActiveCommodityCount, context):
         self._backend.set_active_commodity_count(request.TotalNumberOfCommodities)
+        return Empty()
+    
+    def JITWarmStart(self, request, context):
+        self._backend.jit_warmstart()
         return Empty()

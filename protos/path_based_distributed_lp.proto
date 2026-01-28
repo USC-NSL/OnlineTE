@@ -4,7 +4,9 @@ import "array.proto";
 
 
 service DistributedADMMSolver {
-    rpc SetAlpha(stream Chunk) returns (google.protobuf.Empty) {}
+    rpc SetAlphaShape(ArrayShape) returns (google.protobuf.Empty) {}
+    rpc SetAlphaRows(stream SerializedNumpyArrayMessage) returns (google.protobuf.Empty) {}
+    rpc SetAlphaCols(stream SerializedNumpyArrayMessage) returns (google.protobuf.Empty) {}
     rpc SetBeta(stream Chunk) returns (google.protobuf.Empty) {}
     rpc SetDemands(stream Chunk) returns (google.protobuf.Empty) {}
     rpc DoNetworkUpdate(NetworkUpdateRequest) returns (NetworkUpdateResponse) {}
@@ -14,6 +16,7 @@ service DistributedADMMSolver {
     rpc SetSolverParameters(SolverParameters) returns (google.protobuf.Empty) {}
     rpc SetActiveCommodityCount(ActiveCommodityCount) returns (google.protobuf.Empty) {}
     rpc Close(google.protobuf.Empty) returns (google.protobuf.Empty) {}
+    rpc JITWarmStart(google.protobuf.Empty) returns (google.protobuf.Empty) {}
 }
 
 message UpdateMessage {

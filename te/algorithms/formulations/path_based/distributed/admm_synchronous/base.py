@@ -1,7 +1,7 @@
 from abc import abstractmethod
-from typing import Tuple, Optional, Callable
+from typing import Tuple, List, Callable
 from te.algorithms.formulations.edge_based.distributed.base import CommunicationBackendBase
-from te.algorithms.array_utils.cpu_utils import CPUArray, BooleanCPUArray, IntegerCPUArray
+from te.algorithms.array_utils.cpu_utils import CPUArray, IntegerCPUArray
 from te.algorithms.base import SolverParams
 
 
@@ -11,7 +11,10 @@ class SynchADMMControllerBackendBase(CommunicationBackendBase):
         return True
     
     @abstractmethod
-    def initialize_worker_nodes(self, solver_params: SolverParams, alpha_ket: BooleanCPUArray,
+    def initialize_worker_nodes(self, solver_params: SolverParams,
+                                alpha_rows: List[IntegerCPUArray],
+                                alpha_cols: List[IntegerCPUArray],
+                                alpha_shape: Tuple[int, int, int],
                                 beta_k: IntegerCPUArray, demands_k: CPUArray):
         """Initialize worker nodes with solver parameters and the path mask matrix"""
 
@@ -44,11 +47,23 @@ class SynchADMMWorkerBackendBase(CommunicationBackendBase):
         return True
 
     @property
-    def set_path_mask(self) -> Callable[[BooleanCPUArray], None]:
-        return self._set_path_mask
-    @set_path_mask.setter
-    def set_path_mask(self, f: Callable[[BooleanCPUArray], None]):
-        self._set_path_mask = f
+    def set_path_mask_shape(self) -> Callable[[Tuple[int, int, int]], None]:
+        return self._set_path_mask_shape
+    @set_path_mask_shape.setter
+    def set_path_mask_shape(self, f: Callable[[Tuple[int, int, int]], None]):
+        self._set_path_mask_shape = f
+    @property
+    def set_path_mask_rows(self) -> Callable[[List[IntegerCPUArray]], None]:
+        return self._set_path_mask_rows
+    @set_path_mask_rows.setter
+    def set_path_mask_rows(self, f: Callable[[List[IntegerCPUArray]], None]):
+        self._set_path_mask_rows = f
+    @property
+    def set_path_mask_cols(self) -> Callable[[List[IntegerCPUArray]], None]:
+        return self._set_path_mask_cols
+    @set_path_mask_cols.setter
+    def set_path_mask_cols(self, f: Callable[[List[IntegerCPUArray]], None]):
+        self._set_path_mask_cols = f
 
     @property
     def set_path_count(self) -> Callable[[IntegerCPUArray], None]:
@@ -105,3 +120,10 @@ class SynchADMMWorkerBackendBase(CommunicationBackendBase):
     @report_aggregate.setter
     def report_aggregate(self, f: Callable[[None], CPUArray]):
         self._report_aggregate = f
+    
+    @property
+    def jit_warmstart(self) -> Callable[[None], None]:
+        return self._jit_warmstart
+    @jit_warmstart.setter
+    def jit_warmstart(self, f: Callable[[None], None]):
+        self._jit_warmstart = f

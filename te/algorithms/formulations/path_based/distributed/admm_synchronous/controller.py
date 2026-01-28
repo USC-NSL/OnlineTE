@@ -3,6 +3,7 @@ import numpy as np
 import networkx as nx
 import asyncio.exceptions
 from collections import defaultdict
+from numba.typed import List as NumbaList
 from typing import List, Tuple, Optional
 from te.algorithms.base import *
 from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
@@ -20,7 +21,7 @@ from te.algorithms.sub_algorithms.admm import ADMMWrapper
 from te.algorithms.sub_algorithms.admm_consensus_test import outer_admm_consensus_test, inner_admm_consensus_test
 from te.algorithms.sub_algorithms.link_capacity_test import check_capacity_constraint
 from te.algorithms.sub_algorithms.flow_conservation_test import check_flow_conservation
-from te.algorithms.sub_algorithms.paths import TShortestPaths, get_or_make_path_object_for_topology_name
+from te.algorithms.sub_algorithms.paths import TShortestPaths, get_or_make_path_object_for_topology_name, get_initial_total_flow_nnz
 from te.algorithms.statistics.helpers import record_cpu_runtime, record_return_value
 from . import SynchADMMSolverParams
 from .base import SynchADMMControllerBackendBase
@@ -146,11 +147,13 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
     def _initialize_variables_and_residuals(self):
         K = len(self._commodity_list)
         NUM_EDGES = self.graph.number_of_edges()
+        PATHS = self._path_object
         self._NUM_EDGES = NUM_EDGES
         self._capacities = cpu_double_array([item[-1] for item in self._graph.edges(data='capacity')])
         self._c_norm = np.linalg.norm(self._capacities)
         self._alpha = self._c_norm * np.sqrt(NUM_EDGES)
-        self._X_ek_sum_e = self._path_object.get_initial_total_flow(self._D_k)
+        self._X_ek_sum_e = get_initial_total_flow_nnz(
+            NumbaList(PATHS.alpha.rows), PATHS.beta, PATHS.alpha.shape, self._D_k)
         self._sharing_mean_1 = self._X_ek_sum_e / K
         self._sharing_mean_2 = cpu_array(self._sharing_mean_1)
         self._sharing_dual = cpu_zeros((NUM_EDGES,))
@@ -277,7 +280,9 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
         print(as_info(f"Built model in {str(np.round(time.time() - t_start, 2))} seconds."))
         self.backend.initialize_worker_nodes(
             self._solver_params,
-            self._path_object.alpha, 
+            self._path_object.alpha.rows,
+            self._path_object.alpha.cols,
+            self._path_object.alpha.shape,
             self._path_object.beta,
             self._D_k
         )
@@ -307,6 +312,8 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
                     self._do_network_update(epoch)
                     if i > 0 and self._reconvene_network_updates():
                         break
+                # TODO: Edge-based solver doesn't seem to need this. Why is that?
+                self._sharing_dual = cpu_zeros(self._sharing_dual.shape)
                 self._reconvene_network_updates()
                 self._update_X_ek_sum()
                 self._update_controller_objective()

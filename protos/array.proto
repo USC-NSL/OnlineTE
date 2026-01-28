@@ -7,4 +7,9 @@ message Chunk {
 message SerializedNumpyArrayMessage {
     bytes array = 1;
     repeated int32 dims = 2;
+    optional int32 dtype = 3;
+}
+
+message ArrayShape {
+    repeated int32 dims = 1;
 }

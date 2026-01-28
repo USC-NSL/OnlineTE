@@ -3,12 +3,14 @@ import asyncio
 import numpy as np
 from dataclasses import dataclass
 from typing import List, Tuple
-from te.algorithms.array_utils.cpu_utils import CPUArray, BooleanCPUArray, IntegerCPUArray
+from te.algorithms.array_utils.cpu_utils import CPUArray, IntegerCPUArray
 from .. import SynchADMMSolverParams
 from te.algorithms.formulations.edge_based.distributed.base import RPCParams
 from ..base import SynchADMMControllerBackendBase
 from te.algorithms.formulations.edge_based.distributed.utils import *
+from utils.logging import as_info
 
+import protos.array.array_pb2 as array_messages
 import protos.path_based_distributed_lp.path_based_distributed_lp_pb2 as distributed_lp_messages
 from protos.path_based_distributed_lp.path_based_distributed_lp_pb2_grpc import DistributedADMMSolverStub
 from google.protobuf.empty_pb2 import Empty
@@ -77,21 +79,32 @@ class AsynchronousgRPCControllerBackend(SynchADMMControllerBackendBase):
             return None
         return self._event_loop.run_until_complete(self._are_all_workers_reachable())
 
-    async def _initialize_worker_nodes(self, solver_params: SynchADMMSolverParams, 
-                                       alpha: BooleanCPUArray, beta: IntegerCPUArray, demands: CPUArray):
+    async def _initialize_worker_nodes(self, solver_params: SynchADMMSolverParams,
+                                       alpha_rows: List[IntegerCPUArray],
+                                       alpha_cols: List[IntegerCPUArray],
+                                       alpha_shape: Tuple[int, int, int],
+                                       beta_k: IntegerCPUArray, demands_k: CPUArray):
         NUM_WORKERS = self.number_of_workers
-        ALPHA_KET_CHUNKS = np.array_split(alpha, NUM_WORKERS, axis=0)
-        BETA_K_CHUNKS = np.array_split(beta, NUM_WORKERS, axis=0)
-        D_K_CHUNKS = np.array_split(demands, NUM_WORKERS, axis=0)
+        NUM_COLS, N, T = alpha_shape
+        assert NUM_COLS % NUM_WORKERS == 0
+        CHUNK_LEN = NUM_COLS // NUM_WORKERS
+        BETA_K_CHUNKS = np.array_split(beta_k, NUM_WORKERS, axis=0)
+        D_K_CHUNKS = np.array_split(demands_k, NUM_WORKERS, axis=0)
         WORKERS = self._worker_stubs
 
         # Update solver parameters
         params = distributed_lp_messages.SolverParameters(**solver_params.child_fields)
         await asyncio.gather(*[stub.SetSolverParameters(params) for stub in WORKERS])
-
-        # Now, send the path and demand configurations
         await asyncio.gather(*[
-            stub.SetAlpha(chunk_big_array(ALPHA_KET_CHUNKS[i], GRPC_ARRAY_STREAM_MAX_LEN, dtype=bool))
+            stub.SetAlphaShape(array_messages.ArrayShape(dims=(CHUNK_LEN, N, T)))
+            for stub in WORKERS
+        ])
+        await asyncio.gather(*[
+            stub.SetAlphaRows(array_list_to_serialized_message(alpha_rows[i*CHUNK_LEN:(i+1)*CHUNK_LEN]))
+            for i, stub in enumerate(WORKERS)
+        ])
+        await asyncio.gather(*[
+            stub.SetAlphaCols(array_list_to_serialized_message(alpha_cols[i*CHUNK_LEN:(i+1)*CHUNK_LEN]))
             for i, stub in enumerate(WORKERS)
         ])
         await asyncio.gather(*[
@@ -102,10 +115,19 @@ class AsynchronousgRPCControllerBackend(SynchADMMControllerBackendBase):
             stub.SetDemands(chunk_big_array(D_K_CHUNKS[i], GRPC_ARRAY_STREAM_MAX_LEN))
             for i, stub in enumerate(WORKERS)
         ])
+
+        # Finally, warm-start Numba for JIT ...
+        print(as_info("Warm-starting Numba on remote nodes ..."))
+        await asyncio.gather(*[stub.JITWarmStart(Empty()) for stub in WORKERS])
     
     def initialize_worker_nodes(self, solver_params: SynchADMMSolverParams,
-                                alpha: BooleanCPUArray, beta: IntegerCPUArray, demands: CPUArray):
-        self._event_loop.run_until_complete(self._initialize_worker_nodes(solver_params, alpha, beta, demands))
+                                alpha_rows: List[IntegerCPUArray],
+                                alpha_cols: List[IntegerCPUArray],
+                                alpha_shape: Tuple[int, int, int],
+                                beta_k: IntegerCPUArray, demands_k: CPUArray):
+        self._event_loop.run_until_complete(self._initialize_worker_nodes(
+            solver_params, alpha_rows, alpha_cols, alpha_shape, beta_k, demands_k
+        ))
     
     async def _update_demands(self, updated_demands: CPUArray):
         D_K_CHUNKS = np.array_split(updated_demands, self.number_of_workers, axis=0)

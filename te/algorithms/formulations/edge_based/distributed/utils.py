@@ -4,7 +4,7 @@ import numpy as np
 import protos.array.array_pb2 as array_messages
 from collections.abc import Iterator as IteratorABC
 from typing import Optional, Iterator, Union, List, Tuple, Dict, Type, Generator
-from te.algorithms.array_utils.cpu_utils import cpu_frombuffer, cpu_frombuffer_serial, cpu_csr_frombuffer, CPUArray, CPUCSRArray
+from te.algorithms.array_utils.cpu_utils import cpu_frombuffer, cpu_frombuffer_serial, cpu_csr_frombuffer, get_global_precision, CPUArray, CPUCSRArray
 
 
 GRPC_ARRAY_STREAM_MAX_LEN = 2**20
@@ -14,14 +14,19 @@ GRPC_ARRAY_STREAM_MAX_LEN = 2**20
 
 ARRAY_TYPE_MAP: Dict[Type, int] = {
     None: 0,
-    bool: 1,
-    np.int32: 2
+    np.dtype('bool'): 1,
+    np.dtype('int32'): 2,
+    np.dtype('float16'): 3,
+    np.dtype('float32'): 4,
+    np.dtype('float64'): 5
 }
 """
 Maps a type to a `char` sized value that will be used to pack the array into a struct.
 A `None` type means to cast to the current global CPU/GPU data type.
 """
 REVERSE_ARRAY_TYPE_MAP: Dict[int, Type] = {v: k for k, v in ARRAY_TYPE_MAP.items()}
+
+get_array_type_index = lambda tp: ARRAY_TYPE_MAP[np.result_type(tp if tp is not None else get_global_precision())]
 
 
 def array_to_serialized_message(array: Optional[np.ndarray]) -> Optional[array_messages.SerializedNumpyArrayMessage]:
@@ -30,12 +35,19 @@ def array_to_serialized_message(array: Optional[np.ndarray]) -> Optional[array_m
     The output RPC message contains the array shape too.
     """
     if array is not None:
-        return array_messages.SerializedNumpyArrayMessage(array=array.tobytes(), dims=list(array.shape))
+        return array_messages.SerializedNumpyArrayMessage(array=array.tobytes(), dims=array.shape, dtype=get_array_type_index(array.dtype))
 
 def serialized_message_to_array(message: Optional[array_messages.SerializedNumpyArrayMessage]) -> Optional[np.ndarray]:
     """Deserialize a chunk of bytes into a Numpy array (the input RPC request contains the shape as well)"""
     if message is not None:
-        return cpu_frombuffer(message.array, tuple(message.dims))
+        return cpu_frombuffer(message.array, tuple(message.dims), REVERSE_ARRAY_TYPE_MAP[message.dtype])
+
+def array_list_to_serialized_message(array_list: List[CPUArray]) -> Generator[array_messages.SerializedNumpyArrayMessage, None, None]:
+    for array in array_list:
+        yield array_to_serialized_message(array)
+
+def serialized_message_to_array_list(message_stream: Iterator[array_messages.SerializedNumpyArrayMessage]) -> List[CPUArray]:
+    return [serialized_message_to_array(array) for array in message_stream]
 
 get_optional_field = lambda request, field_name: getattr(request, field_name) if request.HasField(field_name) else None
 
@@ -74,7 +86,7 @@ def chunk_big_array(array: Union[CPUArray, CPUCSRArray], chunk_size: int,
     # TODO: Make this more lazy (e.g. avoid copying). This array can be really really big!
     # First, send the array preamble
     is_csr = isinstance(array, CPUCSRArray)
-    yield array_messages.Chunk(data=struct.pack(ARRAY_PREAMBLE_STRUCT_FORMAT, array.ndim, ARRAY_TYPE_MAP[dtype], is_csr))
+    yield array_messages.Chunk(data=struct.pack(ARRAY_PREAMBLE_STRUCT_FORMAT, array.ndim, get_array_type_index(dtype), is_csr))
     # Now, the shape
     yield array_messages.Chunk(data=struct.pack("I"*array.ndim, *(array.shape)))
     if not is_csr:
@@ -161,5 +173,6 @@ __all__ = [
     'GRPC_ARRAY_STREAM_MAX_LEN', 'ARRAY_TYPE_MAP', 'REVERSE_ARRAY_TYPE_MAP',
     'array_to_serialized_message', 'serialized_message_to_array',
     'ARRAY_PREAMBLE_STRUCT_FORMAT', 'parse_array_preamble',
-    'chunk_big_array','rebuild_chunked_array', 'async_rebuild_chunked_array'
+    'chunk_big_array','rebuild_chunked_array', 'async_rebuild_chunked_array',
+    'array_list_to_serialized_message', 'serialized_message_to_array_list'
 ]
