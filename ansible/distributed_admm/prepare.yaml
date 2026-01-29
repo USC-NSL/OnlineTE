@@ -1,27 +1,27 @@
 ---
-# Prepare controller/worker nodes from scratch (i.e. assume no packages are installed)
-# - name: Configure APT dependencies
-#   hosts: controller_group:workers_group
-#   serial: 100
-#   become: true
-#   tasks:
-#   - name: Gather Package Facts
-#     package_facts:
-#       manager: apt
+Prepare controller/worker nodes from scratch (i.e. assume no packages are installed)
+- name: Configure APT dependencies
+  hosts: controller_group:workers_group
+  serial: 100
+  become: true
+  tasks:
+  - name: Gather Package Facts
+    package_facts:
+      manager: apt
 
-#   - name: Ensure git
-#     ansible.builtin.apt:
-#       update_cache: true
-#       name: git
-#     when: '"git" not in ansible_facts.packages'
+  - name: Ensure git
+    ansible.builtin.apt:
+      update_cache: true
+      name: git
+    when: '"git" not in ansible_facts.packages'
   
-#   - name: Install python-dev/venv
-#     ansible.builtin.apt:
-#       name: 
-#         - rsync
-#         - python3-dev
-#         - python3-venv
-#       state: present
+  - name: Install python-dev/venv
+    ansible.builtin.apt:
+      name: 
+        - rsync
+        - python3-dev
+        - python3-venv
+      state: present
 
 - name: Clone repo and configure PIP
   hosts: controller_group:workers_group
