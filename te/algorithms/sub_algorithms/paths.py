@@ -322,7 +322,6 @@ particular:
 
 
 @njit(parallel=True)
-# def get_initial_total_flow_nnz(rows: List[np.ndarray], cols: List[np.ndarray], shape: Tuple[int, int, int], D_k: np.ndarray) -> np.ndarray:
 def get_initial_total_flow_nnz(rows: List[np.ndarray], beta: np.ndarray, shape: Tuple[int, int, int], D_k: np.ndarray) -> np.ndarray:
     """
     Returns the total flow over each edge, when all commodities are
@@ -342,24 +341,6 @@ def get_initial_total_flow_nnz(rows: List[np.ndarray], beta: np.ndarray, shape: 
             tmp[n] += d_val
         output += tmp
     return output
-    # K, N, _ = shape
-    # output = np.zeros((N,), dtype=D_k.dtype)
-    # for k in prange(K):
-    #     tmp = np.zeros((N,), dtype=D_k.dtype)
-    #     d_val = D_k[k]
-    #     row = rows[k]
-    #     col = cols[k]
-    #     nnz = len(row)
-    #     if nnz == 0:
-    #         continue
-    #     for i in range(nnz):
-    #         n = row[i]
-    #         t = col[i]
-    #         if t > 0:
-    #             continue
-    #         tmp[n] += d_val
-    #     output += tmp
-    # return output
 
 
 @njit(parallel=True)
@@ -465,13 +446,27 @@ def path_based_transpose_vector_product_nnz(X_e: np.ndarray, rows: List[np.ndarr
     return output.T
 
 
+@njit
+def path_based_eigen_upper_nnz(cols: List[np.ndarray], T: int):
+    K = len(cols)
+    output = np.zeros((K,), dtype=np.int32)
+    for k in prange(K):
+        tmp = np.zeros((T,), dtype=np.int32)
+        col = cols[k]
+        nnz = len(col)
+        for i in range(nnz):
+            tmp[col[i]] += 1
+        output[k] = tmp.max()
+    return output
+
+
 def warm_start_jit(rows: List[np.ndarray], cols: List[np.ndarray], shape: Tuple[int, int, int], beta: IntegerCPUArray):
     K, N, T = shape
     D_k = cpu_zeros((K,))
     X_ek = cpu_zeros((N, K))
     Y_tk = cpu_zeros((T, K))
+    path_based_eigen_upper_nnz(cols, T)
     get_initial_total_flow_nnz(rows, beta, shape, D_k)
-    # get_initial_total_flow_nnz(rows, cols, shape, D_k)
     path_based_to_edge_based_nnz(Y_tk, rows, cols, N, D_k)
     path_based_to_edge_based_mean_nnz(Y_tk, rows, cols, N, D_k)
     path_based_projection_nnz(Y_tk, rows, cols, N, D_k)
@@ -540,39 +535,28 @@ At some point, they were used for debugging ...
 #     return output / K
 
 def path_based_to_edge_based_dense(Y_tk: CPUArray, alpha: BooleanCPUArray, D_k: CPUArray) -> CPUArray:
-    # """
-    # Given the path-based assignment `Y_tk` over paths described by the `alpha`
-    # matrix. Remember that `alpha` is a 3D matrix where the first axis indexes 
-    # over commodities, and the inner two axis index over edge and path index.
-    # To produce an edge-based assignment, we would do:
+    """
+    Given the path-based assignment `Y_tk` over paths described by the `alpha`
+    matrix. Remember that `alpha` is a 3D matrix where the first axis indexes 
+    over commodities, and the inner two axis index over edge and path index.
+    To produce an edge-based assignment, we would do:
 
-    #     X_ek = sum_t (alpha_ket Y_tk D_k)
+        X_ek = sum_t (alpha_ket Y_tk D_k)
     
-    # This translates succiently into an Einstein sum.
-    # """
-    # return np.einsum('kij,jk,k->ik', alpha, Y_tk, D_k)
-    K, N, _ = alpha.shape
-    out = cpu_zeros((N, K))
-    for k in range(K):
-        out[:, k] = D_k[k] * (alpha[k] @ Y_tk[:, k])
-    return out
+    This translates succiently into an Einstein sum.
+    """
+    return np.einsum('kij,jk,k->ik', alpha, Y_tk, D_k)
 
 
 def path_based_projection_dense(Y_tk: CPUArray, alpha: BooleanCPUArray, D_k: CPUArray) -> CPUArray:
-    # """
-    # Evaluates:
+    """
+    Evaluates:
 
-    #     P_tk = sum_e (alpha_ket X_ek D_k)
+        P_tk = sum_e (alpha_ket X_ek D_k)
     
-    # Where `X_ek` is the edge based evaluation of the current path set.
-    # """
-    # return np.einsum('kji,jk,k->ik', alpha, path_based_to_edge_based_dense(Y_tk, alpha, D_k), D_k)
-    X_ek = path_based_to_edge_based_dense(Y_tk, alpha, D_k)
-    K, _, T = alpha.shape
-    out = cpu_zeros((T, K))
-    for k in range(K):
-        out[:, k] = D_k[k] * (alpha[k].T @ X_ek[:, k])
-    return out
+    Where `X_ek` is the edge based evaluation of the current path set.
+    """
+    return np.einsum('kji,jk,k->ik', alpha, path_based_to_edge_based_dense(Y_tk, alpha, D_k), D_k)
 
 
 if __name__ == '__main__':

@@ -16,8 +16,10 @@ warnings.simplefilter('ignore', category=NumbaTypeSafetyWarning)
 
 @dataclass
 class SynchADMMSolverParams(SolverParams):
-    NumberOfPathsPerCommodity: int = 16
+    NumberOfPathsPerCommodity: int = 8
     """Max number of available paths for each commodity"""
+    AdjustGamma: bool = True
+    """Whether to adjust PGD step size based on path lengths"""
     OuterLoopRounds: Optional[int] = 200
     """Number of outer loop iterations"""
     InnerLoopRounds: int = 5

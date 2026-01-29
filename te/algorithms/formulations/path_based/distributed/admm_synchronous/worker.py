@@ -9,22 +9,24 @@ from te.algorithms.formulations.edge_based.distributed.base import DistributedSo
 from . import SynchADMMSolverParams
 from .base import SynchADMMWorkerBackendBase
 from te.algorithms.sub_algorithms.pgd import do_path_based_pgd, do_path_based_maxflow_pgd
-from te.algorithms.sub_algorithms.paths import path_based_to_edge_based_nnz, path_based_to_edge_based_mean_nnz, warm_start_jit
+from te.algorithms.sub_algorithms.paths import (path_based_to_edge_based_nnz, path_based_to_edge_based_mean_nnz,
+                                                warm_start_jit, path_based_eigen_upper_nnz)
 
 
 class DenseSolver:
     def __init__(self, alpha_shape: Tuple[int, int, int], alpha_cols: NumbaList, alpha_rows: NumbaList, 
-                 beta: IntegerCPUArray, demands: CPUArray, pgd_step: float, pgd_iters: int, eta: float):
+                 beta: IntegerCPUArray, demands: CPUArray, pgd_step: float, pgd_iters: int, eta: float,
+                 adjust_step_size: bool):
+        K, N, T = alpha_shape
         self._alpha_shape = alpha_shape
         self._alpha_rows = alpha_rows
         self._alpha_cols = alpha_cols
         self._beta = beta
         self._demands = demands
-        self._pgd_step = pgd_step
+        self._pgd_steps = pgd_step if not adjust_step_size else cpu_array(pgd_step / path_based_eigen_upper_nnz(alpha_cols, T))
         self._pgd_iters = pgd_iters
         self._eta = eta
 
-        K, N, T = alpha_shape
         self._K = K
         self._N = N
         self._T = T
@@ -53,7 +55,7 @@ class DenseSolver:
             demand_block=self._demands,
             num_edges=self._N,
             num_paths=self._T,
-            step_size=self._pgd_step,
+            step_sizes=self._pgd_steps,
             n_iter=self._pgd_iters
         )
         self._Y_tk_old = new_Y_old
@@ -116,7 +118,7 @@ class SynchADMMWorkerNode(DistributedSolverNodeBase):
             self._alpha_shape, self._alpha_cols_chunk, self._alpha_rows_chunk,
             self._beta_k_chunk, self._D_k_chunk, 
             self._solver_params.Gamma, self._solver_params.SwitchIterations,
-            self._solver_params.Eta
+            self._solver_params.Eta, self._solver_params.AdjustGamma
         )
     def set_solver_parameters(self, new_params: SynchADMMSolverParams):
         self._solver_params = new_params

@@ -52,6 +52,7 @@ message SolverParameters {
     optional string Precision = 9;
     optional int32 TMSeed = 10;
     optional int32 NumWorkers = 11;
+    optional bool AdjustGamma = 12;
 }
 
 message ActiveCommodityCount {

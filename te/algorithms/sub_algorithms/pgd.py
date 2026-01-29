@@ -4,6 +4,7 @@ handling non-negativity constraints.
 """
 
 import numpy as np
+from typing import Union
 from numba.typed import List as NumbaList
 from te.algorithms.array_utils.cpu_utils import CPUArray, cpu_cast_float
 from te.algorithms.sub_algorithms.simplex_projection import project_onto_probability_simplex, project_onto_probability_orthant
@@ -49,11 +50,11 @@ def do_dual_pgd(lambda_block: CPUArray, lambda_sum_block: CPUArray,
 
 def do_path_based_pgd(y_block: CPUArray, y_block_old: CPUArray, alpha_rows: NumbaList, alpha_cols: NumbaList,
                       sharing_bias: CPUArray, beta_block: CPUArray, demand_block: CPUArray, num_edges: int, 
-                      num_paths: int, step_size: float, n_iter: int) -> CPUArray:
+                      num_paths: int, step_sizes: Union[float, np.ndarray], n_iter: int) -> CPUArray:
     for _ in range(n_iter):
         grad_block = path_based_projection_nnz(y_block - y_block_old, alpha_rows, alpha_cols, num_edges, demand_block) + \
                      path_based_transpose_vector_product_nnz(sharing_bias, alpha_rows, alpha_cols, num_paths, demand_block)
-        y_block = project_onto_probability_simplex(y_block - step_size * grad_block, beta_block)
+        y_block = project_onto_probability_simplex(y_block - step_sizes * grad_block, beta_block)
     return y_block
 
 
