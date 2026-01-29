@@ -34,16 +34,16 @@ _kill() {
 trap _term SIGTERM
 trap _kill SIGKILL
 
-if [ "${SOLVER_TYPE}" = "edge-sync"]; then
-  if [ "${TE_MULTICAST}" = "0" ]; then
+if [[ "${SOLVER_TYPE}" == "edge-sync" ]]; then
+  if [[ "${TE_MULTICAST}" == "0" ]]; then
     echo "Using gRPC backend"
     "${VENV_HOME}/bin/python" -m te.algorithms.formulations.edge_based.distributed.admm_synchronous.worker "${WORKER_ID}" &
   else
     echo "Using UDP multicast backend"
     "${VENV_HOME}/bin/python" -m te.algorithms.formulations.edge_based.distributed.admm_synchronous.worker "${WORKER_ID}" --multicast &
   fi
-elif [ "${SOLVER_TYPE}" = "path-sync" ]; then
-  if [ "${TE_MULTICAST}" = "0" ]; then
+elif [[ "${SOLVER_TYPE}" == "path-sync" ]]; then
+  if [[ "${TE_MULTICAST}" == "0" ]]; then
     echo "Using gRPC backend"
     "${VENV_HOME}/bin/python" -m te.algorithms.formulations.path_based.distributed.admm_synchronous.worker "${WORKER_ID}" &
   else
