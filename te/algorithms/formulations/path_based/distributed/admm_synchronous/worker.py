@@ -8,7 +8,6 @@ from te.algorithms.array_utils.cpu_utils import CPUArray, IntegerCPUArray, cpu_z
 from te.algorithms.formulations.edge_based.distributed.base import DistributedSolverNodeBase, DistributedSolverNodeParams
 from . import SynchADMMSolverParams
 from .base import SynchADMMWorkerBackendBase
-# from .worker_backends.grpc_backend import gRPCWorkerBackend
 from te.algorithms.sub_algorithms.pgd import do_path_based_pgd, do_path_based_maxflow_pgd
 from te.algorithms.sub_algorithms.paths import path_based_to_edge_based_nnz, path_based_to_edge_based_mean_nnz, warm_start_jit
 
@@ -43,7 +42,8 @@ class DenseSolver:
         return path_based_to_edge_based_nnz(self._Y_tk, self._alpha_rows, self._alpha_cols, self._N, self._demands)
     
     def update(self, sharing_bias: CPUArray) -> CPUArray:
-        new_Y = do_path_based_pgd(
+        new_Y_old = cpu_array(self._Y_tk)
+        self._Y_tk = do_path_based_pgd(
             y_block=self._Y_tk,
             y_block_old=self._Y_tk_old,
             alpha_rows=self._alpha_rows,
@@ -56,8 +56,7 @@ class DenseSolver:
             step_size=self._pgd_step,
             n_iter=self._pgd_iters
         )
-        np.copyto(self._Y_tk_old, self._Y_tk)
-        np.copyto(self._Y_tk, new_Y)
+        self._Y_tk_old = new_Y_old
         return path_based_to_edge_based_mean_nnz(self._Y_tk, self._alpha_rows, self._alpha_cols,
                                                  self._N, self._demands)
 
@@ -148,27 +147,50 @@ class SynchADMMWorkerNode(DistributedSolverNodeBase):
         warm_start_jit(self._alpha_rows_chunk, self._alpha_cols_chunk, self._alpha_shape, self._beta_k_chunk)
 
 
-# if __name__ == '__main__':
-#     import socket
-#     import argparse
-#     from utils.logging import as_fail
+if __name__ == '__main__':
+    import argparse
+    import te.constants
+    from utils.logging import as_fail
+    from .worker_backends.grpc_backend import gRPCWorkerBackend, gRPCWorkerBackendParams
 
-#     parser =argparse.ArgumentParser('Spawn A Worker Node')
-#     parser.add_argument('worker_id', type=int, help='Worker ID')
-#     parser.add_argument('--multicast', action='store_true', help='Use UDP Multicast backend')
-#     parser.add_argument('--hostname', help='Hostname to use')
-#     args = parser.parse_args()
+    parser =argparse.ArgumentParser('Spawn A Worker Node')
+    parser.add_argument('worker_id', type=int, help='Worker ID')
+    # parser.add_argument('--multicast', action='store_true', help='Use UDP Multicast backend')
+    parser.add_argument('--hostname', help='Hostname to use')
+    parser.add_argument('--port', type=int, help='Port number to bind to')
+    parser.add_argument('--local', action='store_true', help='Assume everything is run locally')
+    args = parser.parse_args()
 
-#     worker_id = args.worker_id
-#     if worker_id < 0:
-#         print(as_fail('Worker ID was not properly initialized!'), file=sys.stderr)
-#         sys.exit(-1)
-#     else:
-#         assert not args.multicast, 'Multicast not yet implemented for this'
-#         hostname = args.hostname if args.hostname is not None else f'n{worker_id}'
-#         rpc_params = PathBasedDistributedADMMWorkerRPCParams(
-#             IP=socket.gethostbyname(hostname), Port=13000 + worker_id,
-#             WorkerID=worker_id, Multicast=args.multicast
-#         )
-#         print(f'RPC Parameters:\n{rpc_params}')
-#         NetworkWorkerNode.spawn_and_wait(rpc_params)
+    worker_id: int = args.worker_id
+    hostname: Optional[str] = args.hostname
+    port: Optional[int] = args.port
+    if worker_id < 0:
+        print(as_fail('Worker ID was not properly initialized!'), file=sys.stderr)
+        sys.exit(-1)
+
+    if args.local:
+        hostname = "localhost"
+        if port is None:
+            port = te.constants.DEFAULT_RPC_PORT + worker_id + 1
+    else:
+        if hostname is None:
+            hostname = f'n{worker_id}'
+        if port is None:
+            port = te.constants.DEFAULT_RPC_PORT
+
+    # if not args.multicast:
+    rpc_params = gRPCWorkerBackendParams(
+        PeerIndex=worker_id, Peers=tuple([(hostname, port)])
+    )
+    rpc_cls = gRPCWorkerBackend
+    # else:
+    #     rpc_params = MulticastWorkerBackendParams(
+    #         PeerIndex=worker_id, Peers=tuple([(hostname, port)])
+    #     )
+    #     rpc_cls = MulticastWorkerBackend
+    
+    print(f'RPC Parameters:\n{rpc_params.str_all()}')
+    SynchADMMWorkerNode.spawn_and_run(DistributedSolverNodeParams(
+        CommunicationBackendCLS=rpc_cls, RPCParams_=rpc_params
+    ))
+

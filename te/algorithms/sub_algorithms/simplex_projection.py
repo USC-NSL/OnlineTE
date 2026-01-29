@@ -75,6 +75,20 @@ def project_onto_probability_orthant(x: np.ndarray, pinned: Optional[np.ndarray]
     return x
 
 
+# A witness implementation known to be correct, taken from 
+# https://gist.github.com/mblondel/6f3b7aaad90606b98f71
+def projection_simplex_sort(v, z=1):
+    n_features = v.shape[0]
+    u = np.sort(v)[::-1]
+    cssv = np.cumsum(u) - z
+    ind = np.arange(n_features) + 1
+    cond = u - cssv / ind > 0
+    rho = ind[cond][-1]
+    theta = cssv[cond][-1] / float(rho)
+    w = np.maximum(v - theta, 0)
+    return w
+
+
 if __name__ == '__main__':
     import time
     from te.algorithms.array_utils import set_global_precision, SINGLE_PRECISION
@@ -88,6 +102,10 @@ if __name__ == '__main__':
     start = time.perf_counter()
     x_iter = np.array([column_wise_project_onto_probability_simplex(x[:, i], upto[i]) for i in range(M)]).T
     print(f"Iter took: {(time.perf_counter() - start)*1000} ms")
+    x_iter_check = np.array([np.pad(column_wise_project_onto_probability_simplex(x[:upto[i], i]), (0, N - upto[i]), mode='constant', constant_values=0) for i in range(M)]).T
+    x_iter_witness = np.array([np.pad(projection_simplex_sort(x[:upto[i], i]), (0, N - upto[i]), mode='constant', constant_values=0) for i in range(M)]).T
+    assert np.allclose(x_iter - x_iter_check, 0)
+    assert np.allclose(x_iter_witness - x_iter_check, 0)
     start = time.perf_counter()
     x_dir = project_onto_probability_simplex(x, upto)
     print(f"Dir took: {(time.perf_counter() - start)*1000} ms")

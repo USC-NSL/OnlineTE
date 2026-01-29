@@ -30,7 +30,7 @@ class SynchADMMSolverParams(SolverParams):
     """Step size for solving the switch-level problems"""
     SwitchIterations: int = 5
     """Number of iterations for each switch-level problem"""
-    ConvTol: float = 1e-3
+    ConvTol: float = 1e-2
     """Objective convergence tolerance"""
     Precision: Literal['double', 'single', 'half'] = SINGLE_PRECISION
     """Floating point operation precision"""

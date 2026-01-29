@@ -20,3 +20,6 @@ LAUNCH_FILE=ansible/distributed_admm/launch_worker.sh
 
 # Set to `1` to enable multicast (assuming `smcroute` has already been set up)
 TE_MULTICAST=0
+
+# Indicates the particular remote worker to spawn
+SOLVER_TYPE="edge-sync"

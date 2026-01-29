@@ -313,7 +313,7 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
                     if i > 0 and self._reconvene_network_updates():
                         break
                 # TODO: Edge-based solver doesn't seem to need this. Why is that?
-                self._sharing_dual = cpu_zeros(self._sharing_dual.shape)
+                # self._sharing_dual = cpu_zeros(self._sharing_dual.shape)
                 self._reconvene_network_updates()
                 self._update_X_ek_sum()
                 self._update_controller_objective()

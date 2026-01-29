@@ -9,9 +9,14 @@ from itertools import islice
 from te import TE_PATH
 from topologies.utils import load_topology
 from numba import njit, prange
-from te.algorithms.array_utils.cpu_utils import IntegerCPUArray, cpu_zeros, cpu_int_zeros
+from te.algorithms.array_utils.cpu_utils import CPUArray, IntegerCPUArray, BooleanCPUArray, cpu_zeros, cpu_int_zeros, cpu_bool_zeros
 from te.algorithms.sub_algorithms.utils import get_slice_starts_and_exclusive_ends, get_number_of_required_workers, NUM_PROCS
 from utils.logging import as_info, as_warning, as_fail, ShortTQDMEnumerate
+
+
+PATH_FOLDER = os.path.join(TE_PATH, "paths")
+MAX_NUMBER_OF_COMMODITIES_PER_CORE = 5000
+MAX_NUMBER_OF_WORKERS = min(24, NUM_PROCS)
 
 
 @dataclass
@@ -34,11 +39,33 @@ class PathMask:
             self.cols[i] = self.cols[i][mask]
             self.rows[i] = self.rows[i][mask]
         self.shape = (self.shape[0], self.shape[1], new_T)
-
-
-PATH_FOLDER = os.path.join(TE_PATH, "paths")
-MAX_NUMBER_OF_COMMODITIES_PER_CORE = 5000
-MAX_NUMBER_OF_WORKERS = min(24, NUM_PROCS)
+    
+    def as_array(self, k_start: int = 0, k_end: Optional[int] = None) -> BooleanCPUArray:
+        """
+        Return the `alpha` matrix as a gigantic Boolean array.
+        
+        Warning
+        -------
+        This one *WILL* eat at your memory. Take care when and how it is called.
+        """
+        _, N, T = self.shape
+        if k_end is None:
+            K = self.shape[0]
+        else:
+            assert k_end > k_start
+            K = k_end - k_start
+        out = cpu_bool_zeros((K, N, T))
+        row_slice = self.rows[k_start:k_start + K]
+        col_slice = self.cols[k_start:k_start + K]
+        for k in range(K):
+            row = row_slice[k]
+            col = col_slice[k]
+            nnz = len(row)
+            for i in range(nnz):
+                n = row[i]
+                t = col[i]
+                out[k, n, t] = True
+        return out
 
 
 class TShortestPaths:
@@ -295,6 +322,7 @@ particular:
 
 
 @njit(parallel=True)
+# def get_initial_total_flow_nnz(rows: List[np.ndarray], cols: List[np.ndarray], shape: Tuple[int, int, int], D_k: np.ndarray) -> np.ndarray:
 def get_initial_total_flow_nnz(rows: List[np.ndarray], beta: np.ndarray, shape: Tuple[int, int, int], D_k: np.ndarray) -> np.ndarray:
     """
     Returns the total flow over each edge, when all commodities are
@@ -314,6 +342,24 @@ def get_initial_total_flow_nnz(rows: List[np.ndarray], beta: np.ndarray, shape: 
             tmp[n] += d_val
         output += tmp
     return output
+    # K, N, _ = shape
+    # output = np.zeros((N,), dtype=D_k.dtype)
+    # for k in prange(K):
+    #     tmp = np.zeros((N,), dtype=D_k.dtype)
+    #     d_val = D_k[k]
+    #     row = rows[k]
+    #     col = cols[k]
+    #     nnz = len(row)
+    #     if nnz == 0:
+    #         continue
+    #     for i in range(nnz):
+    #         n = row[i]
+    #         t = col[i]
+    #         if t > 0:
+    #             continue
+    #         tmp[n] += d_val
+    #     output += tmp
+    # return output
 
 
 @njit(parallel=True)
@@ -425,6 +471,7 @@ def warm_start_jit(rows: List[np.ndarray], cols: List[np.ndarray], shape: Tuple[
     X_ek = cpu_zeros((N, K))
     Y_tk = cpu_zeros((T, K))
     get_initial_total_flow_nnz(rows, beta, shape, D_k)
+    # get_initial_total_flow_nnz(rows, cols, shape, D_k)
     path_based_to_edge_based_nnz(Y_tk, rows, cols, N, D_k)
     path_based_to_edge_based_mean_nnz(Y_tk, rows, cols, N, D_k)
     path_based_projection_nnz(Y_tk, rows, cols, N, D_k)
@@ -491,6 +538,41 @@ At some point, they were used for debugging ...
 #                     acc += Y_tk[t, k]
 #             output[n] += acc * d_val
 #     return output / K
+
+def path_based_to_edge_based_dense(Y_tk: CPUArray, alpha: BooleanCPUArray, D_k: CPUArray) -> CPUArray:
+    # """
+    # Given the path-based assignment `Y_tk` over paths described by the `alpha`
+    # matrix. Remember that `alpha` is a 3D matrix where the first axis indexes 
+    # over commodities, and the inner two axis index over edge and path index.
+    # To produce an edge-based assignment, we would do:
+
+    #     X_ek = sum_t (alpha_ket Y_tk D_k)
+    
+    # This translates succiently into an Einstein sum.
+    # """
+    # return np.einsum('kij,jk,k->ik', alpha, Y_tk, D_k)
+    K, N, _ = alpha.shape
+    out = cpu_zeros((N, K))
+    for k in range(K):
+        out[:, k] = D_k[k] * (alpha[k] @ Y_tk[:, k])
+    return out
+
+
+def path_based_projection_dense(Y_tk: CPUArray, alpha: BooleanCPUArray, D_k: CPUArray) -> CPUArray:
+    # """
+    # Evaluates:
+
+    #     P_tk = sum_e (alpha_ket X_ek D_k)
+    
+    # Where `X_ek` is the edge based evaluation of the current path set.
+    # """
+    # return np.einsum('kji,jk,k->ik', alpha, path_based_to_edge_based_dense(Y_tk, alpha, D_k), D_k)
+    X_ek = path_based_to_edge_based_dense(Y_tk, alpha, D_k)
+    K, _, T = alpha.shape
+    out = cpu_zeros((T, K))
+    for k in range(K):
+        out[:, k] = D_k[k] * (alpha[k].T @ X_ek[:, k])
+    return out
 
 
 if __name__ == '__main__':
