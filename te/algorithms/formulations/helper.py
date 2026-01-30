@@ -2,7 +2,7 @@ import contextlib
 import jsonargparse
 from typing import Optional, Tuple
 from te.algorithms.base import *
-from topologies.utils import get_uniform_tm_problem_with_capacity_heuristic, load_topology
+from topologies.utils import get_uniform_tm_problem_with_capacity_heuristic, load_topology, get_uniform_tm_problem
 from te.algorithms.utils import get_solution_confusion_matrix, get_solution_maximum_utilization, stringify_collected_stats
 from te.traffic_models.models import FilebackedTrafficMatrix, FilebackedTrafficMatrixParams
 from te.traffic_models.converters import SampledConverter, SampledTrafficMatrixConverterParams
@@ -113,8 +113,8 @@ def te_input_helper(
         Full description of some TE problem.
     """
     if eval_params.Seed is not None and eval_params.TMPath is None:
-        as_info(f"No TM path given. Generating matrix from seed {eval_params.Seed}")
-        c, graph, tm = get_uniform_tm_problem_with_capacity_heuristic(
+        print(as_info(f"No TM path given. Generating matrix from seed {eval_params.Seed}"))
+        c, graph, tm = get_uniform_tm_problem(
             eval_params.TopologyName, 
             eval_params.Seed, 
             scale_factor=eval_params.ScaleFactor
@@ -143,7 +143,8 @@ def te_input_helper(
         print(as_info(log_section_title(f"{eval_params.Objective} PROBLEM")))
         converter = None
     
-    print(as_info(f"Network link capacity is: {str(round(c, 2))}"))
+    if c is not None:
+        print(as_info(f"Network link capacity is: {str(round(c, 2))}"))
 
     if eval_params.SaveSol:
         if converter is None:

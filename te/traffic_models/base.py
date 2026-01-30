@@ -67,6 +67,10 @@ class TrafficMatrixBase(ABC):
                 'params': self.params,
                 'seed': self.seed
             }, f)
+    
+    def rescale(self, scale_factor: float):
+        """Rescale the current TM with the given scale factor"""
+        np.multiply(self.tm, scale_factor, out=self.tm, dtype=self.tm.dtype)
 
     @staticmethod
     def deserialize(path: str):

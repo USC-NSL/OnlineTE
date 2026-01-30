@@ -46,7 +46,7 @@ class GurobiPathBasedTE(TrafficEngineeringLP):
     
     @property
     def alg_name(self) -> str:
-        return 'Centralized-Path'
+        return 'Path-Based Gurobi'
     
     @property
     def graph(self) -> nx.DiGraph:
@@ -133,14 +133,6 @@ class GurobiPathBasedTE(TrafficEngineeringLP):
 
         # Capacity constraint
         print(as_info("Adding capacity constraints"))
-        # for e, (_, _, c_e) in ShortTQDMEnumerate(GRAPH.edges.data('capacity')):
-        #     total_flow = gurobipy.LinExpr()
-        #     for k, commodity in enumerate(COMMODITIES):
-        #         D_K = commodity.demand
-        #         for t in range(T):
-        #             if ALPHA_K[k, e, t]:
-        #                 total_flow.addTerms(D_K, Y_TK[(t, k)])
-        #     capacity_constraints.append(MODEL.addConstr(total_flow <= UTILITY * c_e))
         total_flows = [gurobipy.LinExpr() for _ in range(N)]
         for k, commodity in ShortTQDMEnumerate(COMMODITIES):
             D_K = commodity.demand

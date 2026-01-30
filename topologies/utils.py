@@ -87,7 +87,8 @@ def load_repo_topology(name: str) -> Optional[nx.DiGraph]:
         return None
     with open(fname) as f:
         data = json.load(f)
-    return json_graph.node_link_graph(data, edges='links')
+    # return json_graph.node_link_graph(data, edges='links')
+    return json_graph.node_link_graph(data, link='links')
 
 
 def load_topology(name: str, seed: Optional[int] = None) -> Tuple[nx.DiGraph, bool]:
@@ -397,6 +398,17 @@ def get_uniform_tm_problem_with_capacity_heuristic(
     set_edge_capacity_to(graph, c)
     
     return c, graph, tm
+
+
+def get_uniform_tm_problem(topo_name: str, tm_seed: int, scale_factor: float = 10) -> Tuple[Optional[float], nx.DiGraph, TrafficMatrixBase]:
+    # First, attempt to load the topology from the repo. (which will have capacities noted on links)
+    graph = load_repo_topology(topo_name)
+    if graph is None:
+        return get_uniform_tm_problem_with_capacity_heuristic(topo_name, tm_seed, scale_factor)
+    tm_params = UniformTrafficMatrixParams(n = len(graph.nodes), min = 0.0, max = 1.0)
+    tm = UniformTrafficMatrix(seed=tm_seed, params=tm_params)
+    tm.rescale(scale_factor)
+    return None, graph, tm
 
 
 def get_graph_M_matrix(graph: nx.DiGraph) -> np.ndarray:
