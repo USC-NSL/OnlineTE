@@ -2,6 +2,7 @@ import numpy as np
 import networkx as nx
 import scipy.sparse
 from dataclasses import dataclass
+# from joblib import Parallel, delayed
 from typing import List, Tuple, Optional, Dict
 from collections import defaultdict
 from . import PDLPPathBasedSolverParams
@@ -16,6 +17,12 @@ from te.algorithms.sub_algorithms.flow_conservation_test import check_flow_conse
 from topologies.utils import get_node_in_array, get_node_out_array
 from utils.logging import as_info, as_fail, ShortTQDM
 from te.algorithms.sub_algorithms.paths import TShortestPaths, path_based_to_edge_based_nnz, get_or_make_path_object_for_topology_name
+# from te.algorithms.sub_algorithms.utils import (get_slice_starts_and_exclusive_ends, get_number_of_required_workers,
+#                                                 NUM_PROCS)
+
+
+# MAX_NUMBER_OF_COMMODITIES_PER_CORE = 5000
+# MAX_NUMBER_OF_WORKERS = min(8, NUM_PROCS)
 
 
 @dataclass
@@ -28,6 +35,7 @@ class ConstraintVector:
     Coefficients are kept as a sparse matrix, but bounds are dense.
     """
     coeffs: scipy.sparse.lil_matrix
+    # coeffs: scipy.sparse.coo_matrix
     lowers: np.ndarray
     uppers: np.ndarray
 
@@ -35,13 +43,38 @@ class ConstraintVector:
     def allocate(cls, n_vars, n_constraints):
         return cls(
             scipy.sparse.lil_matrix((n_constraints, n_vars)),
+            # scipy.sparse.coo_matrix((n_constraints, n_vars)),
             np.zeros((n_constraints,)), np.zeros((n_constraints,))
         )
+    
+    # def set_from_indices(self, rows: List[int], cols: List[int], data: List[float]):
+    #     shape = self.coeffs.shape
+    #     self.coeffs = scipy.sparse.coo_matrix((data, (rows, cols)), shape=shape)
     
     def attach_to_program(self, lp: pdlp.QuadraticProgram):
         lp.constraint_matrix = self.coeffs.tocsc()
         lp.constraint_lower_bounds = self.lowers
         lp.constraint_upper_bounds = self.uppers
+
+
+# def _set_capacity_constraint_vector_slice(
+#     row_slice: List[np.ndarray], col_slice: List[np.ndarray],
+#     demand_slice: np.ndarray, shift: int, T: int
+# ) -> Tuple[List[int], List[int], List[float]]:
+#     out_rows, out_cols, out_data = [], [], []
+#     enum = range(len(row_slice)) if shift > 0 else ShortTQDM(range(len(row_slice)))
+#     for k in enum:
+#         row = row_slice[k]
+#         col = col_slice[k]
+#         nnz = len(row)
+#         for i in range(nnz):
+#             n = row[i]
+#             t = col[i]
+#             out_rows.append(n)
+#             out_cols.append(T * (k + shift) + t)
+#             out_data.append(demand_slice[k])
+#     print(f'Finished on {shift}')
+#     return out_rows, out_cols, out_data
 
 
 class PDLPPathBasedTE(TrafficEngineeringLP):
@@ -207,6 +240,38 @@ class PDLPPathBasedTE(TrafficEngineeringLP):
             else:
                 constraits.uppers[e] = self._capacities[e]
             constraits.lowers[e] = -np.inf
+    # def _set_capacity_constraint_vector(self, constraits: ConstraintVector) -> Tuple[List[int], List[int], List[float]]:
+    #     K, N, T = self._path_object.alpha.shape
+    #     ALPHA = self._path_object.alpha
+    #     D = self._demands
+    #     if K <= MAX_NUMBER_OF_COMMODITIES_PER_CORE:
+    #         rows, cols, data = _set_capacity_constraint_vector_slice(ALPHA.rows, ALPHA.cols, D, 0, T)
+    #     else:
+    #         slices = get_slice_starts_and_exclusive_ends(K, MAX_NUMBER_OF_WORKERS, MAX_NUMBER_OF_COMMODITIES_PER_CORE)
+    #         print(slices)
+    #         nprocs = get_number_of_required_workers(K, MAX_NUMBER_OF_WORKERS, MAX_NUMBER_OF_COMMODITIES_PER_CORE)
+    #         print(as_info(f'Spawning {nprocs} workers to assign the coefficient matrix'))
+    #         ls = Parallel(n_jobs=nprocs, return_as='generator', batch_size=1)\
+    #             (delayed(_set_capacity_constraint_vector_slice)\
+    #                 (ALPHA.rows[begin:end], ALPHA.cols[begin:end], D[begin:end], begin, T)
+    #                 for begin, end in slices)
+    #         print("finished!")
+    #         rows, cols, data = [], [], []
+    #         # for _ in range(nprocs):
+    #         #     _row, _col, _data = ls.pop(0)
+    #         for _row, _col, _data in ls:
+    #             rows.extend(_row)
+    #             cols.extend(_col)
+    #             data.extend(_data)
+    #     for e in range(N):
+    #         if self._problem_description.is_mlu:
+    #             rows.append(e)
+    #             cols.append(self._NUM_VARIABLES-1)
+    #             data.append(-self._capacities[e])
+    #         else:
+    #             constraits.uppers[e] = self._capacities[e]
+    #         constraits.lowers[e] = -np.inf
+    #     return rows, cols, data
     
     def _set_demand_constraint_vector(self, constraints: ConstraintVector):
         K, N, T = self._path_object.alpha.shape
@@ -219,6 +284,20 @@ class PDLPPathBasedTE(TrafficEngineeringLP):
         constraints.uppers[N:] = 1.0
         if self._problem_description.is_mlu:
             constraints.lowers[N:] = 1.0
+    # def _set_demand_constraint_vector(self, constraints: ConstraintVector) -> Tuple[List[int], List[int], List[float]]:
+    #     K, N, T = self._path_object.alpha.shape
+    #     BETA = self._path_object.beta
+    #     rows, cols, data = [], [], []
+    #     for k in ShortTQDM(range(K)):
+    #         start = k * T
+    #         end = start + BETA[k]
+    #         rows.extend([N + k for _ in range(end - start)])
+    #         cols.extend([i for i in range(start, end)])
+    #         data.extend([1.0 for _ in range(end - start)])
+    #     constraints.uppers[N:] = 1.0
+    #     if self._problem_description.is_mlu:
+    #         constraints.lowers[N:] = 1.0
+    #     return rows, cols, data
 
     def _get_objective_vector(self) -> Tuple[float, np.ndarray]:
         vec = np.zeros(shape=(self._NUM_VARIABLES,))
@@ -234,6 +313,14 @@ class PDLPPathBasedTE(TrafficEngineeringLP):
         self._set_capacity_constraint_vector(constraits)
         print("Adding demand constraints")
         self._set_demand_constraint_vector(constraits)
+        # print("Adding capacity constraints")
+        # rows, cols, data = self._set_capacity_constraint_vector(constraits)
+        # print("Adding demand constraints")
+        # _rows, _cols, _data = self._set_demand_constraint_vector(constraits)
+        # rows.extend(_rows)
+        # cols.extend(_cols)
+        # data.extend(_data)
+        # constraits.set_from_indices(rows, cols, data)
         return constraits
     
     def _add_constraints(self):

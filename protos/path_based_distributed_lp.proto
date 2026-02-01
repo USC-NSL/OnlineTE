@@ -8,6 +8,7 @@ service DistributedADMMSolver {
     rpc SetAlphaRows(stream SerializedNumpyArrayMessage) returns (google.protobuf.Empty) {}
     rpc SetAlphaCols(stream SerializedNumpyArrayMessage) returns (google.protobuf.Empty) {}
     rpc SetBeta(stream Chunk) returns (google.protobuf.Empty) {}
+    rpc SetCapacities(SerializedNumpyArrayMessage) returns (google.protobuf.Empty) {}
     rpc SetDemands(stream Chunk) returns (google.protobuf.Empty) {}
     rpc DoNetworkUpdate(NetworkUpdateRequest) returns (NetworkUpdateResponse) {}
     rpc UpdateWorkerNode(UpdateMessage) returns (google.protobuf.Empty) {}

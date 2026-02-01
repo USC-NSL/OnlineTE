@@ -83,7 +83,9 @@ class AsynchronousgRPCControllerBackend(SynchADMMControllerBackendBase):
                                        alpha_rows: List[IntegerCPUArray],
                                        alpha_cols: List[IntegerCPUArray],
                                        alpha_shape: Tuple[int, int, int],
-                                       beta_k: IntegerCPUArray, demands_k: CPUArray):
+                                       beta_k: IntegerCPUArray,
+                                       demands_k: CPUArray,
+                                       capacities_e: CPUArray):
         NUM_WORKERS = self.number_of_workers
         NUM_COLS, N, T = alpha_shape
         assert NUM_COLS % NUM_WORKERS == 0
@@ -108,6 +110,10 @@ class AsynchronousgRPCControllerBackend(SynchADMMControllerBackendBase):
             for i, stub in enumerate(WORKERS)
         ])
         await asyncio.gather(*[
+            stub.SetCapacities(array_to_serialized_message(capacities_e))
+            for stub in WORKERS
+        ])
+        await asyncio.gather(*[
             stub.SetBeta(chunk_big_array(BETA_K_CHUNKS[i], GRPC_ARRAY_STREAM_MAX_LEN, dtype=np.int32))
             for i, stub in enumerate(WORKERS)
         ])
@@ -124,9 +130,11 @@ class AsynchronousgRPCControllerBackend(SynchADMMControllerBackendBase):
                                 alpha_rows: List[IntegerCPUArray],
                                 alpha_cols: List[IntegerCPUArray],
                                 alpha_shape: Tuple[int, int, int],
-                                beta_k: IntegerCPUArray, demands_k: CPUArray):
+                                beta_k: IntegerCPUArray,
+                                demands_k: CPUArray,
+                                capacities_e: CPUArray):
         self._event_loop.run_until_complete(self._initialize_worker_nodes(
-            solver_params, alpha_rows, alpha_cols, alpha_shape, beta_k, demands_k
+            solver_params, alpha_rows, alpha_cols, alpha_shape, beta_k, demands_k, capacities_e
         ))
     
     async def _update_demands(self, updated_demands: CPUArray):

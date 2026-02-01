@@ -118,9 +118,9 @@ class PDLPTE(TrafficEngineeringLP):
         N = len(self._graph.edges)
         if self._problem_description.is_mlu:
             self._utility = result.primal_solution[-1]
-            self._X_ek = np.reshape(result.primal_solution[:-1], shape=(N, K))
+            self._X_ek = np.reshape(result.primal_solution[:-1], newshape=(N, K))
         else:
-            self._X_ek = np.reshape(result.primal_solution, shape=(N, K))
+            self._X_ek = np.reshape(result.primal_solution, newshape=(N, K))
         self._set_last_objective(result)
     
     def _set_last_objective(self, result: pdlp.SolverResult):

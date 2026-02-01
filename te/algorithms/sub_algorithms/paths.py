@@ -9,7 +9,7 @@ from itertools import islice
 from te import TE_PATH
 from topologies.utils import load_topology
 from numba import njit, prange
-from te.algorithms.array_utils.cpu_utils import CPUArray, IntegerCPUArray, BooleanCPUArray, cpu_zeros, cpu_int_zeros, cpu_bool_zeros
+from te.algorithms.array_utils.cpu_utils import CPUArray, IntegerCPUArray, BooleanCPUArray, cpu_zeros, cpu_int_zeros, cpu_bool_zeros, cpu_array
 from te.algorithms.sub_algorithms.utils import get_slice_starts_and_exclusive_ends, get_number_of_required_workers, NUM_PROCS
 from utils.logging import as_info, as_warning, as_fail, ShortTQDMEnumerate
 
@@ -322,12 +322,14 @@ particular:
 
 
 @njit(parallel=True)
-def get_initial_total_flow_nnz(rows: List[np.ndarray], beta: np.ndarray, shape: Tuple[int, int, int], D_k: np.ndarray) -> np.ndarray:
+def get_initial_total_flow_nnz(rows: List[np.ndarray], beta: np.ndarray, shape: Tuple[int, int, int], D_k: np.ndarray,
+                               C_e: Optional[np.ndarray] = None) -> np.ndarray:
     """
     Returns the total flow over each edge, when all commodities are
     routed evenly on all paths.
     """
     K, N, _ = shape
+    is_capped = C_e is not None
     output = np.zeros((N,), dtype=D_k.dtype)
     for k in prange(K):
         tmp = np.zeros((N,), dtype=D_k.dtype)
@@ -338,18 +340,24 @@ def get_initial_total_flow_nnz(rows: List[np.ndarray], beta: np.ndarray, shape: 
             continue
         for i in range(nnz):
             n = row[i]
-            tmp[n] += d_val
+            if not is_capped:
+                tmp[n] += d_val
+            else:
+                tmp[n] += d_val / C_e[n]
         output += tmp
     return output
 
 
 @njit(parallel=True)
-def path_based_to_edge_based_nnz(Y_tk: np.ndarray, rows: List[np.ndarray], cols: List[np.ndarray], N: int, D_k: np.ndarray) -> np.ndarray:
+def path_based_to_edge_based_nnz(Y_tk: np.ndarray, rows: List[np.ndarray], cols: List[np.ndarray], N: int, D_k: np.ndarray, 
+                                 C_e: Optional[np.ndarray] = None) -> np.ndarray:
     """
     Implements `D_k * alpha_k Y_k` for each `k` by iterating over non-zero entries.
     On larger topologies, this implementation greatly outperforms `path_based_to_edge_based`.
+    If `C_e` is given, `D_k / C_e` will be used when needed.
     """
     K = len(rows)
+    is_capped = C_e is not None
     output = np.zeros((N, K), dtype=Y_tk.dtype)
     
     for k in prange(K):
@@ -362,17 +370,22 @@ def path_based_to_edge_based_nnz(Y_tk: np.ndarray, rows: List[np.ndarray], cols:
         for i in range(nnz):
             n = row[i]
             t = col[i]
-            output[n, k] += Y_tk[t, k] * d_val 
+            if not is_capped:
+                output[n, k] += Y_tk[t, k] * d_val 
+            else:
+                output[n, k] += Y_tk[t, k] * d_val / C_e[n]
     return output
 
 
 @njit(parallel=True)
-def path_based_to_edge_based_mean_nnz(Y_tk: np.ndarray, rows: List[np.ndarray], cols: List[np.ndarray], N: int, D_k: np.ndarray) -> np.ndarray:
+def path_based_to_edge_based_mean_nnz(Y_tk: np.ndarray, rows: List[np.ndarray], cols: List[np.ndarray], N: int, D_k: np.ndarray,
+                                      C_e: Optional[np.ndarray] = None) -> np.ndarray:
     """
     Implements `D_k * alpha_k Y_k` averaged over all `k` by only iterating non-zero entries.
     On larger topologies, this implementation greatly outperforms `path_based_to_edge_based_mean`.
     """
     K = len(rows)
+    is_capped = C_e is not None
     output = np.zeros((N,), dtype=Y_tk.dtype)
 
     for k in prange(K):
@@ -384,17 +397,22 @@ def path_based_to_edge_based_mean_nnz(Y_tk: np.ndarray, rows: List[np.ndarray], 
         for i in range(nnz):
             n = row[i]
             t = col[i]
-            tmp[n] += d_val * Y_tk[t, k]
+            if not is_capped:
+                tmp[n] += d_val * Y_tk[t, k]
+            else:
+                tmp[n] += d_val * Y_tk[t, k] / C_e[n]
         output += tmp
     return output / K
 
 
 @njit(parallel=True)
-def path_based_projection_nnz(Y_tk: np.ndarray, rows: List[np.ndarray], cols: List[np.ndarray], N: int, D_k: np.ndarray) -> np.ndarray:
+def path_based_projection_nnz(Y_tk: np.ndarray, rows: List[np.ndarray], cols: List[np.ndarray], N: int, D_k: np.ndarray,
+                              C_e: Optional[np.ndarray] = None) -> np.ndarray:
     """
     Implements `D_k^2 * (alpha_k^T alpha_k) Y_k` for each `k` by only iterating non-zero entries.
     """
     T, K = Y_tk.shape
+    is_capped = C_e is not None
     output = np.zeros((T, K), dtype=Y_tk.dtype)
 
     for k in prange(K):
@@ -410,13 +428,18 @@ def path_based_projection_nnz(Y_tk: np.ndarray, rows: List[np.ndarray], cols: Li
         for i in range(nnz):
             n = row[i]
             t = col[i]
-            output[t, k] += tmp[n] * d_val ** 2
+            if not is_capped:
+                output[t, k] += tmp[n] * d_val ** 2
+            else:
+                output[t, k] += tmp[n] * (d_val / C_e[n]) ** 2
     return output
 
 
 @njit
-def path_based_transpose_product_nnz(X_ek: np.ndarray, rows: List[np.ndarray], cols: List[np.ndarray], T: int, D_k: np.ndarray):
+def path_based_transpose_product_nnz(X_ek: np.ndarray, rows: List[np.ndarray], cols: List[np.ndarray], T: int, D_k: np.ndarray,
+                                     C_e: Optional[np.ndarray] = None):
     _, K = X_ek.shape
+    is_capped = C_e is not None
     output = np.zeros((K, T), dtype=X_ek.dtype)
     for k in prange(K):
         d_val = D_k[k]
@@ -426,13 +449,18 @@ def path_based_transpose_product_nnz(X_ek: np.ndarray, rows: List[np.ndarray], c
         for i in range(nnz):
             n = row[i]
             t = col[i]
-            output[k, t] += X_ek[n, k] * d_val
+            if not is_capped:
+                output[k, t] += X_ek[n, k] * d_val
+            else:
+                output[k, t] += X_ek[n, k] * d_val / C_e[n]
     return output.T
 
 
 @njit
-def path_based_transpose_vector_product_nnz(X_e: np.ndarray, rows: List[np.ndarray], cols: List[np.ndarray], T: int, D_k: np.ndarray):
+def path_based_transpose_vector_product_nnz(X_e: np.ndarray, rows: List[np.ndarray], cols: List[np.ndarray], T: int, D_k: np.ndarray,
+                                            C_e: Optional[np.ndarray] = None):
     K = D_k.shape[0]
+    is_capped = C_e is not None
     output = np.zeros((K, T), dtype=X_e.dtype)
     for k in prange(K):
         d_val = D_k[k]
@@ -442,7 +470,10 @@ def path_based_transpose_vector_product_nnz(X_e: np.ndarray, rows: List[np.ndarr
         for i in range(nnz):
             n = row[i]
             t = col[i]
-            output[k, t] += X_e[n] * d_val
+            if not is_capped:
+                output[k, t] += X_e[n] * d_val
+            else:
+                output[k, t] += X_e[n] * d_val / C_e[n]
     return output.T
 
 
@@ -460,18 +491,31 @@ def path_based_eigen_upper_nnz(cols: List[np.ndarray], T: int):
     return output
 
 
+def path_based_power_method(rows: List[np.ndarray], cols: List[np.ndarray], shape: Tuple[int, int, int], n_iters: int = 20) -> np.ndarray:
+    K, N, T = shape
+    d = cpu_zeros((K,)) + 1
+    # TODO: Don't be lazy ... this should start from a random vector
+    v = cpu_zeros((T, K)) + 1
+    for _ in range(n_iters):
+        res = path_based_projection_nnz(v, rows, cols, N, d)
+        v = res / cpu_array(np.linalg.norm(v, axis=0))[None, :]
+    res = path_based_projection_nnz(v, rows, cols, N, d)
+    return cpu_array(np.sum(np.multiply(res, v), axis=0) / np.sum(np.multiply(v, v), axis=0))
+
+
 def warm_start_jit(rows: List[np.ndarray], cols: List[np.ndarray], shape: Tuple[int, int, int], beta: IntegerCPUArray):
     K, N, T = shape
+    C_e = cpu_zeros((N,)) + 1
     D_k = cpu_zeros((K,))
     X_ek = cpu_zeros((N, K))
     Y_tk = cpu_zeros((T, K))
     path_based_eigen_upper_nnz(cols, T)
-    get_initial_total_flow_nnz(rows, beta, shape, D_k)
-    path_based_to_edge_based_nnz(Y_tk, rows, cols, N, D_k)
-    path_based_to_edge_based_mean_nnz(Y_tk, rows, cols, N, D_k)
-    path_based_projection_nnz(Y_tk, rows, cols, N, D_k)
-    path_based_transpose_product_nnz(X_ek, rows, cols, T, D_k)
-    path_based_transpose_vector_product_nnz(X_ek[:, 0], rows, cols, T, D_k)
+    get_initial_total_flow_nnz(rows, beta, shape, D_k, C_e)
+    path_based_to_edge_based_nnz(Y_tk, rows, cols, N, D_k, C_e)
+    path_based_to_edge_based_mean_nnz(Y_tk, rows, cols, N, D_k, C_e)
+    path_based_projection_nnz(Y_tk, rows, cols, N, D_k, C_e)
+    path_based_transpose_product_nnz(X_ek, rows, cols, T, D_k, C_e)
+    path_based_transpose_vector_product_nnz(X_ek[:, 0], rows, cols, T, D_k, C_e)
 
 
 """

@@ -10,22 +10,25 @@ from . import SynchADMMSolverParams
 from .base import SynchADMMWorkerBackendBase
 from te.algorithms.sub_algorithms.pgd import do_path_based_pgd, do_path_based_maxflow_pgd
 from te.algorithms.sub_algorithms.paths import (path_based_to_edge_based_nnz, path_based_to_edge_based_mean_nnz,
-                                                warm_start_jit, path_based_eigen_upper_nnz)
+                                                warm_start_jit, path_based_power_method)
 
 
 class DenseSolver:
     def __init__(self, alpha_shape: Tuple[int, int, int], alpha_cols: NumbaList, alpha_rows: NumbaList, 
                  beta: IntegerCPUArray, demands: CPUArray, pgd_step: float, pgd_iters: int, eta: float,
-                 adjust_step_size: bool):
+                 adjust_step_size: bool, capacities: CPUArray):
         K, N, T = alpha_shape
         self._alpha_shape = alpha_shape
         self._alpha_rows = alpha_rows
         self._alpha_cols = alpha_cols
         self._beta = beta
         self._demands = demands
-        self._pgd_steps = pgd_step if not adjust_step_size else cpu_array(pgd_step / path_based_eigen_upper_nnz(alpha_cols, T))
+        self._pgd_steps = pgd_step if not adjust_step_size else cpu_array(pgd_step / path_based_power_method(alpha_rows, alpha_cols, alpha_shape))
         self._pgd_iters = pgd_iters
         self._eta = eta
+        # self._capacities = capacities
+        # TODO: Implement capacity scaling later ...
+        self._capacities = None
 
         self._K = K
         self._N = N
@@ -35,13 +38,14 @@ class DenseSolver:
         self._Y_tk_old = cpu_array(self._Y_tk)
     
     def _initialize_splits(self):
-        initial_values = self._demands / self._beta
-        mask = np.arange(self._T)[:, None] < self._beta
-        self._Y_tk[mask] = np.repeat(initial_values, self._beta)
+        initial_values = 1 / self._beta
+        self._Y_tk = cpu_array(np.repeat(initial_values[None, :], axis=0, repeats=self._T))
+        mask = np.arange(self._T)[:, None] >= self._beta
+        self._Y_tk[mask] = 0
 
     @property
     def X_ek(self) -> CPUArray:
-        return path_based_to_edge_based_nnz(self._Y_tk, self._alpha_rows, self._alpha_cols, self._N, self._demands)
+        return path_based_to_edge_based_nnz(self._Y_tk, self._alpha_rows, self._alpha_cols, self._N, self._demands, self._capacities)
     
     def update(self, sharing_bias: CPUArray) -> CPUArray:
         new_Y_old = cpu_array(self._Y_tk)
@@ -56,11 +60,12 @@ class DenseSolver:
             num_edges=self._N,
             num_paths=self._T,
             step_sizes=self._pgd_steps,
-            n_iter=self._pgd_iters
+            n_iter=self._pgd_iters,
+            capacities=self._capacities
         )
         self._Y_tk_old = new_Y_old
         return path_based_to_edge_based_mean_nnz(self._Y_tk, self._alpha_rows, self._alpha_cols,
-                                                 self._N, self._demands)
+                                                 self._N, self._demands, self._capacities)
 
 
 class SynchADMMWorkerNode(DistributedSolverNodeBase):
@@ -78,6 +83,7 @@ class SynchADMMWorkerNode(DistributedSolverNodeBase):
         self._alpha_rows_chunk: Optional[NumbaList[IntegerCPUArray]] = None
         self._alpha_cols_chunk: Optional[NumbaList[IntegerCPUArray]] = None
         self._beta_k_chunk: Optional[IntegerCPUArray] = None
+        self._capacities: Optional[CPUArray] = None
         self._D_k_chunk: Optional[CPUArray] = None
         
         self._sharing_bias_cached: Optional[CPUArray] = None
@@ -92,6 +98,7 @@ class SynchADMMWorkerNode(DistributedSolverNodeBase):
         self.backend.set_path_mask_rows = self.set_alpha_rows
         self.backend.set_path_mask_cols = self.set_alpha_cols
         self.backend.set_path_count = self.set_beta
+        self.backend.set_capacities = self.set_capacities
         self.backend.set_demands = self.set_demands
         self.backend.set_solver_parameters = self.set_solver_parameters
         self.backend.update_cached_values = self.update_cached_values
@@ -112,13 +119,16 @@ class SynchADMMWorkerNode(DistributedSolverNodeBase):
         self._alpha_cols_chunk = NumbaList(cols)
     def set_beta(self, beta: IntegerCPUArray):
         self._beta_k_chunk = beta
+    def set_capacities(self, capacities: CPUArray):
+        self._capacities = capacities
     def set_demands(self, demands: CPUArray):
         self._D_k_chunk = demands
         self._dense_solver = DenseSolver(
             self._alpha_shape, self._alpha_cols_chunk, self._alpha_rows_chunk,
             self._beta_k_chunk, self._D_k_chunk, 
             self._solver_params.Gamma, self._solver_params.SwitchIterations,
-            self._solver_params.Eta, self._solver_params.AdjustGamma
+            self._solver_params.Eta, self._solver_params.AdjustGamma,
+            self._capacities
         )
     def set_solver_parameters(self, new_params: SynchADMMSolverParams):
         self._solver_params = new_params

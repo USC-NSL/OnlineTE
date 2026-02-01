@@ -15,7 +15,9 @@ class SynchADMMControllerBackendBase(CommunicationBackendBase):
                                 alpha_rows: List[IntegerCPUArray],
                                 alpha_cols: List[IntegerCPUArray],
                                 alpha_shape: Tuple[int, int, int],
-                                beta_k: IntegerCPUArray, demands_k: CPUArray):
+                                beta_k: IntegerCPUArray,
+                                demands_k: CPUArray,
+                                capacities_e: CPUArray):
         """Initialize worker nodes with solver parameters and the path mask matrix"""
 
     @abstractmethod
@@ -71,6 +73,13 @@ class SynchADMMWorkerBackendBase(CommunicationBackendBase):
     @set_path_count.setter
     def set_path_count(self, f: Callable[[IntegerCPUArray], None]):
         self._set_path_count = f
+
+    @property
+    def set_capacities(self) -> Callable[[CPUArray], None]:
+        return self._set_capacities
+    @set_capacities.setter
+    def set_capacities(self, f: Callable[[CPUArray], None]):
+        self._set_capacities = f
 
     @property
     def set_demands(self) -> Callable[[CPUArray], None]:

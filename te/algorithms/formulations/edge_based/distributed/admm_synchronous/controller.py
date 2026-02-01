@@ -139,7 +139,9 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
 
     @record_cpu_runtime('Feasible-Assignment')
     def _set_initial_feasible_solution(self):
+        self._capacities = cpu_double_array([item[-1] for item in self._graph.edges(data='capacity')])
         self._X_ek_start = get_feasible_flow_assignment(self._graph, self._commodity_list, self._solver_params.X0Type)
+        np.divide(self._X_ek_start, cpu_array(self._capacities)[:, None], out=self._X_ek_start)
         self._Z_e_start = np.sum(self._X_ek_start, axis=1)
     
     def _set_NULL_M(self):
@@ -147,7 +149,7 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
         assert len(M.shape) == 2
         m, n = M.shape
         assert m < n
-        N = cpu_array(get_adjacency_null_space(M))
+        N = cpu_array(get_adjacency_null_space(M * self._capacities))
         T = N.shape[1]
         self._NULL_M = N
         self._NNT_M = N @ N.T
@@ -161,9 +163,10 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
     def _initialize_variables_and_residuals(self):
         K = len(self._commodity_list)
         NUM_EDGES = self._NUM_EDGES
-        self._capacities = cpu_double_array([item[-1] for item in self._graph.edges(data='capacity')])
+        # self._capacities = cpu_double_array([item[-1] for item in self._graph.edges(data='capacity')])
         self._c_norm = np.linalg.norm(self._capacities)
-        self._alpha = self._c_norm * np.sqrt(NUM_EDGES)
+        # self._alpha = self._c_norm * np.sqrt(NUM_EDGES)
+        self._alpha = 1 / np.sqrt(NUM_EDGES)
         # self._X_ek = cpu_array(self._X_ek_start)
         self._X_ek_sum_e = cpu_array(self._Z_e_start)
         self._sharing_mean_1 = self._Z_e_start / K
@@ -173,10 +176,13 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
         # tolerance for the distributed algorithm itself.
         assert self._solver_params.ConvTol >= self._mlu_params.ConvTol, \
             f"{self._solver_params.ConvTol} < {self._mlu_params.ConvTol}"
-        # TODO: Find a better way to handle `Rho` and `Alpha` here ...
-        self._mlu_params._Rho = self._solver_params.Rho
-        self._mlu_params._Alpha = self._alpha
-        self._mlu_solver = self._mlu_solver_cls(NUM_EDGES, self._capacities, self._mlu_params)
+        # self._mlu_solver = self._mlu_solver_cls(NUM_EDGES, self._capacities, self._mlu_params)
+        # TODO: Since we still haven't added capacity scaling to the path-based solver, the PDLP solver still
+        #       expects the capacity to be given. The edge-based solver however has scaling implemented already,
+        #       so we pass all ones as capacity here ...
+        self._mlu_solver = self._mlu_solver_cls(NUM_EDGES, np.ones_like(self._capacities), self._mlu_params)
+        self._mlu_solver.rho = self._solver_params.Rho
+        self._mlu_solver.alpha = self._alpha
 
         self._outer_admm_wrapper = ADMMWrapper(NUM_EDGES, self._solver_params.Rho)
         self._outer_admm_wrapper.initialize(self._X_ek_sum_e)
@@ -214,6 +220,7 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
     
     def _set_X_ek(self):
         self._X_ek = self.backend.get_X_ek()
+        np.multiply(self._X_ek, cpu_array(self._capacities)[:, None], out=self._X_ek)
     
     def _add_constraints(self):
         assert self._mlu_solver is not None
@@ -329,11 +336,15 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
                 self._update_r_e()
                 self._objective_trace.append(
                     float(self.objective_value), 
-                    float(get_solution_maximum_utilization(self._X_ek_sum_e, self._graph))
+                    # float(get_solution_maximum_utilization(self._X_ek_sum_e, self._graph))
+                    float(get_solution_maximum_utilization(self._X_ek_sum_e * self._capacities, self._graph))
                 )
                 # Inner loop infeasibility is usually very small, no need to bother with it!
                 err = self._outer_admm_wrapper.infeasibility
                 self._objective_gap_trace.append(err)
+                # U_a = np.max(len(self._commodity_list) * self._sharing_mean_1 / self._capacities)
+                U_a = np.max(len(self._commodity_list) * self._sharing_mean_1)
+                print(f"Err: {str(round(err, 4))} | U_c: {str(round(self._mlu_solver.current_u, 4))} | U_a: {str(round(U_a, 4))}")
                 if err < PARAMS.ConvTol:
                     print(as_success("Crossed the convergance bound. Breaking early ..."))
                     break

@@ -16,8 +16,9 @@ from .base import ControllerMLUSolver, ControllerMLUException
 
 @dataclass
 class PDLPMLUParams(PDLPParams):
-    _Rho: Optional[float] = None
-    _Alpha: Optional[float] = None
+    # TODO: We no longer need these! Get rid of them.
+    # _Rho: Optional[float] = None
+    # _Alpha: Optional[float] = None
 
     def __post_init__(self):
         self._left_column_share = 0.5
@@ -96,25 +97,30 @@ class PDLPMLU(ControllerMLUSolver):
             for d in range(D):
                 constraints.coeffs[e, e + d*N] = 1.0
             constraints.coeffs[e, -1] = -self.capacities[e]
+            # constraints.coeffs[e, -1] = -1
         constraints.lowers.fill(-np.inf)
         return constraints
     
     def _get_objective_matrix_diagonal(self) -> np.ndarray:
-        d = np.full((self._NUM_VARIABLES,), fill_value=self._solver_params._Rho)
+        # d = np.full((self._NUM_VARIABLES,), fill_value=self._solver_params._Rho)
+        d = np.full((self._NUM_VARIABLES,), fill_value=self.rho)
         d[-1] = 0
         # d[-1] = self._solver_params._Alpha * self.num_domains
         return d
     
     def _get_objective_vector(self) -> np.ndarray:
         out = np.zeros((self._NUM_VARIABLES,))
-        out[:-1] = -self._current_F * self._solver_params._Rho
+        # out[:-1] = -self._current_F * self._solver_params._Rho
+        out[:-1] = -self._current_F * self.rho
         if self.is_mlu:
-            out[-1] = self._solver_params._Alpha * self.num_domains
+            # out[-1] = self._solver_params._Alpha * self.num_domains
+            out[-1] = self.alpha * self.num_domains
         return out
 
     def update_F_m(self, new_F: CPUArray):
         self._current_F = np.array(new_F, dtype=np.float64).flatten()
         self._solved = False
+        self._lp.set_objective_matrix_diagonal(self._get_objective_matrix_diagonal())
         self._lp.objective_vector = self._get_objective_vector()
     
     def _make_variables(self):

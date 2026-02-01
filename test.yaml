@@ -5,7 +5,8 @@ topo: Kdl
 tm_seed: 12345
 objective: MLU
 # report_unsat: True
-scale_factor: 50.0
+scale_factor: 100.0
+# scale_factor: 50.0
 # scale_factor: 20.0
 # scale_factor: 10.0
 synch:
@@ -16,19 +17,22 @@ synch:
   # local: True
   mlu_backend: pdlp
   SolverParams:
-    InnerLoopRounds: 10
+    InnerLoopRounds: 5
     OuterLoopRounds: 100
     SwitchIterations: 1
     Precision: single
     # Precision: double
-    # Rho: 0.2
-    Eta: 0.2
+    # Eta: 0.1
     # Gamma: 0.5
     # Beta: 8e-5
+    Rho: 0.2
+    Eta: 0.1
     X0Type: PSEUDO_INVERSE
     # X0Type: CSR_SHORTEST_PATH
+    ConvTol: 1e-6
   PDLPMLUParams:
     Threads: 1
+    ConvTol: 1e-8
   # comm_backend: mcast
   # Mcast:
   #   UpdateCopyCount: 1

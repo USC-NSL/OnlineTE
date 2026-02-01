@@ -92,6 +92,9 @@ class NetworkWorkerNodeListener(DistributedADMMSolverServicer):
     def SetBeta(self, request_iterator: Iterator[array_messages.Chunk], context):
         self._backend.set_path_count(rebuild_chunked_array(request_iterator))
         return Empty()
+    def SetCapacities(self, request: array_messages.SerializedNumpyArrayMessage, context):
+        self._backend.set_capacities(serialized_message_to_array(request))
+        return Empty()
     def SetDemands(self, request_iterator: Iterator[array_messages.Chunk], context):
         self._backend.set_demands(rebuild_chunked_array(request_iterator))
         return Empty()

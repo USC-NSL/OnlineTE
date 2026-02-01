@@ -64,7 +64,6 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
         
         self._X_ek: Optional[CPUArray] = None
         self._X_ek_sum_e: Optional[CPUArray] = None
-        self._X_ek_sum_e: Optional[CPUArray] = None
         self._outer_admm_wrapper: Optional[ADMMWrapper] = None
 
         self._sharing_mean_1: Optional[CPUArray] = None
@@ -161,12 +160,13 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
         # tolerance for the distributed algorithm itself.
         assert self._solver_params.ConvTol >= self._mlu_params.ConvTol, \
             f"{self._solver_params.ConvTol} < {self._mlu_params.ConvTol}"
-        # TODO: Find a better way to handle `Rho` and `Alpha` here ...
-        self._mlu_params._Rho = self._solver_params.Rho
-        self._mlu_params._Alpha = self._alpha
         self._mlu_solver = self._mlu_solver_cls(NUM_EDGES, self._capacities, self._mlu_params)
+        self._mlu_solver.rho = self._solver_params.Rho
+        self._mlu_solver.alpha = self._alpha
 
         self._outer_admm_wrapper = ADMMWrapper(NUM_EDGES, self._solver_params.Rho)
+        # self._outer_admm_wrapper = ADMMWrapper(NUM_EDGES, self._solver_params.Rho,
+        #                                        adaptive_mu=10, adaptive_tau=2, adaptive_T=10)
         self._outer_admm_wrapper.initialize(self._X_ek_sum_e)
     
     def _report_problem_size(self):
@@ -210,6 +210,7 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
     @record_cpu_runtime('Controller-Update')
     def _update_controller_objective(self):
         assert self._mlu_solver is not None
+        self._mlu_solver.rho = self._outer_admm_wrapper.step_size
         self._mlu_solver.update_F_m(-self._outer_admm_wrapper.get_Z_step_bias())
     
     def _add_objective(self):
@@ -230,7 +231,7 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
 
         K = len(self._commodity_list)
         ETA = self._solver_params.Eta
-        RHO = self._solver_params.Rho
+        RHO = self._outer_admm_wrapper.step_size
         U_E = self._sharing_dual
         X_BAR_E = self._sharing_mean_1
         F_E = self._get_F()
@@ -284,7 +285,8 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
             self._path_object.alpha.cols,
             self._path_object.alpha.shape,
             self._path_object.beta,
-            self._D_k
+            self._D_k,
+            cpu_array(self._capacities)
         )
         self.backend.reconvene_network_updates(
             sharing_mean_1=self._sharing_mean_1,
@@ -326,6 +328,8 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
                 # Inner loop infeasibility is usually very small, no need to bother with it!
                 err = self._outer_admm_wrapper.infeasibility
                 self._objective_gap_trace.append(err)
+                U_a = np.max(len(self._commodity_list) * self._sharing_mean_1 / self._capacities)
+                print(f"Err: {str(round(err, 4))} | U_c: {str(round(self._mlu_solver.current_u, 4))} | U_a: {str(round(U_a, 4))}")
                 if err < PARAMS.ConvTol:
                     print(as_success("Crossed the convergance bound. Breaking early ..."))
                     break
