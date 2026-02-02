@@ -269,7 +269,7 @@ def te_problem_description_parser(prog_name: str) -> jsonargparse.ArgumentParser
     
     trace_params_group = parser.add_argument_group('Runtime Trace Parameters')
     trace_params_group.add_argument('--path-trace', help='Path to store the runtime trace record file',
-                                    default='res.txt')
+                                    default='res.json')
     trace_params_group.add_argument('--path-plt', help='Path to store the runtime trace plot file',
                                     default='res.png')
     

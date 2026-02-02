@@ -201,7 +201,7 @@ class GurobiPathBasedTE(TrafficEngineeringLP):
             return -1
 
     def check(self):
-        unsat_ratio, unsat_commodities = check_flow_conservation(
+        unsat_ratio, unsat_commodities, total_satisfcation = check_flow_conservation(
             self._X_ek, self._graph, self._commodity_list,
             self._problem_description.EvalParams
         )
@@ -214,7 +214,8 @@ class GurobiPathBasedTE(TrafficEngineeringLP):
             congested_ratio=congested_ratio,
             unsat_commodities=unsat_commodities,
             congested_links=congested_links,
-            density=np.count_nonzero(self._X_ek) / self._X_ek.size
+            density=np.count_nonzero(self._X_ek) / self._X_ek.size,
+            total_satisfcation=total_satisfcation
         )
     
     def get_solution_commodity_list(self) -> List[Tuple[Commodity, Commodity]]:

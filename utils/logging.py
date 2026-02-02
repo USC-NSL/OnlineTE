@@ -1,7 +1,7 @@
 import tqdm
 import numpy as np
 import te.constants
-from typing import List, Iterable, Optional
+from typing import List, Iterable, Optional, Dict
 
 
 class ANSIColors:
@@ -90,6 +90,12 @@ class ShortTQDM:
             if te.constants.SHOW_PROGRESS_BAR:
                 self._pbar.close()
             raise StopIteration
+    
+    def set_postfix(self, data: Dict):
+        self._pbar.set_postfix(data)
+    
+    def write(self, message: str):
+        self._pbar.write(message)
     
 
 class ShortTQDMEnumerate(ShortTQDM):

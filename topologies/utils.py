@@ -2,6 +2,7 @@ import os
 import json
 import numpy as np
 import sympy as sp
+import scipy.sparse as sparse
 try:
     import cupy as cp
 except ModuleNotFoundError:
@@ -442,25 +443,16 @@ def get_sparse_null_space(M_matrix: np.ndarray) -> np.ndarray:
     return np_basis / np.linalg.norm(np_basis, axis=0)
 
 
-@DeprecationWarning
-def get_feasible_flow_assignment(graph: nx.DiGraph, commodities: List[Commodity]):
-    N = len(graph.edges())
-    K = len(commodities)
-    X_KE = np.zeros(shape=(N, K))
-    EDGE_INDEXING = get_edge_indexing(graph)
-    
-    for k, commodity in enumerate(commodities):
-        SOURCE = commodity.source
-        DESTINATION = commodity.destination
-        DEMAND = commodity.demand
-        path = nx.shortest_path(graph, SOURCE, DESTINATION)
-        for i in range(len(path) - 1):
-            edge = (path[i], path[i+1])
-            X_KE[EDGE_INDEXING[edge], k] = DEMAND
-    return X_KE
-
 def get_commodity_in_out_mask(graph: nx.DiGraph, commodities: List[Commodity], 
                               edge_indexing: Optional[Dict[Tuple[int, int], int]] = None) -> np.ndarray:
+    """
+    Returns a Boolean valued mask of size `n x k` where entry `ek` is `True`
+    for eny edge leaving the destination of commodity `k` or flowing into the
+    source of commodity `k`.
+    Entries that are masked with this must be _very_ close to zero for any
+    acceptable solution, since otherwise it means that the final assignment
+    may have created loops between the source and the destination.
+    """
     if edge_indexing is None:
         edge_indexing = get_edge_indexing(graph)
     mask = np.zeros(dtype=bool, shape=(graph.number_of_edges(), len(commodities)))
@@ -470,6 +462,22 @@ def get_commodity_in_out_mask(graph: nx.DiGraph, commodities: List[Commodity],
         for edge in graph.in_edges(nbunch=commodity.source, data=False):
             mask[edge_indexing[edge], k] = True
     return mask
+
+
+def get_sparse_commodity_satisfaction_mask(
+    graph: nx.DiGraph, commodities: List[Commodity], 
+    edge_indexing: Optional[Dict[Tuple[int, int], int]] = None
+) -> Tuple[sparse.csc_matrix, sparse.csc_matrix]:
+    if edge_indexing is None:
+        edge_indexing = get_edge_indexing(graph)
+    mask_source_out = sparse.lil_matrix((graph.number_of_edges(), len(commodities)), dtype=bool)
+    mask_source_in = sparse.lil_matrix((graph.number_of_edges(), len(commodities)), dtype=bool)
+    for k, commodity in enumerate(commodities):
+        for edge in graph.out_edges(nbunch=commodity.source, data=False):
+            mask_source_out[edge_indexing[edge], k] = True
+        for edge in graph.in_edges(nbunch=commodity.source, data=False):
+            mask_source_in[edge_indexing[edge], k] = True
+    return mask_source_out.tocsc(), mask_source_in.tocsc()
 
 # def get_feasible_flow_assignment_gpu(graph: nx.DiGraph, commodities: List[Commodity]):
 #     N = len(graph.edges())

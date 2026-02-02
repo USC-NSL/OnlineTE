@@ -309,7 +309,7 @@ class TrafficEngineeringLPEvaluationParams(SolverParams):
     ShowPLT: bool = False
     SavePLT: bool = True
     SaveSol: bool = False
-    TraceOutputPath: Optional[str] = 'res.txt'
+    TraceOutputPath: Optional[str] = 'res.json'
     PLTOutputPath: Optional[str] = 'res.png'
     CheckConservation: bool = False
 
@@ -393,6 +393,7 @@ class TrafficEngineeringLPCheckResult:
     congested_ratio: float
     unsat_commodities: Set[int]
     congested_links: Set[int]
+    total_satisfcation: Optional[float] = None
     density: Optional[float] = None
 
     def __str__(self) -> str:
@@ -405,6 +406,8 @@ class TrafficEngineeringLPCheckResult:
             out.append(as_success("ALL LINK CAPCITIES WERE HONORED"))
         else:
             out.append(as_fail("{:.1f}% OF LINKS ARE CONGESTED".format(self.congested_ratio*100)))
+        if self.total_satisfcation is not None:
+            out.append(as_info("TOTAL SATISFACTION: {:.1f}%".format(self.total_satisfcation*100)))
         if self.density is not None:
             if self.density > 0.5:
                 out.append(as_warning("DENSITY: {:.1f}%".format(self.density*100)))

@@ -224,7 +224,7 @@ class DualGurobiTE(TrafficEngineeringLP):
 
     def check(self):
         eval_params = self._problem_description.EvalParams
-        unsat_ratio, unsat_commodities = check_flow_conservation(
+        unsat_ratio, unsat_commodities, total_satisfcation = check_flow_conservation(
             self._X_ek, self._graph, self._commodity_list,
             eval_params
         )
@@ -236,7 +236,8 @@ class DualGurobiTE(TrafficEngineeringLP):
             unsat_ratio=unsat_ratio,
             congested_ratio=congested_ratio,
             unsat_commodities=unsat_commodities,
-            congested_links=congested_links
+            congested_links=congested_links,
+            total_satisfcation=total_satisfcation
         )
 
         M_MAT = self._M

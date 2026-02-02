@@ -221,7 +221,6 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
     def _set_X_ek(self):
         self._X_ek = self.backend.get_X_ek()
         np.multiply(self._X_ek, cpu_array(self._capacities)[:, None], out=self._X_ek)
-        print(np.round(self._X_ek.sum(axis=1) / self._capacities))
     
     def _add_constraints(self):
         assert self._mlu_solver is not None
@@ -325,7 +324,8 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
             self._update_controller_objective()
             MODEL_CONTROLLER.solve()
             self._update_r_e()
-            for epoch in ShortTQDM(range(PARAMS.OuterLoopRounds)):
+            progress_bar = ShortTQDM(range(PARAMS.OuterLoopRounds))
+            for epoch in progress_bar:
                 for i in reversed(range(PARAMS.InnerLoopRounds)):
                     self._do_network_update(epoch)
                     if i > 0 and self._reconvene_network_updates():
@@ -335,17 +335,16 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
                 self._update_controller_objective()
                 MODEL_CONTROLLER.solve()
                 self._update_r_e()
-                self._objective_trace.append(
-                    float(self.objective_value), 
-                    # float(get_solution_maximum_utilization(self._X_ek_sum_e, self._graph))
-                    float(get_solution_maximum_utilization(self._X_ek_sum_e * self._capacities, self._graph))
-                )
+                max_util = float(np.max(len(self._commodity_list) * self._sharing_mean_1))
+                self._objective_trace.append(float(self.objective_value), max_util)
                 # Inner loop infeasibility is usually very small, no need to bother with it!
                 err = self._outer_admm_wrapper.infeasibility
                 self._objective_gap_trace.append(err)
-                # U_a = np.max(len(self._commodity_list) * self._sharing_mean_1 / self._capacities)
-                U_a = np.max(len(self._commodity_list) * self._sharing_mean_1)
-                print(f"Err: {str(round(err, 4))} | U_c: {str(round(self._mlu_solver.current_u, 4))} | U_a: {str(round(U_a, 4))}")
+                progress_bar.set_postfix({
+                    'Cont. Util.': str(round(self._mlu_solver.current_u, 4)),
+                    'Net. Util.': str(round(max_util, 4)),
+                    'Outer Inf.': str(round(err, 4))
+                })
                 if err < PARAMS.ConvTol:
                     print(as_success("Crossed the convergance bound. Breaking early ..."))
                     break
@@ -374,7 +373,7 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
         
         # Now, check flow conservation ...
         X_EK = self._X_ek
-        unsat_ratio, unsat_commodities = check_flow_conservation(
+        unsat_ratio, unsat_commodities, total_satisfcation = check_flow_conservation(
             X_EK, self._graph, self._commodity_list, eval_params=eval_params)
         congested_ratio, congested_links = check_capacity_constraint(
             X_EK, self._graph, self._commodity_list, eval_params=eval_params)
@@ -383,7 +382,8 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
             congested_ratio=congested_ratio,
             unsat_commodities=unsat_commodities,
             congested_links=congested_links,
-            density=np.count_nonzero(X_EK) / X_EK.size
+            density=np.count_nonzero(X_EK) / X_EK.size,
+            total_satisfcation=total_satisfcation
         )
 
     def get_solution_commodity_list(self) -> List[Tuple[Commodity, Commodity]]:

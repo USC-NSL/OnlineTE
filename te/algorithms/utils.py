@@ -1,3 +1,4 @@
+import json
 import contextlib
 import numpy as np
 import seaborn as sns
@@ -10,8 +11,19 @@ from te.traffic_models.base import TrafficMatrixBase
 from te.algorithms.base import TrafficEngineeringLP, SolverParams, TrafficEngineeringLPEvaluationParams
 from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution, EdgeBasedMinimizeMaximumUtilitySolutionParams
 from te.algorithms.statistics.base import stringify_collected_stats
-from te.algorithms.sub_algorithms.stretch import get_average_stretch
+from te.algorithms.sub_algorithms.stretch import get_average_stretch, get_utilizations
 
+
+def round_floats(obj):
+    if isinstance(obj, float):
+        return round(obj, 3)
+    elif isinstance(obj, np.floating):
+        return round(float(obj), 3)
+    elif isinstance(obj, dict):
+        return {k: round_floats(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [round_floats(x) for x in obj]
+    return obj
 
 
 def get_solution_confusion_matrix(lp: TrafficEngineeringLP, eval_params: TrafficEngineeringLPEvaluationParams):
@@ -26,19 +38,26 @@ def get_solution_confusion_matrix(lp: TrafficEngineeringLP, eval_params: Traffic
             _lp.assignments,
             _lp.graph
         ), decimals=3)
+        utilizations: np.ndarray = np.round(get_utilizations(
+            _lp.assignments, _lp.graph
+        ), decimals=3)
         if objective_trace is None:
             objective_trace = []
         else:
             objective_trace = objective_trace.trace
         if objective_gap_trace is None:
             objective_gap_trace = []
+        data = {
+            'objective_value': np.round(objective_trace, decimals=3).tolist(),
+            'duality_gap': np.round(objective_gap_trace, decimals=3).tolist(),
+            'average_stretch': np.round(average_stretch, decimals=3).tolist(),
+            'utilizations': np.round(utilizations, decimals=3).tolist(),
+            'average_stretch_p95': np.round(np.percentile(average_stretch, 95), 3),
+            'total_flow_satisfaction': np.round(_lp.check_result.total_satisfcation, 3),
+            'solution_density': np.round(_lp.check_result.density, 3)
+        }
         with open(eval_params.TraceOutputPath, 'w') as traces:
-            traces.writelines([
-                f'objective_value: {",".join([str(item) for item in objective_trace])}\n',
-                f'duality_gap: {",".join(str(item) for item in objective_gap_trace)}\n',
-                f'average_stretch: {",".join(str(item) for item in average_stretch.tolist())}\n',
-                f'average_stretch_p95: {str(np.round(np.percentile(average_stretch, 95), decimals=3))}'
-            ])
+            json.dump(round_floats(data), traces, indent=4)
 
     def make_fig(_lp: TrafficEngineeringLP) -> Figure:
         avg_stretch = get_average_stretch(

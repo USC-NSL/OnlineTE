@@ -4,6 +4,7 @@
 # Debug outputs
 *.nsys-rep
 *.txt
+res.json
 
 # VENV
 *.env

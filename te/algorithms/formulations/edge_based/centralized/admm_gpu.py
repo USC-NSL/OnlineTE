@@ -420,7 +420,7 @@ class GPUADMMTE(TrafficEngineeringLP):
         
         # Now, check flow conservation ...
         X_EK = self._X_ek
-        unsat_ratio, unsat_commodities = check_flow_conservation(
+        unsat_ratio, unsat_commodities, total_satisfaction = check_flow_conservation(
             X_EK, self._graph, self._commodity_list, eval_params=eval_params)
         congested_ratio, congested_links = check_capacity_constraint(
             X_EK, self._graph, self._commodity_list, eval_params=eval_params)
@@ -429,7 +429,8 @@ class GPUADMMTE(TrafficEngineeringLP):
             congested_ratio=congested_ratio,
             unsat_commodities=unsat_commodities,
             congested_links=congested_links,
-            density=np.count_nonzero(np.clip(X_EK)) / X_EK.size
+            density=np.count_nonzero(np.clip(X_EK)) / X_EK.size,
+            total_satisfcation=total_satisfaction
         )
 
     def get_solution_commodity_list(self) -> List[Tuple[Commodity, Commodity]]:

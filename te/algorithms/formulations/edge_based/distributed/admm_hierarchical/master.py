@@ -338,7 +338,7 @@ class MasterNode(TrafficEngineeringLP, DistributedSolverNodeBase):
         
         # Now, check flow conservation ...
         X_EK = self._X_ek
-        unsat_ratio, unsat_commodities = check_flow_conservation(
+        unsat_ratio, unsat_commodities, total_satisfcation = check_flow_conservation(
             X_EK, self._graph, self._commodity_list, eval_params=eval_params)
         congested_ratio, congested_links = check_capacity_constraint(
             X_EK, self._graph, self._commodity_list, eval_params=eval_params)
@@ -346,7 +346,8 @@ class MasterNode(TrafficEngineeringLP, DistributedSolverNodeBase):
             unsat_ratio=unsat_ratio,
             congested_ratio=congested_ratio,
             unsat_commodities=unsat_commodities,
-            congested_links=congested_links
+            congested_links=congested_links,
+            total_satisfcation=total_satisfcation
         )
 
     def get_solution_commodity_list(self) -> List[Tuple[Commodity, Commodity]]:
