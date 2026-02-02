@@ -16,19 +16,18 @@ from te.algorithms.sub_algorithms.paths import (path_based_to_edge_based_nnz, pa
 class DenseSolver:
     def __init__(self, alpha_shape: Tuple[int, int, int], alpha_cols: NumbaList, alpha_rows: NumbaList, 
                  beta: IntegerCPUArray, demands: CPUArray, pgd_step: float, pgd_iters: int, eta: float,
-                 adjust_step_size: bool, capacities: CPUArray):
+                 adjust_step_size: bool, capacities: Optional[CPUArray] = None):
         K, N, T = alpha_shape
         self._alpha_shape = alpha_shape
         self._alpha_rows = alpha_rows
         self._alpha_cols = alpha_cols
         self._beta = beta
         self._demands = demands
-        self._pgd_steps = pgd_step if not adjust_step_size else cpu_array(pgd_step / path_based_power_method(alpha_rows, alpha_cols, alpha_shape))
+        self._pgd_steps = pgd_step if not adjust_step_size else \
+            cpu_array(pgd_step / path_based_power_method(alpha_rows, alpha_cols, alpha_shape, capacities))
         self._pgd_iters = pgd_iters
         self._eta = eta
-        # self._capacities = capacities
-        # TODO: Implement capacity scaling later ...
-        self._capacities = None
+        self._capacities = capacities
 
         self._K = K
         self._N = N

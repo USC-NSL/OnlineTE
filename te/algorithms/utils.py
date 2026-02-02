@@ -21,11 +21,11 @@ def get_solution_confusion_matrix(lp: TrafficEngineeringLP, eval_params: Traffic
     def write_traces(_lp: TrafficEngineeringLP):
         objective_trace = _lp.objective_trace
         objective_gap_trace = _lp.objective_gap_trace
-        average_stretch: np.ndarray = get_average_stretch(
+        average_stretch: np.ndarray = np.round(get_average_stretch(
             _lp.commodity_list,
             _lp.assignments,
             _lp.graph
-        )
+        ), decimals=3)
         if objective_trace is None:
             objective_trace = []
         else:
@@ -36,7 +36,8 @@ def get_solution_confusion_matrix(lp: TrafficEngineeringLP, eval_params: Traffic
             traces.writelines([
                 f'objective_value: {",".join([str(item) for item in objective_trace])}\n',
                 f'duality_gap: {",".join(str(item) for item in objective_gap_trace)}\n',
-                f'average_stretch: {",".join(str(item) for item in average_stretch.tolist())}'
+                f'average_stretch: {",".join(str(item) for item in average_stretch.tolist())}\n',
+                f'average_stretch_p95: {str(np.round(np.percentile(average_stretch, 95), decimals=3))}'
             ])
 
     def make_fig(_lp: TrafficEngineeringLP) -> Figure:

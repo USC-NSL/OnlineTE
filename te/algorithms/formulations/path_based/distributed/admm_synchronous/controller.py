@@ -150,9 +150,13 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
         self._NUM_EDGES = NUM_EDGES
         self._capacities = cpu_double_array([item[-1] for item in self._graph.edges(data='capacity')])
         self._c_norm = np.linalg.norm(self._capacities)
-        self._alpha = self._c_norm * np.sqrt(NUM_EDGES)
+        # self._alpha = self._c_norm * np.sqrt(NUM_EDGES)
+        # self._alpha = 1 / np.sqrt(NUM_EDGES)
+        self._alpha = 1
+        # self._X_ek_sum_e = get_initial_total_flow_nnz(
+        #     NumbaList(PATHS.alpha.rows), PATHS.beta, PATHS.alpha.shape, self._D_k)
         self._X_ek_sum_e = get_initial_total_flow_nnz(
-            NumbaList(PATHS.alpha.rows), PATHS.beta, PATHS.alpha.shape, self._D_k)
+            NumbaList(PATHS.alpha.rows), PATHS.beta, PATHS.alpha.shape, self._D_k, self._capacities)
         self._sharing_mean_1 = self._X_ek_sum_e / K
         self._sharing_mean_2 = cpu_array(self._sharing_mean_1)
         self._sharing_dual = cpu_zeros((NUM_EDGES,))
@@ -160,7 +164,8 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
         # tolerance for the distributed algorithm itself.
         assert self._solver_params.ConvTol >= self._mlu_params.ConvTol, \
             f"{self._solver_params.ConvTol} < {self._mlu_params.ConvTol}"
-        self._mlu_solver = self._mlu_solver_cls(NUM_EDGES, self._capacities, self._mlu_params)
+        # self._mlu_solver = self._mlu_solver_cls(NUM_EDGES, self._capacities, self._mlu_params)
+        self._mlu_solver = self._mlu_solver_cls(NUM_EDGES, np.ones_like(self._capacities), self._mlu_params)
         self._mlu_solver.rho = self._solver_params.Rho
         self._mlu_solver.alpha = self._alpha
 
@@ -202,6 +207,8 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
     
     def _set_X_ek(self):
         self._X_ek = self.backend.get_X_ek()
+        np.multiply(self._X_ek, cpu_array(self._capacities)[:, None], out=self._X_ek)
+        print(np.round(self._X_ek.sum(axis=1) / self._capacities))
     
     def _add_constraints(self):
         assert self._mlu_solver is not None
@@ -315,7 +322,6 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
                     if i > 0 and self._reconvene_network_updates():
                         break
                 # TODO: Edge-based solver doesn't seem to need this. Why is that?
-                # self._sharing_dual = cpu_zeros(self._sharing_dual.shape)
                 self._reconvene_network_updates()
                 self._update_X_ek_sum()
                 self._update_controller_objective()
@@ -323,12 +329,14 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
                 self._update_r_e()
                 self._objective_trace.append(
                     float(self.objective_value), 
-                    float(get_solution_maximum_utilization(self._X_ek_sum_e, self._graph))
+                    # float(get_solution_maximum_utilization(self._X_ek_sum_e, self._graph))
+                    float(get_solution_maximum_utilization(self._X_ek_sum_e * self._capacities, self._graph))
                 )
                 # Inner loop infeasibility is usually very small, no need to bother with it!
                 err = self._outer_admm_wrapper.infeasibility
                 self._objective_gap_trace.append(err)
-                U_a = np.max(len(self._commodity_list) * self._sharing_mean_1 / self._capacities)
+                # U_a = np.max(len(self._commodity_list) * self._sharing_mean_1 / self._capacities)
+                U_a = np.max(len(self._commodity_list) * self._sharing_mean_1)
                 print(f"Err: {str(round(err, 4))} | U_c: {str(round(self._mlu_solver.current_u, 4))} | U_a: {str(round(U_a, 4))}")
                 if err < PARAMS.ConvTol:
                     print(as_success("Crossed the convergance bound. Breaking early ..."))

@@ -24,7 +24,7 @@ synch:
     # Precision: double
     # Eta: 0.1
     # Gamma: 0.5
-    # Beta: 8e-5
+    Beta: 1e-10
     Rho: 0.2
     Eta: 0.1
     X0Type: PSEUDO_INVERSE

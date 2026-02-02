@@ -221,6 +221,7 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
     def _set_X_ek(self):
         self._X_ek = self.backend.get_X_ek()
         np.multiply(self._X_ek, cpu_array(self._capacities)[:, None], out=self._X_ek)
+        print(np.round(self._X_ek.sum(axis=1) / self._capacities))
     
     def _add_constraints(self):
         assert self._mlu_solver is not None

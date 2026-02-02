@@ -491,15 +491,16 @@ def path_based_eigen_upper_nnz(cols: List[np.ndarray], T: int):
     return output
 
 
-def path_based_power_method(rows: List[np.ndarray], cols: List[np.ndarray], shape: Tuple[int, int, int], n_iters: int = 20) -> np.ndarray:
+def path_based_power_method(rows: List[np.ndarray], cols: List[np.ndarray], shape: Tuple[int, int, int],
+                            C_e: Optional[np.ndarray] = None, n_iters: int = 20) -> np.ndarray:
     K, N, T = shape
     d = cpu_zeros((K,)) + 1
     # TODO: Don't be lazy ... this should start from a random vector
     v = cpu_zeros((T, K)) + 1
     for _ in range(n_iters):
-        res = path_based_projection_nnz(v, rows, cols, N, d)
+        res = path_based_projection_nnz(v, rows, cols, N, d, C_e)
         v = res / cpu_array(np.linalg.norm(v, axis=0))[None, :]
-    res = path_based_projection_nnz(v, rows, cols, N, d)
+    res = path_based_projection_nnz(v, rows, cols, N, d, C_e)
     return cpu_array(np.sum(np.multiply(res, v), axis=0) / np.sum(np.multiply(v, v), axis=0))
 
 
