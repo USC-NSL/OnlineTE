@@ -256,8 +256,8 @@ def check_flow_satisfaction(
     rtol = eval_params.FeasibilityRatio
     atol = eval_params.FeasibilityTolerance
     source_out, source_in = get_sparse_commodity_satisfaction_mask(graph, commodities, edge_indexing)
-    source_out_demand = cpu_array(source_out.multiply(flows).sum(axis=0))
-    source_in_demand = cpu_array(source_in.multiply(flows).sum(axis=0))
+    source_out_demand = np.squeeze(cpu_array(source_out.multiply(flows).sum(axis=0)), axis=0)
+    source_in_demand = np.squeeze(cpu_array(source_in.multiply(flows).sum(axis=0)), axis=0)
     demands = cpu_array([commodity.demand for commodity in commodities])
     if rtol is None:
         out_flow_violation_indices = np.where(~np.isclose(source_out_demand, demands, atol=atol))[0].tolist()
@@ -340,7 +340,7 @@ def check_flow_conservation(
     """
     if eval_params.CheckConservation:
         print(as_info("Will check transit node flow conservation"))
-        violations, unsatisfied_commodities, total_flow, total_demand = check_flow_conservation_mp(flows, commodities, eval_params)
+        violations, unsatisfied_commodities, total_flow, total_demand = check_flow_conservation_mp(flows, graph, commodities, eval_params)
     else:
         print(as_warning("Transit node flow conservation will be skipped! Make sure you actually intend for this!"))   
         violations, unsatisfied_commodities, total_flow, total_demand = check_flow_satisfaction(flows, graph, commodities, eval_params, edge_indexing)

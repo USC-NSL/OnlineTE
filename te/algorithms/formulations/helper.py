@@ -247,6 +247,8 @@ def te_problem_description_parser(prog_name: str) -> jsonargparse.ArgumentParser
                                       help='Link capacity scaling factor.')
     runtime_params_group.add_argument('--report-unsat', action='store_true', 
                                       help='Fully report unsatisfied commodity assignments (if False, only gives a summary)')
+    runtime_params_group.add_argument('--check-conservation', action='store_true', 
+                                      help='Check flow conservation on the final edge-based solution.')
 
     # Parameters for warm-start tests
     warm_start_params_group = parser.add_argument_group('Warm Start Parameters')
@@ -306,7 +308,8 @@ def parse_te_problem_description_args(parser: jsonargparse.ArgumentParser) -> Tu
         FeasibilityRatio=None,
         PrintReports=args.report_unsat,
         TraceOutputPath=args.path_trace,
-        PLTOutputPath=args.path_plt
+        PLTOutputPath=args.path_plt,
+        CheckConservation=args.check_conservation
     )
 
     converter_seed = args.converter_seed
