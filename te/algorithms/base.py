@@ -14,7 +14,7 @@ from typing import List, Optional, Tuple, Dict, Union, Any, Set
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from te.algorithms import SOLUTION_DIR
-from utils.logging import LINE_SEPARATOR_LENGTH, as_success, as_fail, as_warning
+from utils.logging import LINE_SEPARATOR_LENGTH, as_success, as_fail, as_warning, as_info
 from te.traffic_models.base import TrafficMatrixBase, TrafficMatrixConverterBase, TrafficMatrixConverterParamsBase, Commodity
 
 
@@ -246,9 +246,11 @@ class TrafficEngineeringLPEvaluationParams(SolverParams):
     TopologyName: str
         Name of the topology that we are solving on.
         The name is just for logging.
-    Seed: int
+    Seed: Optional[int] = None
         Any RNG will be initialized to this seed to make the
         evaluations reproducible.
+    TMPath: str
+        Path to the TM to use for tests.
     Objective: TEObjective
         The particular TE objective we want to solve for.
         Defaults to MLU.
@@ -285,6 +287,10 @@ class TrafficEngineeringLPEvaluationParams(SolverParams):
         problem class actually implemented and provided it.
     PLTOutputPath: Optional[str] = `'res.png'`
         Path to the output file for all `PLT` plots.
+    CheckConservation: bool = False
+        Check flow conservation on transit nodes. Many of our algorithms
+        give flow conservation _regardless_, so we usually don't even need
+        to check it.
     
     Note
     ----
@@ -292,7 +298,8 @@ class TrafficEngineeringLPEvaluationParams(SolverParams):
     be given.
     """
     TopologyName: str
-    Seed: int
+    Seed: Optional[int] = None
+    TMPath: Optional[str] = None
     Objective: TEObjective = TEObjective.MLU
     ScaleFactor: float = 10.0
     FloatResolution: float = te.constants.FLOAT_RES
@@ -302,8 +309,9 @@ class TrafficEngineeringLPEvaluationParams(SolverParams):
     ShowPLT: bool = False
     SavePLT: bool = True
     SaveSol: bool = False
-    TraceOutputPath: Optional[str] = 'res.txt'
+    TraceOutputPath: Optional[str] = 'res.json'
     PLTOutputPath: Optional[str] = 'res.png'
+    CheckConservation: bool = False
 
     def __post_init__(self):
         # UPDATE: We will prevent both tolerances being given, it makes reasoning about things difficult ...
@@ -385,6 +393,7 @@ class TrafficEngineeringLPCheckResult:
     congested_ratio: float
     unsat_commodities: Set[int]
     congested_links: Set[int]
+    total_satisfcation: Optional[float] = None
     density: Optional[float] = None
 
     def __str__(self) -> str:
@@ -397,6 +406,8 @@ class TrafficEngineeringLPCheckResult:
             out.append(as_success("ALL LINK CAPCITIES WERE HONORED"))
         else:
             out.append(as_fail("{:.1f}% OF LINKS ARE CONGESTED".format(self.congested_ratio*100)))
+        if self.total_satisfcation is not None:
+            out.append(as_info("TOTAL SATISFACTION: {:.1f}%".format(self.total_satisfcation*100)))
         if self.density is not None:
             if self.density > 0.5:
                 out.append(as_warning("DENSITY: {:.1f}%".format(self.density*100)))
@@ -432,8 +443,11 @@ class TrafficEngineeringLPObjectiveTrace:
         return list(zip(*self.trace))
     
     def plot(self, **kwargs):
-        for trace in list(zip(*self.trace)):
-            plt.plot(trace, **kwargs)
+        for i, trace in enumerate(list(zip(*self.trace))):
+            if self._names[i].startswith('_'):
+                print(as_info(f'Will not plot debug trace: {self._names[i]}'))
+            else:
+                plt.plot(trace, **kwargs)
         plt.legend(self.names)
 
 
@@ -660,7 +674,7 @@ class TrafficEngineeringLP(ABC):
         """
 
     def add_and_dump_lp_solutions(self, solution: TrafficEngineeringLPSolution):
-        self.add_solution_elements()
+        self.add_solution_elements(solution)
         solution.dump_elements()
         solution.dump()
 

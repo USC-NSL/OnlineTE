@@ -2,9 +2,9 @@
 # Setup UDP multicast on a predefined group across the whole network
 - name: Configure APT dependencies
   hosts: controller_group:workers_group
+  serial: 100
   become: true
   tasks:
-
   - name: Gather Package Facts
     package_facts:
       manager: apt
@@ -14,8 +14,16 @@
       name: smcroute
     when: '"smcroute" not in ansible_facts.packages'
 
+- name: Restart `smcroute`
+  hosts: controller_group:workers_group
+  serial: 100
+  tasks:
+  - name: Restart `smcroute` daemon
+    command: sudo smcroutectl restart
+
 - name: Create Multicast Group For Controller
   hosts: controller_group
+  serial: 100
   become: true
   tasks:
   - name: Add Group 224.0.0.10
@@ -23,6 +31,7 @@
 
 - name: Join Multicast Group On Workers
   hosts: workers_group
+  serial: 100
   become: true
   tasks:
     - name: Join Group 224.0.0.10

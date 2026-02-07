@@ -1,12 +1,17 @@
+# Simple script for changing the workign branch on all nodes
 - name: Switch branch
   hosts: controller_group:workers_group
   gather_facts: false
-  remote_user: aghavidel
+  remote_user: "{{ lookup('env', 'SPHERE_USER') }}"
+  vars: 
+    access_token: "{{ lookup('env', 'GIT_ACCESS_TOKEN') }}"
+    path_home: "{{ lookup('env', 'SPHERE_HOME') }}"
+    branch: "{{ lookup('env', 'GIT_BRANCH') }}"
   tasks:
-
   - name: Switch branch
+    no_log: true
     ansible.builtin.git:
       repo: https://{{access_token}}@github.com/USC-NSL/DistributedTE.git
       force: true
-      dest: /home/aghavidel/DistributedTE
+      dest: "{{path_home}}"
       version: "{{branch}}"

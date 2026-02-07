@@ -1,9 +1,18 @@
 import numpy as np
+import scipy.sparse as sp
+import scipy.linalg.blas as sblas
+from utils.logging import as_warning
 from te.algorithms.array_utils import get_global_precision, DOUBLE_PRECISION, SINGLE_PRECISION, HALF_PRECISION
-from typing import Tuple, Callable, Any, Optional, Type
+from typing import Tuple, Callable, Any, Optional, Type, List, Union
 
 CPUArray = np.ndarray
 """Alias for `numpy.ndarray`, an array that lives on the RAM. Plenty of space usually."""
+CPUCOOArray = sp.coo_array
+"""Alias for `scipy.sparse.coo_matrix`"""
+CPUCSRArray = sp.csr_array
+"""Alias for `scipy.sparse.csr_matrix`"""
+CPUCSCArray = sp.csc_array
+"""Alias for `scipy.sparse.csc_matrix`"""
 DoublePrecisionCPUArray = np.ndarray
 """
 Alias for `numpy.ndarray`.
@@ -30,9 +39,19 @@ with this, since if we mistakenly cast it to float, things still work fine but s
 everything takes forever and eats a lot of memory.
 """
 
-
+# TODO: We are probably being _TOO_ careful with demanding that this value start from `None`
 _CPU_DTYPE = None
-"""Every Numpy array that we instantiate must adhere to this data type"""
+"""Every Numpy array that we instantiate must adhere to this data type unless specified otherwise"""
+
+
+def is_float_array(thing: CPUArray) -> bool:
+    """
+    Return `True`, if the array contains float-16/32/64 data type.
+    We implicitly assume that any such array needs to be cast to the 
+    current global float precision.
+    """
+    dt = thing.dtype
+    return dt == np.float16 or dt == np.float32 or dt == np.float64
 
 
 def set_cpu_float_precision():
@@ -55,8 +74,17 @@ def cpu_mmap(path: str, shape: Tuple[int], mode: str, dtype: Optional[Type] = No
     else:
         return np.lib.format.open_memmap(shape=shape, filename=path, mode=mode, dtype=dtype)
 
-cpu_array: Callable[[Any], CPUArray] = lambda input: np.array(input, dtype=_CPU_DTYPE)
-"""Create a copy of an array-like thing"""
+def cpu_array(thing: Any) -> Union[CPUArray, CPUCOOArray, CPUCSRArray]:
+    """Create a copy of an array-like thing with similar sparsity"""
+    if isinstance(thing, CPUArray):
+        if is_float_array(thing):
+            return np.array(thing, dtype=_CPU_DTYPE)
+        return thing.copy()
+    elif isinstance(thing, (list, tuple)):
+        return np.array(thing, dtype=_CPU_DTYPE)
+    elif isinstance(thing, (CPUCOOArray, CPUCSRArray)):
+        return thing.copy()
+    raise ValueError(f'Unknown matrix type: {type(thing)}')
 
 def cpu_frombuffer(buffer: bytes, shape: Tuple[int], dtype: Optional[Type] = None) -> CPUArray:
     """Alias for `np.frombuffer`, but expects the shape as an argument"""
@@ -72,6 +100,16 @@ def cpu_frombuffer_serial(buffer: bytes, dtype: Optional[Type] = None) -> CPUArr
     else:
         return np.frombuffer(buffer, dtype=dtype)
 
+def cpu_csr_frombuffer(buffer: bytes, shape: Tuple[int], lens: Tuple[int], dtype: Optional[Type] = None) -> CPUCSRArray:
+    """Given the 1D buffer of a CSR array, rebuilds it from the given lengths and shape"""
+    assert len(lens) == 3
+    d_len, i_len, p_len = lens
+    assert len(buffer) == d_len + i_len + p_len
+    data = cpu_frombuffer_serial(buffer[:d_len], dtype)
+    indices = cpu_frombuffer_serial(buffer[d_len:d_len+i_len], np.int64)
+    pointers = cpu_frombuffer_serial(buffer[d_len+i_len:], np.int64)
+    return sp.csr_array((data, indices, pointers), shape=shape)
+
 cpu_dump: Callable[[str, CPUArray], None] = lambda path, data: np.save(path, data, allow_pickle=True)
 """Replacement for Joblib `dump`, it seems to not do what I expect it to"""
 
@@ -84,5 +122,26 @@ cpu_int_array: Callable[[Any], IntegerCPUArray] = lambda input: np.array(input, 
 """Create a copy of an array-like thing that is always `np.int32`, regardles of global data type"""
 cpu_int_zeros: Callable[[Tuple[int]], IntegerCPUArray] = lambda shape: np.zeros(shape=shape, dtype=np.int32)
 """Always returns zero array with `np.int32`, regardless of global data type"""
+cpu_bool_zeros: Callable[[Tuple[int]], BooleanCPUArray] = lambda shape: np.zeros(shape=shape, dtype=bool)
+"""Always returns zero array with Boolean values, regardless of global data type"""
 
 cpu_cast_float: Callable[[Any], Any] = lambda val: _CPU_DTYPE(val)
+
+def cpu_coo_array(rows: List[int], cols: List[int], data: List[Any], shape: Tuple[int]) -> CPUCOOArray:
+    if _CPU_DTYPE != np.float16:
+        return sp.coo_array((data, (rows, cols)), shape=shape, dtype=_CPU_DTYPE)
+    print(as_warning("Sparse float16 array requested. Will return a dense array instead ..."))
+    return cpu_array(sp.coo_array((data, (rows, cols)), shape=shape).toarray())
+
+cpu_coo_to_csr: Callable[[CPUCOOArray], CPUCSRArray] = lambda inp: inp.tocsr() if isinstance(inp, CPUCOOArray) else inp
+cpu_coo_to_csc: Callable[[CPUCOOArray], CPUCSCArray] = lambda inp: inp.tocsc() if isinstance(inp, CPUCOOArray) else inp
+
+
+def cpu_symm(alpha: float, a: CPUArray, b: CPUArray, beta: float = 0, c: Optional[CPUArray] = None, side: int = 0,
+             lower: bool = True, overwrite_c: bool = False) -> CPUArray:
+    if a.dtype == np.float32:
+        return sblas.ssymm(alpha=alpha, a=a, b=b, beta=beta, c=c, side=side, lower=lower, overwrite_c=overwrite_c)
+    elif a.dtype == np.float64:
+        return sblas.dsymm(alpha=alpha, a=a, b=b, beta=beta, c=c, side=side, lower=lower, overwrite_c=overwrite_c)
+    else:
+        raise ValueError(f'BLAS `symm` operation not implemented for {a.dtype}')

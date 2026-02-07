@@ -3,8 +3,9 @@ import numpy as np
 from dataclasses import dataclass
 from typing import Optional, Tuple, List
 from gurobipy import GRB
+from te.algorithms.base import TEObjective
 from te.algorithms.array_utils.cpu_utils import CPUArray, cpu_array, cpu_cast_float
-from te.algorithms.utils import as_info
+from te.algorithms.utils import as_info, as_warning
 from .base import ControllerMLUSolver, ControllerMLUException
 from te.algorithms.statistics.helpers import record_cpu_runtime
 from te.algorithms.formulations.edge_based.centralized import make_model, optimize_or_scream
@@ -21,11 +22,13 @@ class GurobiMLUParams(GurobiSolverParams):
 
 
 class GurobiMLU(ControllerMLUSolver):
-    def __init__(self, num_edges: int, capacities: CPUArray, solver_params: GurobiMLUParams, num_domains: int = 1):
+    def __init__(self, num_edges: int, capacities: CPUArray, solver_params: GurobiMLUParams, num_domains: int = 1, 
+                 objective: TEObjective = TEObjective.MLU):
         self._num_edges: int = num_edges
         self._capacities: CPUArray = capacities
         self._solver_params = solver_params
         self._num_domains = num_domains
+        self._objective = objective
 
         self._env: gurobipy.Env = None
         self._double_precision_capacities: np.ndarray = np.array(capacities, dtype=np.float64)
@@ -43,6 +46,9 @@ class GurobiMLU(ControllerMLUSolver):
         self._current_u: Optional[float] = None
         self._current_Z: Optional[CPUArray] = None
 
+        # TODO: Finish Max-Flow/Max-Concurrent-Flow additions
+        assert self.is_mlu
+
     @classmethod
     def name(self) -> str:
         return "Gurobi"
@@ -50,6 +56,9 @@ class GurobiMLU(ControllerMLUSolver):
     @property
     def num_edges(self) -> int:
         return self._num_edges
+    @property
+    def objective_type(self) -> TEObjective:
+        return self._objective
     @property
     def capacities(self) -> CPUArray:
         return self._capacities
@@ -62,6 +71,9 @@ class GurobiMLU(ControllerMLUSolver):
     @property
     def is_solved(self) -> bool:
         return self._solved
+    @property
+    def is_mlu(self) -> bool:
+        return self._objective == TEObjective.MLU
 
     def _make_variables(self):
         assert self._model_controller is None

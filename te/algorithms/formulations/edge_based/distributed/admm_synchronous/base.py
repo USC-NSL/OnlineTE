@@ -1,7 +1,7 @@
 from abc import abstractmethod
-from typing import Tuple, Optional, Callable
+from typing import Tuple, Optional, Callable, Union
 from ..base import CommunicationBackendBase
-from te.algorithms.array_utils.cpu_utils import CPUArray, BooleanCPUArray
+from te.algorithms.array_utils.cpu_utils import CPUArray, BooleanCPUArray, CPUCSRArray, CPUCSCArray
 from te.algorithms.base import SolverParams
 
 
@@ -11,7 +11,8 @@ class SynchADMMControllerBackendBase(CommunicationBackendBase):
         return True
     
     @abstractmethod
-    def initialize_worker_nodes(self, solver_params: SolverParams, basis: CPUArray, initial_feasible_solution: CPUArray,
+    def initialize_worker_nodes(self, solver_params: SolverParams, basis: CPUArray, 
+                                initial_feasible_solution: Union[CPUCSRArray, CPUCSCArray, CPUArray],
                                 in_out_mask: Optional[BooleanCPUArray] = None):
         """Initialize worker nodes with solver parameters and initial feasible solution (X_ek_0)"""
 
@@ -20,7 +21,7 @@ class SynchADMMControllerBackendBase(CommunicationBackendBase):
         """Update the initial feasible solution (X_ek_0)"""
     
     @abstractmethod
-    def get_X_ek(self, is_sparse: bool, basis: CPUArray, initial_feasible_solution: CPUArray) -> CPUArray:
+    def get_X_ek(self) -> CPUArray:
         """Get the final solution array (X_ek)"""
     
     @abstractmethod
@@ -28,11 +29,11 @@ class SynchADMMControllerBackendBase(CommunicationBackendBase):
         """Get the total flow over each edge"""
     
     @abstractmethod
-    def do_network_update(self, epoch: int, F_e: Optional[CPUArray] = None) -> Tuple[int, CPUArray]:
+    def do_network_update(self, epoch: int) -> Tuple[int, CPUArray]:
         """Do network update for a given epoch and return the aggregate"""
     
     @abstractmethod
-    def reconvene_network_updates(self, P_bar_t: CPUArray, Y_bar_t: CPUArray, u_t: CPUArray):
+    def reconvene_network_updates(self, sharing_mean_1: CPUArray, sharing_mean_2: CPUArray, sharing_dual: CPUArray):
         """Finalize network updates for a single inner ADMM iteration"""
     
     @abstractmethod
@@ -48,10 +49,10 @@ class SynchADMMWorkerBackendBase(CommunicationBackendBase):
         return True
 
     @property
-    def set_initial_feasible_solution(self) -> Callable[[CPUArray], None]:
+    def set_initial_feasible_solution(self) -> Callable[[Union[CPUCSRArray, CPUCSCArray, CPUArray]], None]:
         return self._set_initial_feasible_solution
     @set_initial_feasible_solution.setter
-    def set_initial_feasible_solution(self, f: Callable[[CPUArray], None]):
+    def set_initial_feasible_solution(self, f: Callable[[Union[CPUCSRArray, CPUCSCArray, CPUArray]], None]):
         self._set_initial_feasible_solution = f
 
     @property
@@ -69,10 +70,10 @@ class SynchADMMWorkerBackendBase(CommunicationBackendBase):
         self._set_commodity_in_out_mask = f
     
     @property
-    def do_inner_loop_update(self) -> Callable[[int, Optional[CPUArray]], Tuple[int, CPUArray]]:
+    def do_inner_loop_update(self) -> Callable[[int], Tuple[int, CPUArray]]:
         return self._do_inner_loop_update
     @do_inner_loop_update.setter
-    def do_inner_loop_update(self, f: Callable[[int, Optional[CPUArray]], Tuple[int, CPUArray]]):
+    def do_inner_loop_update(self, f: Callable[[int], Tuple[int, CPUArray]]):
         self._do_inner_loop_update = f
 
     @property

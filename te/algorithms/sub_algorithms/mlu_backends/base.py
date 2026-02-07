@@ -18,6 +18,22 @@ class ControllerMLUSolver(ABC):
     @abstractmethod
     def name(self) -> str:
         """Name of this MLU backend"""
+    
+    @property
+    def alpha(self) -> float:
+        """MLU scale factor"""
+        return self._alpha
+    @alpha.setter
+    def alpha(self, alpha: float):
+        self._alpha = alpha
+    
+    @property
+    def rho(self) -> float:
+        """ADMM step size (can change between iterations ...)"""
+        return self._rho
+    @rho.setter
+    def rho(self, rho: float):
+        self._rho = rho
 
     @property
     @abstractmethod

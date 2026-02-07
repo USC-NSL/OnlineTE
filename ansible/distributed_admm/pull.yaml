@@ -2,24 +2,34 @@
 # Playbook for updating code only
 - name: Pull changes
   hosts: controller_group:workers_group
+  serial: 100
   gather_facts: false
-  remote_user: aghavidel
+  remote_user: "{{ lookup('env', 'SPHERE_USER') }}"
+  vars: 
+    access_token: "{{ lookup('env', 'GIT_ACCESS_TOKEN') }}"
+    path_home: "{{ lookup('env', 'SPHERE_HOME') }}"
+    path_venv: "{{ lookup('env', 'VENV_HOME') }}"
+    path_launch: "{{ lookup('env', 'LAUNCH_FILE' )}}"
+    branch: "{{ lookup('env', 'GIT_BRANCH') }}"
+  module_defaults:
+    ansible.builtin.shell:
+      chdir: "{{path_home}}"
+    ansible.builtin.command:
+      chdir: "{{path_home}}"
   tasks:
-
   - name: Clone repo with force
     ansible.builtin.git:
       repo: https://{{access_token}}@github.com/USC-NSL/DistributedTE.git
       clone: true
       force: true
-      dest: /home/aghavidel/DistributedTE
+      dest: "{{path_home}}"
+      version: "{{branch}}"
   
   - name: Compile protobuffs
-    command: chdir=/home/aghavidel/DistributedTE python3 protos/__init__.py
+    ansible.builtin.shell: "{{path_venv}}/bin/python protos/__init__.py"
+    args:
+      chdir: "{{path_home}}"
 
-- name: Enable TE Worker Service
-  hosts: workers_group
-  gather_facts: false
-  remote_user: aghavidel
-  tasks:
-    - name: Give EXEC Premission To Launcher
-      command: chdir=/home/aghavidel/DistributedTE chmod +x ansible/distributed_admm/launch_worker.sh
+  - name: Give EXEC Premission To Launcher
+    command: chdir="{{path_home}}" chmod +x ./"{{path_launch}}"
+    when: "'workers_group' in group_names"

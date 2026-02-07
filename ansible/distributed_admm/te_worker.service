@@ -1,9 +1,0 @@
-[Unit]
-Description=TE Worker Node Service
-
-[Service]
-WorkingDirectory=/home/aghavidel/DistributedTE
-ExecStart=/home/aghavidel/DistributedTE/ansible/distributed_admm/launch_worker.sh
-
-[Install]
-WantedBy=default.target

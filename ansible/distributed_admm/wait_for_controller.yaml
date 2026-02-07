@@ -8,8 +8,16 @@
     runtime_env:
       - key: TE_MULTICAST
         value: "{{multicast}}"
+      - key: SOLVER_TYPE
+        value: "{{solver_type}}"
   tasks:
-    - name: Set TE_MULTICAST Env-Var
+    - name: Check Runtime Environment Variable Values
+      ansible.builtin.assert:
+        that:
+          - multicast is match('^(0|1)$')
+          - solver_type is match('^(path-sync|edge-sync)$')
+      with_items: "{{ runtime_env }}"
+    - name: Set Runtime Environment Variables
       ansible.builtin.lineinfile:
         dest: "/etc/environment"
         state: present

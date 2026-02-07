@@ -1,13 +1,8 @@
+import json
 import contextlib
 import numpy as np
-try:
-    import cupy as cp
-except ModuleNotFoundError:
-    import numpy as cp
-    cp.get_array_module = lambda x: np
 import seaborn as sns
 import networkx as nx
-import te.constants
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 from typing import Optional, Type
@@ -16,8 +11,19 @@ from te.traffic_models.base import TrafficMatrixBase
 from te.algorithms.base import TrafficEngineeringLP, SolverParams, TrafficEngineeringLPEvaluationParams
 from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution, EdgeBasedMinimizeMaximumUtilitySolutionParams
 from te.algorithms.statistics.base import stringify_collected_stats
-from te.algorithms.sub_algorithms.stretch import get_average_stretch
+from te.algorithms.sub_algorithms.stretch import get_average_stretch, get_utilizations
 
+
+def round_floats(obj):
+    if isinstance(obj, float):
+        return round(obj, 5)
+    elif isinstance(obj, np.floating):
+        return round(float(obj), 5)
+    elif isinstance(obj, dict):
+        return {k: round_floats(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [round_floats(x) for x in obj]
+    return obj
 
 
 def get_solution_confusion_matrix(lp: TrafficEngineeringLP, eval_params: TrafficEngineeringLPEvaluationParams):
@@ -27,23 +33,32 @@ def get_solution_confusion_matrix(lp: TrafficEngineeringLP, eval_params: Traffic
     def write_traces(_lp: TrafficEngineeringLP):
         objective_trace = _lp.objective_trace
         objective_gap_trace = _lp.objective_gap_trace
-        average_stretch: np.ndarray = get_average_stretch(
+        average_stretch: np.ndarray = np.round(get_average_stretch(
             _lp.commodity_list,
             _lp.assignments,
             _lp.graph
-        )
+        ), decimals=3)
+        utilizations: np.ndarray = np.round(get_utilizations(
+            _lp.assignments, _lp.graph
+        ), decimals=3)
         if objective_trace is None:
             objective_trace = []
         else:
             objective_trace = objective_trace.trace
         if objective_gap_trace is None:
             objective_gap_trace = []
+        data = {
+            'objective_value': np.round(objective_trace, decimals=5).tolist(),
+            'duality_gap': np.round(objective_gap_trace, decimals=5).tolist(),
+            # 'average_stretch': np.round(average_stretch, decimals=3).tolist(),
+            'utilizations': np.round(utilizations, decimals=5).tolist(),
+            'average_stretch_p95': np.round(np.percentile(average_stretch, 95), 5),
+            'average_stretch_p50': np.round(np.percentile(average_stretch, 50), 5),
+            'total_flow_satisfaction': np.round(_lp.check_result.total_satisfcation, 5),
+            'solution_density': np.round(_lp.check_result.density, 3)
+        }
         with open(eval_params.TraceOutputPath, 'w') as traces:
-            traces.writelines([
-                f'objective_value: {",".join([str(item) for item in objective_trace])}\n',
-                f'duality_gap: {",".join(str(item) for item in objective_gap_trace)}\n',
-                f'average_stretch: {",".join(str(item) for item in average_stretch.tolist())}'
-            ])
+            json.dump(round_floats(data), traces, indent=4)
 
     def make_fig(_lp: TrafficEngineeringLP) -> Figure:
         avg_stretch = get_average_stretch(
@@ -57,33 +72,32 @@ def get_solution_confusion_matrix(lp: TrafficEngineeringLP, eval_params: Traffic
             print(as_warning("No trace of objective value is available"))
         if objective_gap_trace is None:
             print(as_warning("No trace of primal/dual objective gap is available"))
+        if objective_gap_trace is None and objective_trace is None:
+            fig = plt.figure(figsize=(4, 3))
+            plt.subplot(1, 1, 1)
+            sns.ecdfplot(avg_stretch)
+            plt.title('Average Stretch (Hops)')
+        elif objective_trace is not None and objective_gap_trace is None:
+            fig = plt.figure(figsize=(8, 3))
+            plt.subplot(1, 2, 1)
+            objective_trace.plot()
+            plt.title('Objective Trace')
+            plt.subplot(1, 2, 2)
+            sns.ecdfplot(avg_stretch)
+            plt.title('Average Stretch (Hops)')
         else:
-            if objective_gap_trace is None and objective_trace is None:
-                fig = plt.figure(figsize=(4, 3))
-                plt.subplot(1, 1, 1)
-                sns.ecdfplot(avg_stretch)
-                plt.title('Average Stretch (Hops)')
-            elif objective_trace is not None and objective_gap_trace is None:
-                fig = plt.figure(figsize=(8, 3))
-                plt.subplot(1, 2, 1)
-                objective_trace.plot()
-                plt.title('Objective Trace')
-                plt.subplot(1, 2, 2)
-                sns.ecdfplot(avg_stretch)
-                plt.title('Average Stretch (Hops)')
-            else:
-                fig = plt.figure(figsize=(12, 3))
-                plt.subplot(1, 3, 1)
-                objective_trace.plot()
-                plt.title('Objective Trace')
-                ax = plt.subplot(1, 3, 2)
-                plt.plot(objective_gap_trace)
-                ax.set_yscale('log')
-                plt.title('Objective Gap Trace')
-                plt.subplot(1, 3, 3)
-                sns.ecdfplot(avg_stretch)
-                plt.title('Average Stretch (Hops)')
-            return fig
+            fig = plt.figure(figsize=(12, 3))
+            plt.subplot(1, 3, 1)
+            objective_trace.plot()
+            plt.title('Objective Trace')
+            ax = plt.subplot(1, 3, 2)
+            plt.plot(objective_gap_trace)
+            ax.set_yscale('log')
+            plt.title('Objective Gap Trace')
+            plt.subplot(1, 3, 3)
+            sns.ecdfplot(avg_stretch)
+            plt.title('Average Stretch (Hops)')
+        return fig
     
     if eval_params.ShowPLT or eval_params.SavePLT:
         fig = make_fig(lp)
@@ -108,30 +122,6 @@ def get_solution_maximum_utilization(assignments: np.ndarray, graph: nx.DiGraph)
         if u < this_u:
             u = this_u
     return u
-
-
-all_elements_within_threshold = lambda x, thresh, mod: mod.all(mod.abs(x) < thresh)
-
-
-def careful_norm(x: np.ndarray, scaled: bool = False, axis: Optional[int] = None) -> float:
-    mod = cp.get_array_module(x)
-    if scaled:
-        scale_factor = np.sqrt(x.size)
-        if all_elements_within_threshold(x, te.constants.MINIMUM_NORM / scale_factor, mod):
-            return 0
-        return mod.linalg.norm(x) / scale_factor
-    if all_elements_within_threshold(x, te.constants.MINIMUM_NORM, mod) and axis is None:
-        return 0
-    return mod.linalg.norm(x, axis=axis)
-
-
-def careful_norm_squared(x: np.ndarray, axis: Optional[int] = None) -> float:
-    mod = cp.get_array_module(x)
-    if all_elements_within_threshold(x, te.constants.MINIMUM_NORM, mod) and axis is None:
-        return 0
-    if axis is None:
-        return mod.dot(x, x)
-    return mod.linalg.norm(x, axis=axis) ** 2
 
 
 def test_mlu(lp_cls: Type[TrafficEngineeringLP], graph: nx.DiGraph, tm: TrafficMatrixBase, 

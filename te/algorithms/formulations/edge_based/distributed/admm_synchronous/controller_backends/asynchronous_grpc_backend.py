@@ -2,8 +2,8 @@ import grpc
 import asyncio
 import numpy as np
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
-from te.algorithms.array_utils.cpu_utils import CPUArray, BooleanCPUArray
+from typing import List, Optional, Tuple, Union
+from te.algorithms.array_utils.cpu_utils import CPUArray, BooleanCPUArray, CPUCSRArray, CPUCSCArray, get_global_precision
 from .. import SynchADMMSolverParams
 from ...base import RPCParams
 from ..base import SynchADMMControllerBackendBase
@@ -78,10 +78,14 @@ class AsynchronousgRPCControllerBackend(SynchADMMControllerBackendBase):
         return self._event_loop.run_until_complete(self._are_all_workers_reachable())
 
     async def _initialize_worker_nodes(self, solver_params: SynchADMMSolverParams, basis: CPUArray, 
-                                       initial_feasible_solution: CPUArray, in_out_mask: Optional[BooleanCPUArray] = None):
+                                       initial_feasible_solution: Union[CPUCSRArray, CPUCSCArray, CPUArray],
+                                       in_out_mask: Optional[BooleanCPUArray] = None):
         NUM_WORKERS = self.number_of_workers
         NULL_M = basis
-        X_EK_START_CHUNKS = np.array_split(initial_feasible_solution, NUM_WORKERS, axis=1)
+        NUM_COLS = initial_feasible_solution.shape[1]
+        assert NUM_COLS % NUM_WORKERS == 0
+        CHUNK_INDICES = np.array_split(np.arange(NUM_COLS), NUM_WORKERS)
+        X_EK_START_CHUNKS = [initial_feasible_solution[:, chunk[0]:chunk[-1]+1] for chunk in CHUNK_INDICES]
         MASK_EK_CHUNKS = None if in_out_mask is None else np.array_split(in_out_mask, NUM_WORKERS, axis=1)
         WORKERS = self._worker_stubs
 
@@ -109,7 +113,8 @@ class AsynchronousgRPCControllerBackend(SynchADMMControllerBackendBase):
             ])
     
     def initialize_worker_nodes(self, solver_params: SynchADMMSolverParams, basis: CPUArray, 
-                                initial_feasible_solution: CPUArray, in_out_mask: Optional[BooleanCPUArray] = None):
+                                initial_feasible_solution: Union[CPUCSRArray, CPUCSCArray, CPUArray],
+                                in_out_mask: Optional[BooleanCPUArray] = None):
         self._event_loop.run_until_complete(self._initialize_worker_nodes(solver_params, basis, initial_feasible_solution, in_out_mask))
     
     async def _update_demands(self, updated_feasible_solution: CPUArray):
@@ -123,18 +128,15 @@ class AsynchronousgRPCControllerBackend(SynchADMMControllerBackendBase):
     def update_demands(self, updated_feasible_solution: CPUArray):
         self._event_loop.run_until_complete(self._update_demands(updated_feasible_solution))
     
-    async def _get_X_ek(self, is_sparse: bool, basis: CPUArray, initial_feasible_solution: CPUArray):
+    async def _get_X_ek(self):
         chunks = await asyncio.gather(*[
             async_rebuild_chunked_array(stub.RequestChunk(Empty()))
             for stub in self._worker_stubs
         ])
-        if is_sparse:
-            return np.hstack(list(chunks))
-        else:
-            return initial_feasible_solution + basis @ np.hstack(list(chunks))
+        return np.hstack(list(chunks))
 
-    def get_X_ek(self, is_sparse: bool, basis: CPUArray, initial_feasible_solution: CPUArray):
-        return self._event_loop.run_until_complete(self._get_X_ek(is_sparse, basis, initial_feasible_solution))
+    def get_X_ek(self):
+        return self._event_loop.run_until_complete(self._get_X_ek())
     
     async def _get_X_ek_sum(self):
         serialized_chunks = await asyncio.gather(*[
@@ -149,11 +151,11 @@ class AsynchronousgRPCControllerBackend(SynchADMMControllerBackendBase):
         responses = await asyncio.gather(*[
             stub.DoNetworkUpdate(message) for stub in self._worker_stubs
         ])
-        runtimes, serialized_y_bar_chunks = zip(*list([(res.runtime_ns, res.means) for res in responses]))
-        return max(runtimes), np.mean([serialized_message_to_array(chunk) for chunk in serialized_y_bar_chunks], axis=0)
+        runtimes, serialized_x_bar_chunks = zip(*list([(res.runtime_ns, res.means) for res in responses]))
+        return max(runtimes), np.mean([serialized_message_to_array(chunk) for chunk in serialized_x_bar_chunks], axis=0)
     
-    def do_network_update(self, epoch: int, F_e: Optional[CPUArray] = None):
-        message = distributed_lp_messages.NetworkUpdateRequest(epoch=epoch, F_e=array_to_serialized_message(F_e))
+    def do_network_update(self, epoch: int):
+        message = distributed_lp_messages.NetworkUpdateRequest(epoch=epoch)
         return self._event_loop.run_until_complete(self._do_network_update(message))
     
     async def _reconvene_network_updates(self, message: distributed_lp_messages.UpdateMessage):
@@ -161,11 +163,11 @@ class AsynchronousgRPCControllerBackend(SynchADMMControllerBackendBase):
             stub.UpdateWorkerNode(message) for stub in self._worker_stubs
         ])
     
-    def reconvene_network_updates(self, P_bar_t: CPUArray, Y_bar_t: CPUArray, u_t: CPUArray):
+    def reconvene_network_updates(self, sharing_mean_1: CPUArray, sharing_mean_2: CPUArray, sharing_dual: CPUArray):
         message = distributed_lp_messages.UpdateMessage(
-            P_bar_t = array_to_serialized_message(P_bar_t),
-            Y_bar_t = array_to_serialized_message(Y_bar_t),
-            u_t = array_to_serialized_message(u_t)
+            sharing_bias=array_to_serialized_message(
+                sharing_mean_1 - sharing_mean_2 + sharing_dual
+            )
         )
         self._event_loop.run_until_complete(self._reconvene_network_updates(message))
 
@@ -201,7 +203,7 @@ def add_asyn_grpc_params(parser: jsonargparse.ArgumentParser):
                                help='Asynchronous gRPC Communication Backend Parameters')
 
 def parse_asyn_grpc_params(args: jsonargparse.Namespace) -> AsynchronousgRPCControllerBackendParams:
-    return AsynchronousgRPCControllerBackendParams.make_from_args(args)
+    return AsynchronousgRPCControllerBackendParams.make_from_args(args.AsyngRPC)
 
 def generate_asyn_grpc_worker_params(
     controller_params: AsynchronousgRPCControllerBackendParams

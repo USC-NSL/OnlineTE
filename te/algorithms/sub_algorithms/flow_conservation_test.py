@@ -6,15 +6,16 @@ import networkx as nx
 from itertools import groupby
 from collections import Counter
 from joblib import Parallel, delayed
-from typing import Optional, List, Tuple, NewType, Set
+from typing import Optional, List, Tuple, NewType, Set, Dict
 from collections import defaultdict
 from te.traffic_models.base import Commodity
-from te.algorithms.array_utils.cpu_utils import cpu_mmap, cpu_dump
+from te.algorithms.array_utils.cpu_utils import cpu_mmap, cpu_dump, cpu_array
 from te.algorithms.base import TrafficEngineeringLPEvaluationParams
 from te.algorithms.utils import str_round
 from utils.logging import as_fail, as_warning, as_info, as_success
 from te.algorithms.sub_algorithms.utils import (get_slice_starts_and_exclusive_ends, get_number_of_required_workers,
                                                 TempHelper, NUM_PROCS)
+from topologies.utils import get_sparse_commodity_satisfaction_mask
 
 
 ViolationType = NewType('ViolationType', int)
@@ -183,12 +184,15 @@ def show_violation_severity(violations: List[Violation], number_of_commodities: 
 
 def _check_centralized_flow_conservation(
         shift: int, flows: np.ndarray, graph: nx.DiGraph, 
-        commodities: List[Commodity], feasibility_tol: Optional[float],
+        commodities: List[Commodity], check_transit: bool,
+        feasibility_tol: Optional[float],
         feasibility_ratio: Optional[float] = None
-    ) -> Tuple[List[Violation], Set[int]]:
+    ) -> Tuple[List[Violation], Set[int], float, float]:
 
     violations = []
     unsats = set()
+    total_flow = 0
+    total_demand = 0
     for k, commodity in enumerate(commodities):
         SOURCE = commodity.source
         DESTINATION = commodity.destination
@@ -199,8 +203,9 @@ def _check_centralized_flow_conservation(
         for e, edge in enumerate(graph.edges()):
             flow_out[edge[0]].append(flows[e, k])
             flow_in[edge[1]].append(flows[e, k])
-
-        for v in graph.nodes():
+        
+        nodes_to_check = graph.nodes() if check_transit else [SOURCE, DESTINATION]
+        for v in nodes_to_check:
             fout = sum(flow_out[v])
             fin  = sum(flow_in[v])
 
@@ -210,6 +215,8 @@ def _check_centralized_flow_conservation(
                     unsats.add(k)
                 if not is_negligible(fin, DEMAND, feasibility_tol, feasibility_ratio):
                     violations.append((VIOLATION_LOOP, k+shift, v, fin, DEMAND))
+                total_flow += (fout - fin)
+                total_demand += DEMAND
             elif v == DESTINATION:
                 if not is_negligible(fout, DEMAND, feasibility_tol, feasibility_ratio):
                     violations.append((VIOLATION_LEAK, k+shift, v, fout, DEMAND))
@@ -219,7 +226,7 @@ def _check_centralized_flow_conservation(
             else:
                 if not is_satisfied(fout, fin, feasibility_tol, feasibility_ratio):
                     violations.append((VIOLATION_INFLOW, k+shift, v, fin, fout))
-    return violations, unsats
+    return violations, unsats, total_flow, total_demand
 
 
 def report_violations(violations: List[Violation]):
@@ -240,32 +247,57 @@ def report_violations(violations: List[Violation]):
             raise ValueError(f'Unknown violation type: {violation_type}')
 
 
-def check_flow_conservation(
-        flows: np.ndarray, graph: nx.DiGraph, 
-        commodities: List[Commodity], 
-        eval_params: TrafficEngineeringLPEvaluationParams
-    ) -> Tuple[float, Set[int]]:
-    """
-    (PARALLEL VERSION)
-    Check if solution satisfies all of the following constraints:
-        - Transit nodes conserve flows                                    ( flow conservation )
-        - A demand destined to a node, never flows out from that node     (  no demand leaks  )
-        - A demand sourced from a node, never flows back into that node   (      no loops     )
-    Returns the ratio of unsatisfied demands as well as the particular commodity indices
-    """
+def check_flow_satisfaction(
+    flows: np.ndarray, graph: nx.DiGraph, 
+    commodities: List[Commodity], 
+    eval_params: TrafficEngineeringLPEvaluationParams,
+    edge_indexing: Optional[Dict[Tuple[int, int], int]] = None
+) -> Tuple[List[Violation], Set[int], float, float]:
+    rtol = eval_params.FeasibilityRatio
+    atol = eval_params.FeasibilityTolerance
+    source_out, source_in = get_sparse_commodity_satisfaction_mask(graph, commodities, edge_indexing)
+    source_out_demand = np.squeeze(cpu_array(source_out.multiply(flows).sum(axis=0)), axis=0)
+    source_in_demand = np.squeeze(cpu_array(source_in.multiply(flows).sum(axis=0)), axis=0)
+    demands = cpu_array([commodity.demand for commodity in commodities])
+    if rtol is None:
+        out_flow_violation_indices = np.where(~np.isclose(source_out_demand, demands, atol=atol))[0].tolist()
+        loop_violation_indices = np.where(~np.isclose(source_in_demand, 0, atol=atol))[0].tolist()
+    else:
+        out_flow_violation_indices = np.where(~np.isclose(source_out_demand, demands, rtol=rtol, atol=atol))[0].tolist()
+        loop_violation_indices = np.where(~np.isclose(source_in_demand, 0, rtol=rtol, atol=atol))[0].tolist()
+    violations = []
+    unsatisfied_demands = []
+    for i in out_flow_violation_indices:
+        if not is_satisfied(demands[i], source_out_demand[i], atol, rtol):
+            violations.append((VIOLATION_OUTFLOW, i, commodities[i].source, source_out_demand[i], demands[i]))
+            unsatisfied_demands.append(i)
+    for i in loop_violation_indices:
+        if not is_negligible(source_in_demand[i], demands[i], atol, rtol):
+            violations.append((VIOLATION_LOOP, i, commodities[i].source, source_in_demand[i], demands[i]))
+            unsatisfied_demands.append(i)
+    unsatisfied_demands = set(unsatisfied_demands)
+    total_flow = (np.sum(source_out_demand) - np.sum(source_in_demand))
+    total_demand = np.sum(demands)
+    return violations, unsatisfied_demands, total_flow, total_demand
+
+
+def check_flow_conservation_mp(
+    flows: np.ndarray, graph: nx.DiGraph, 
+    commodities: List[Commodity], 
+    eval_params: TrafficEngineeringLPEvaluationParams
+) -> Tuple[List[Violation], Set[int], float, float]:
     N = len(graph.edges())
     K = len(commodities)
     slices = get_slice_starts_and_exclusive_ends(K, MAX_NUMBER_OF_WORKERS, MAX_NUMBER_OF_COMMODITIES_PER_CORE)
 
-    # We'll accumulate the set of unsatisfied commodity indices
-    unsatisfied_commodities: Set[int] = set()
-
     if K <= MAX_NUMBER_OF_COMMODITIES_PER_CORE:
-        violations, unsatisfied_commodities = _check_centralized_flow_conservation(
+        violations, unsatisfied_commodities, total_flow, total_demand = _check_centralized_flow_conservation(
             0, flows, graph, commodities, 
+            check_transit=eval_params.CheckConservation,
             feasibility_tol=eval_params.FeasibilityTolerance,
             feasibility_ratio=eval_params.FeasibilityRatio)
     else:
+        unsatisfied_commodities: Set[int] = set()
         with contextlib.closing(TempHelper(TEMP_FOLDER_NAME)) as tp:
             # MEMMAP the array to allow for concurrent writing
             input_path = tp.get_file_path(MEMMAP_FILE_NAME)
@@ -276,13 +308,44 @@ def check_flow_conservation(
             violations_it = Parallel(n_jobs=nprocs, return_as='generator')\
                 (delayed(_check_centralized_flow_conservation)\
                     (begin, X_KE[:, begin:end], graph, commodities[begin:end],
-                     eval_params.FeasibilityTolerance, eval_params.FeasibilityRatio)
+                     eval_params.CheckConservation,
+                     eval_params.FeasibilityTolerance,
+                     eval_params.FeasibilityRatio)
                     for begin, end in slices)
             violations = []
+            total_flow = 0
+            total_demand = 0
             for item in violations_it:
                 violations.extend(item[0])
                 unsatisfied_commodities = unsatisfied_commodities.union(item[1])
+                total_flow += item[2]
+                total_demand += item[3]
             del X_KE
+    return violations, unsatisfied_commodities, total_flow, total_demand
+
+
+def check_flow_conservation(
+        flows: np.ndarray, graph: nx.DiGraph, 
+        commodities: List[Commodity], 
+        eval_params: TrafficEngineeringLPEvaluationParams,
+        edge_indexing: Optional[Dict[Tuple[int, int], int]] = None
+    ) -> Tuple[float, Set[int], float]:
+    """
+    (PARALLEL VERSION)
+    Check if solution satisfies all of the following constraints:
+        - Transit nodes conserve flows                                    ( flow conservation )
+        - A demand destined to a node, never flows out from that node     (  no demand leaks  )
+        - A demand sourced from a node, never flows back into that node   (      no loops     )
+    Returns the ratio of unsatisfied demands as well as the particular commodity indices
+    """
+    if eval_params.CheckConservation:
+        print(as_info("Will check transit node flow conservation"))
+        violations, unsatisfied_commodities, total_flow, total_demand = check_flow_conservation_mp(flows, graph, commodities, eval_params)
+    else:
+        print(as_warning("Transit node flow conservation will be skipped! Make sure you actually intend for this!"))   
+        violations, unsatisfied_commodities, total_flow, total_demand = check_flow_satisfaction(flows, graph, commodities, eval_params, edge_indexing)
+    
+    K = len(commodities)
     if len(violations) == 0:
         print(as_success("No flow assignment violations were found."))
     else:
@@ -291,4 +354,4 @@ def check_flow_conservation(
             report_violations(violations)
         else:
             show_violation_severity(violations, K, graph.number_of_nodes())
-    return len(unsatisfied_commodities)/K, unsatisfied_commodities
+    return len(unsatisfied_commodities)/K, unsatisfied_commodities, total_flow / total_demand

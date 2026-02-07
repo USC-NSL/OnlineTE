@@ -41,7 +41,7 @@ def outer_admm_consensus_test(primal: np.ndarray, pair: np.ndarray, eval_params:
         if (abs(primal_e) < NEGLIGIBLE_FLOW_ABS_TOL) and (abs(pair_e) < NEGLIGIBLE_FLOW_ABS_TOL):
             continue
         elif not in_consensus(primal_e, pair_e, eval_params.FeasibilityTolerance, feasibility_ratio):
-            violations.append((primal_e, pair_e))
+            violations.append((e, primal_e, pair_e))
     
     if len(violations) == 0:
         print(as_success('Outer ADMM Problem Is In Consensus'))
@@ -50,7 +50,7 @@ def outer_admm_consensus_test(primal: np.ndarray, pair: np.ndarray, eval_params:
         if not eval_params.PrintReports:
             print(as_warning(f'Outer ADMM Consensus Violations: {len(violations)} ({str(round(len(violations)/n*100, 1))}% of pairs)'))
         else:
-            for primal_e, pair_e in violations:
+            for e, primal_e, pair_e in violations:
                 primal_str = str_round(primal_e, 4)
                 pair_str = str_round(pair_e, 4)
                 print(as_warning(f"Edge {e} --> Outer ADMM pairing is not in consensus with primal variable: {primal_str} vs {pair_str}"))

@@ -272,16 +272,14 @@ class EdgeBasedMinimizeMaximumUtilitySolutionParams(TrafficEngineeringLPSolution
     def __post_init__(self):
         self.left_column_share = 0.5
         if self.Path is None:
-            assert self.Name is not None
+            self.Path = f'$$SOLDIR/{self.Name}'
         assert dataclasses.is_dataclass(self.TMModelParams)
         if self.Name is None:
             self.Name = default_solution_name(
                 topology_name=self.TopologyName,
                 rng_seed=self.TMSeed,
-                tm_type=self.TMModelName
+                tm_model_name=self.TMModelName
             )
-        if self.Path is None:
-            self.Path = f'$$SOLDIR/{self.Name}'
 
 
 class EdgeBasedMinimizeMaximumUtilitySolution(TrafficEngineeringLPSolution):

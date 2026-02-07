@@ -2,6 +2,7 @@ import os
 import json
 import numpy as np
 import sympy as sp
+import scipy.sparse as sparse
 try:
     import cupy as cp
 except ModuleNotFoundError:
@@ -11,15 +12,16 @@ import networkx as nx
 from scipy.linalg import null_space
 from typing import Dict, Tuple, Union, List, Optional
 from topologies import (
-    TOPOLOGIES_PATH, TOPOLOGY_ZOO_DIR_NAME, 
+    TOPOLOGIES_PATH, TOPOLOGY_ZOO_DIR_NAME, TOPOLOGY_REPO_DIR_NAME,
     TOPOLOGY_ZOO_INDEX_FILE_NAME
 )
 from te.traffic_models.base import TrafficMatrixBase, Commodity
 from te.traffic_models.models import UniformTrafficMatrix, UniformTrafficMatrixParams
 from utils.logging import as_warning
-# from numba.typed import Dict
+from networkx.readwrite import json_graph
 
 
+TOPOLOGY_REPO_PATH = os.path.join(TOPOLOGIES_PATH, TOPOLOGY_REPO_DIR_NAME)
 TOPOLGOY_ZOO_PATH = os.path.join(TOPOLOGIES_PATH, TOPOLOGY_ZOO_DIR_NAME)
 TOPOLOGY_ZOO_INDEX_PATH = os.path.join(TOPOLOGIES_PATH, TOPOLOGY_ZOO_INDEX_FILE_NAME)
 
@@ -77,6 +79,24 @@ def load_zoo_topology(name: str, seed: Optional[int] = None) -> nx.DiGraph:
         print(as_warning(f"Removing {g.number_of_edges() - new_g.number_of_edges()} parallel edges"))
 
     return new_g.to_directed()
+
+
+def load_repo_topology(name: str) -> Optional[nx.DiGraph]:
+    fname = os.path.join(TOPOLOGY_REPO_PATH, f'{name}.json')
+    if not os.path.exists(fname):
+        print(as_warning(f'Could not find {fname} in the topology repository. Falling back to Topology Zoo ...'))
+        return None
+    with open(fname) as f:
+        data = json.load(f)
+    # return json_graph.node_link_graph(data, edges='links')
+    return json_graph.node_link_graph(data, link='links')
+
+
+def load_topology(name: str, seed: Optional[int] = None) -> Tuple[nx.DiGraph, bool]:
+    topo = load_repo_topology(name)
+    if topo is None:
+        return load_zoo_topology(name, seed), False
+    return topo, True
 
 
 def _get_graph_list_to_join(n_nodes: int, num: int = 1, seed: Optional[int] = None) -> List[nx.DiGraph]:
@@ -381,6 +401,17 @@ def get_uniform_tm_problem_with_capacity_heuristic(
     return c, graph, tm
 
 
+def get_uniform_tm_problem(topo_name: str, tm_seed: int, scale_factor: float = 10) -> Tuple[Optional[float], nx.DiGraph, TrafficMatrixBase]:
+    # First, attempt to load the topology from the repo. (which will have capacities noted on links)
+    graph = load_repo_topology(topo_name)
+    if graph is None:
+        return get_uniform_tm_problem_with_capacity_heuristic(topo_name, tm_seed, scale_factor)
+    tm_params = UniformTrafficMatrixParams(n = len(graph.nodes), min = 0.0, max = 1.0)
+    tm = UniformTrafficMatrix(seed=tm_seed, params=tm_params)
+    tm.rescale(scale_factor)
+    return None, graph, tm
+
+
 def get_graph_M_matrix(graph: nx.DiGraph) -> np.ndarray:
     assert isinstance(graph, nx.DiGraph)
 
@@ -412,25 +443,16 @@ def get_sparse_null_space(M_matrix: np.ndarray) -> np.ndarray:
     return np_basis / np.linalg.norm(np_basis, axis=0)
 
 
-@DeprecationWarning
-def get_feasible_flow_assignment(graph: nx.DiGraph, commodities: List[Commodity]):
-    N = len(graph.edges())
-    K = len(commodities)
-    X_KE = np.zeros(shape=(N, K))
-    EDGE_INDEXING = get_edge_indexing(graph)
-    
-    for k, commodity in enumerate(commodities):
-        SOURCE = commodity.source
-        DESTINATION = commodity.destination
-        DEMAND = commodity.demand
-        path = nx.shortest_path(graph, SOURCE, DESTINATION)
-        for i in range(len(path) - 1):
-            edge = (path[i], path[i+1])
-            X_KE[EDGE_INDEXING[edge], k] = DEMAND
-    return X_KE
-
 def get_commodity_in_out_mask(graph: nx.DiGraph, commodities: List[Commodity], 
                               edge_indexing: Optional[Dict[Tuple[int, int], int]] = None) -> np.ndarray:
+    """
+    Returns a Boolean valued mask of size `n x k` where entry `ek` is `True`
+    for eny edge leaving the destination of commodity `k` or flowing into the
+    source of commodity `k`.
+    Entries that are masked with this must be _very_ close to zero for any
+    acceptable solution, since otherwise it means that the final assignment
+    may have created loops between the source and the destination.
+    """
     if edge_indexing is None:
         edge_indexing = get_edge_indexing(graph)
     mask = np.zeros(dtype=bool, shape=(graph.number_of_edges(), len(commodities)))
@@ -440,6 +462,22 @@ def get_commodity_in_out_mask(graph: nx.DiGraph, commodities: List[Commodity],
         for edge in graph.in_edges(nbunch=commodity.source, data=False):
             mask[edge_indexing[edge], k] = True
     return mask
+
+
+def get_sparse_commodity_satisfaction_mask(
+    graph: nx.DiGraph, commodities: List[Commodity], 
+    edge_indexing: Optional[Dict[Tuple[int, int], int]] = None
+) -> Tuple[sparse.csc_matrix, sparse.csc_matrix]:
+    if edge_indexing is None:
+        edge_indexing = get_edge_indexing(graph)
+    mask_source_out = sparse.lil_matrix((graph.number_of_edges(), len(commodities)), dtype=bool)
+    mask_source_in = sparse.lil_matrix((graph.number_of_edges(), len(commodities)), dtype=bool)
+    for k, commodity in enumerate(commodities):
+        for edge in graph.out_edges(nbunch=commodity.source, data=False):
+            mask_source_out[edge_indexing[edge], k] = True
+        for edge in graph.in_edges(nbunch=commodity.source, data=False):
+            mask_source_in[edge_indexing[edge], k] = True
+    return mask_source_out.tocsc(), mask_source_in.tocsc()
 
 # def get_feasible_flow_assignment_gpu(graph: nx.DiGraph, commodities: List[Commodity]):
 #     N = len(graph.edges())
@@ -461,7 +499,7 @@ def get_commodity_in_out_mask(graph: nx.DiGraph, commodities: List[Commodity],
 if __name__ == '__main__':
     import matplotlib.pyplot as plt
     
-    # g = get_zoo_topology_at_least_as_large_as(150, 700)
+    g = get_zoo_topology_at_least_as_large_as(100, 200)
     # g = get_zoo_topology_at_least_as_large_as(60, 70)
     # if g:
     #     nx.draw(g)
@@ -470,6 +508,6 @@ if __name__ == '__main__':
     # print(f'Nodes: {len(g.nodes)}')
     # print(f'Edges: {len(g.edges)}')
     # g = load_zoo_topology('Claranet')
-    g = get_artificial_topology(300, seed=12345)
-    nx.draw(nx.to_undirected(g), pos=nx.kamada_kawai_layout(g, scale=3), with_labels=True)
-    plt.show()
+    # g = get_artificial_topology(300, seed=12345)
+    # nx.draw(nx.to_undirected(g), pos=nx.kamada_kawai_layout(g, scale=3), with_labels=True)
+    # plt.show()

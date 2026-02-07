@@ -6,9 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from ..base import SynchADMMWorkerBackendBase
 from .. import SynchADMMSolverParams
 from ...base import RPCParams
-from ...utils import (serialized_message_to_array, array_to_serialized_message,
-                      rebuild_chunked_array, chunk_big_array, get_optional_field,
-                      GRPC_ARRAY_STREAM_MAX_LEN)
+from ...utils import *
 
 import protos.array.array_pb2 as array_messages
 from protos.distributed_lp.distributed_lp_pb2_grpc import DistributedADMMSolverServicer, add_DistributedADMMSolverServicer_to_server
@@ -94,17 +92,14 @@ class NetworkWorkerNodeListener(DistributedADMMSolverServicer):
         return Empty()
     
     def DoNetworkUpdate(self, request: distributed_lp_messages.NetworkUpdateRequest, context):
-        F_e = serialized_message_to_array(get_optional_field(request, 'F_e'))
-        runtime, means = self._backend.do_inner_loop_update(request.epoch, F_e)
+        runtime, means = self._backend.do_inner_loop_update(request.epoch)
         return distributed_lp_messages.NetworkUpdateResponse(
             runtime_ns=runtime, means=array_to_serialized_message(means)
         )
     
     def UpdateWorkerNode(self, request: distributed_lp_messages.UpdateMessage, context):
         self._backend.update_cached_values(
-            serialized_message_to_array(request.u_t),
-            serialized_message_to_array(request.P_bar_t),
-            serialized_message_to_array(request.Y_bar_t)
+            serialized_message_to_array(request.sharing_bias)
         )
         return Empty()
     

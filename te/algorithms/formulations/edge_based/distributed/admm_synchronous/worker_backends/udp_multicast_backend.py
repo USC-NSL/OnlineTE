@@ -12,7 +12,7 @@ from ...base import RPCParams
 from ...utils import (serialized_message_to_array, array_to_serialized_message,
                       rebuild_chunked_array, chunk_big_array, get_optional_field,
                       GRPC_ARRAY_STREAM_MAX_LEN)
-from ..controller_backends.udp_multicast_backend import TLVRPCMessages
+from ..controller_backends.multicast_tlv import TLVRPCMessages
 
 import protos.array.array_pb2 as array_messages
 from protos.distributed_lp.distributed_lp_pb2_grpc import DistributedADMMSolverServicer, add_DistributedADMMSolverServicer_to_server
@@ -27,7 +27,9 @@ class MulticastWorkerBackendParams(RPCParams):
     """Multicast group address to scatter to all worker nodes"""
     ScatterPort: int = te.constants.DEFAULT_SCATTER_PORT
     """UDP port to bind for multicasting"""
-    Timeout: float = 5.0
+    TTL: int = 2
+    """UDP packet TTL. Should be at least 2."""
+    Timeout: float = 1.0
     """Timeout when waiting for controller updates"""
 
     def __post_init__(self):
@@ -49,6 +51,7 @@ class MulticastWorkerBackend(SynchADMMWorkerBackendBase):
         
         self._handler_loop: Optional[threading.Thread] = None
         self._xid = None
+        self._last_response: Optional[distributed_lp_messages.NetworkUpdateResponse] = None
     
     @classmethod
     def backend_name(cls) -> str:
@@ -114,28 +117,29 @@ class MulticastWorkerBackend(SynchADMMWorkerBackendBase):
                             self._xid = request.xid
                         elif self.current_xid >= request.xid:
                             buffer = buffer[consumed_length:]
+                            self._gather_socket.sendto(self._last_response.SerializeToString(), addr)
+                            print(f'[{self.current_xid}] Old XID ({request.xid}) from controller. Repeating last reponse.')
                             continue
                         else:
                             self._xid = request.xid
                         if update_type == TLVRPCMessages.DoInnerLoops:
-                            F_e = serialized_message_to_array(get_optional_field(request, 'F_e'))
-                            runtime, means = self.do_inner_loop_update(request.epoch, F_e)
-                            response = distributed_lp_messages.NetworkUpdateResponse(
+                            runtime, means = self.do_inner_loop_update(request.epoch)
+                            self._last_response = distributed_lp_messages.NetworkUpdateResponse(
                                 worker_id=self.worker_id, runtime_ns=runtime, 
                                 means=array_to_serialized_message(means),
                                 xid=request.xid
                             )
-                            self._gather_socket.sendto(response.SerializeToString(), addr)
+                            self._gather_socket.sendto(self._last_response.SerializeToString(), addr)
                         elif update_type == TLVRPCMessages.UpdateNetworkNodes:
                             self.update_cached_values(
-                                serialized_message_to_array(request.u_t),
-                                serialized_message_to_array(request.P_bar_t),
-                                serialized_message_to_array(request.Y_bar_t)
+                                serialized_message_to_array(request.sharing_bias)
                             )
                         else:
                             raise ValueError(f'Unexpected update type: {update_type}')
                         buffer = buffer[consumed_length:]
                 except socket.timeout:
+                    # if self._last_response is not None:
+                    #     self._gather_socket.sendto(self._last_response.SerializeToString(), addr)
                     pass
         except OSError as e:
             print(f'Error in gatherer loop: {e}')
