@@ -76,7 +76,7 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
         self.backend.start()
 
         self._objective_trace: TrafficEngineeringLPObjectiveTrace = \
-            TrafficEngineeringLPObjectiveTrace(['Perceived Utilization', 'Actual Utilization'])
+            TrafficEngineeringLPObjectiveTrace(['Perceived Utilization', 'Actual Utilization', '_Wall Clock'])
         self._objective_gap_trace = []
 
         # These we call right now, as opposed to doing them under `initialize`
@@ -320,7 +320,7 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
         PARAMS = self._solver_params if params is None else params
 
         try:
-            t = time.time()
+            t = time.perf_counter()
             self._update_controller_objective()
             MODEL_CONTROLLER.solve()
             self._update_r_e()
@@ -336,7 +336,7 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
                 MODEL_CONTROLLER.solve()
                 self._update_r_e()
                 max_util = float(np.max(len(self._commodity_list) * self._sharing_mean_1))
-                self._objective_trace.append(float(self.objective_value), max_util)
+                self._objective_trace.append(float(self.objective_value), max_util, round(time.perf_counter() - t, 3))
                 # Inner loop infeasibility is usually very small, no need to bother with it!
                 err = self._outer_admm_wrapper.infeasibility
                 self._objective_gap_trace.append(err)
@@ -349,7 +349,7 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
                     print(as_success("Crossed the convergance bound. Breaking early ..."))
                     break
             self._set_X_ek()
-            return time.time() - t
+            return time.perf_counter() - t
         except ControllerMLUException as e:
             print(f'MLU solver failed: {e}')
             return -1

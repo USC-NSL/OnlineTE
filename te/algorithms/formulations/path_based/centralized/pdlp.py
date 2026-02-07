@@ -208,8 +208,8 @@ class PDLPPathBasedTE(TrafficEngineeringLP):
     
     def _get_variable_upper_bound_vector(self) -> np.ndarray:
         out = np.ones(shape=(self._NUM_VARIABLES,)) * np.inf
-        if self._problem_description.is_mlu:
-            out[-1] = 1.0
+        # if self._problem_description.is_mlu:
+        #     out[-1] = 1.0
         K, _, T = self._path_object.alpha.shape
         BETA = self._path_object.beta
         for k in range(K):

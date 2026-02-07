@@ -16,9 +16,9 @@ from te.algorithms.sub_algorithms.stretch import get_average_stretch, get_utiliz
 
 def round_floats(obj):
     if isinstance(obj, float):
-        return round(obj, 3)
+        return round(obj, 5)
     elif isinstance(obj, np.floating):
-        return round(float(obj), 3)
+        return round(float(obj), 5)
     elif isinstance(obj, dict):
         return {k: round_floats(v) for k, v in obj.items()}
     elif isinstance(obj, (list, tuple)):
@@ -48,12 +48,13 @@ def get_solution_confusion_matrix(lp: TrafficEngineeringLP, eval_params: Traffic
         if objective_gap_trace is None:
             objective_gap_trace = []
         data = {
-            'objective_value': np.round(objective_trace, decimals=3).tolist(),
-            'duality_gap': np.round(objective_gap_trace, decimals=3).tolist(),
-            'average_stretch': np.round(average_stretch, decimals=3).tolist(),
-            'utilizations': np.round(utilizations, decimals=3).tolist(),
-            'average_stretch_p95': np.round(np.percentile(average_stretch, 95), 3),
-            'total_flow_satisfaction': np.round(_lp.check_result.total_satisfcation, 3),
+            'objective_value': np.round(objective_trace, decimals=5).tolist(),
+            'duality_gap': np.round(objective_gap_trace, decimals=5).tolist(),
+            # 'average_stretch': np.round(average_stretch, decimals=3).tolist(),
+            'utilizations': np.round(utilizations, decimals=5).tolist(),
+            'average_stretch_p95': np.round(np.percentile(average_stretch, 95), 5),
+            'average_stretch_p50': np.round(np.percentile(average_stretch, 50), 5),
+            'total_flow_satisfaction': np.round(_lp.check_result.total_satisfcation, 5),
             'solution_density': np.round(_lp.check_result.density, 3)
         }
         with open(eval_params.TraceOutputPath, 'w') as traces:

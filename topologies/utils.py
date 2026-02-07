@@ -499,7 +499,7 @@ def get_sparse_commodity_satisfaction_mask(
 if __name__ == '__main__':
     import matplotlib.pyplot as plt
     
-    # g = get_zoo_topology_at_least_as_large_as(150, 700)
+    g = get_zoo_topology_at_least_as_large_as(100, 200)
     # g = get_zoo_topology_at_least_as_large_as(60, 70)
     # if g:
     #     nx.draw(g)
@@ -508,6 +508,6 @@ if __name__ == '__main__':
     # print(f'Nodes: {len(g.nodes)}')
     # print(f'Edges: {len(g.edges)}')
     # g = load_zoo_topology('Claranet')
-    g = get_artificial_topology(300, seed=12345)
-    nx.draw(nx.to_undirected(g), pos=nx.kamada_kawai_layout(g, scale=3), with_labels=True)
-    plt.show()
+    # g = get_artificial_topology(300, seed=12345)
+    # nx.draw(nx.to_undirected(g), pos=nx.kamada_kawai_layout(g, scale=3), with_labels=True)
+    # plt.show()
