@@ -14,6 +14,7 @@ class GurobiMethod(enum.Enum):
     BARRIER = gurobipy.GRB.METHOD_BARRIER
     SIM_PRIMAL = gurobipy.GRB.METHOD_PRIMAL
     SIM_DUAL = gurobipy.GRB.METHOD_DUAL
+    PDHG = gurobipy.GRB.METHOD_PDHG
 
     def __str__(self) -> str:
         return self.name
@@ -46,8 +47,11 @@ class GurobiSolverParams(SolverParams):
     Threads: int
         Number of threads to use for Barrier/Concurrent solver. Simplex methods do
         not benefit from multiple threads.
-    LogFile:
+    LogFile: str
         Output log file for Gurobi.
+    GPUAccl: bool
+        Set to `True` to use PDHG on the GPU. If used with another method, it will
+        be ignored.
     """
     # Method: int = te.constants.DEFAULT_SOLVER_METHOD
     Method: GurobiMethod = GurobiMethod.BARRIER
@@ -58,9 +62,12 @@ class GurobiSolverParams(SolverParams):
     Presolve: int = te.constants.DEFAULT_PRESOLVE
     Threads: int = min(cpu_count(), 8)
     LogFile: str = te.constants.DEFAULT_GUROBI_LOG_FILE
+    GPUAccl: bool = False
 
     def __post_init__(self):
         self.left_column_share = 0.5
+        if self.GPUAccl and self.Method != GurobiMethod.PDHG:
+            print(as_warning(f"Gurobi supports GPU acceleration only for PDHG! Ignoring `GPUAccl` since {self.Method.name} is used."))
 
 
 @dataclass
@@ -141,12 +148,15 @@ def make_model(name: str, params: SolverParams, env: Optional[gurobipy.Env], ver
     # Barrier and Simplex converge to within the same tolerance.
     model.Params.BarConvTol = params.ConvTol
     model.Params.OptimalityTol = params.ConvTol
+    model.Params.PDHGConvTol = params.ConvTol
 
     model.Params.FeasibilityTol = params.FeasibilityTol
+    model.Params.PDHGAbsTol = params.FeasibilityTol
     model.Params.LogFile = params.LogFile
     model.Params.Presolve = params.Presolve
 
     model.Params.Threads = params.Threads
+    model.Params.PDHGGPU = params.GPUAccl
 
     if len(kwargs) > 0:
         for k, v in kwargs.items():
@@ -158,7 +168,9 @@ def make_model(name: str, params: SolverParams, env: Optional[gurobipy.Env], ver
             f"\tMethod: {params.Method}\n"
             f"\tSimplex Optimality Tolerance (OptimalityTol): {model.Params.OptimalityTol}\n"
             f"\tBarrier Optimality Tolerance (BarConvTol): {model.Params.BarConvTol}\n"
+            f"\tPDHG Optimality Tolerance (PDHGConvTol): {model.Params.PDHGConvTol}\n"
             f"\tCosntraint Feasibility Tolerance (FeasibilityTol): {model.Params.FeasibilityTol}\n"
+            f"\tGPU Accelerated (PDHGGPU): {model.Params.PDHGGPU}"
         ))
     
     if model.Params.OptimalityTol != model.Params.BarConvTol:
