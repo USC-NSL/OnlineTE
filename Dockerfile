@@ -21,4 +21,4 @@ RUN apt-get update && \
     cd /app && python protos/__init__.py
 
 # Default to a lightweight command; override at runtime as needed.
-CMD ["python", "benchmarks/edge_based_centralized.py", "--help"]
+CMD ["python", "-m", "benchmarks.edge_based_centralized", "--help"]
