@@ -1,0 +1,12 @@
+name: OnlineTE-gpu
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+      - -r requirements.txt
+      # Match Dockerfile.gpu default; override manually if your driver/CUDA stack differs.
+      # Example alternative: cupy-cuda11x
+      - cupy-cuda12x
