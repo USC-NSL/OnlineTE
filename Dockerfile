@@ -14,5 +14,11 @@ RUN python -m pip install --upgrade pip && \
 
 COPY . /app
 
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends unzip vim && \
+    rm -rf /var/lib/apt/lists/* && \
+    if [ -f /app/topologies/zoo.zip ]; then cd /app/topologies && unzip -o zoo.zip; fi && \
+    cd /app && python protos/__init__.py
+
 # Default to a lightweight command; override at runtime as needed.
 CMD ["python", "benchmarks/edge_based_centralized.py", "--help"]
