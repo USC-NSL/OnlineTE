@@ -1,0 +1,29 @@
+# CUDA-enabled image for GPU paths (e.g., centralized GPU ADMM).
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONPATH=/app
+
+WORKDIR /app
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends python3 python3-pip python3-venv && \
+    ln -sf /usr/bin/python3 /usr/bin/python && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt /app/requirements.txt
+
+# Keep base dependencies from requirements.txt, then add CuPy explicitly.
+# If your host CUDA stack differs, override at build time:
+#   --build-arg CUPY_PACKAGE=cupy-cuda11x
+ARG CUPY_PACKAGE=cupy-cuda12x
+RUN python -m pip install --upgrade pip && \
+    python -m pip install -r /app/requirements.txt && \
+    python -m pip install ${CUPY_PACKAGE}
+
+COPY . /app
+
+CMD ["python", "benchmarks/edge_based_centralized.py", "--help"]
