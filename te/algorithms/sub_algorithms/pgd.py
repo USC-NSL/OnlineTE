@@ -13,7 +13,8 @@ from .paths import path_based_projection_nnz, path_based_transpose_vector_produc
 
 def do_memory_efficient_pgd(lambda_block: CPUArray, x_block: CPUArray, nnt: CPUArray,
                             bias: CPUArray, x_block_0: CPUArray,
-                            step_size: float, n_iter: int, mask: CPUArray) -> CPUArray:
+                            step_size: float, n_iter: int, mask: CPUArray, 
+                            epsilon: float) -> CPUArray:
     """
     A variant of our plain PGD algorithm that does the bare minimum to handle
     the sharing problem.
@@ -22,7 +23,7 @@ def do_memory_efficient_pgd(lambda_block: CPUArray, x_block: CPUArray, nnt: CPUA
     """
     for _ in range(n_iter):
         # TODO: This can be optimized slightly if `x_block_0` is a least-squares solution ...
-        lambda_block -= step_size * (nnt @ (lambda_block + x_block - np.expand_dims(bias, axis=1)) + x_block_0)
+        lambda_block -= step_size * (nnt @ (lambda_block - epsilon + x_block - np.expand_dims(bias, axis=1)) + x_block_0)
         np.maximum(lambda_block, 0, out=lambda_block, where=~mask)
     return lambda_block
 
@@ -79,14 +80,19 @@ try:
     import cupy as cp
     from te.algorithms.array_utils.gpu_utils import zip_map, PartitionedGPUArray, ScatteredGPUArray
 
-    def do_pgd_gpu(lambda_block: PartitionedGPUArray, c_block: PartitionedGPUArray, nnt: ScatteredGPUArray, 
-                step_size: float, n_iter: int, mask: PartitionedGPUArray) -> PartitionedGPUArray:
+    def conditional_relu(l, m):
+        l[(~m) & (l < 0)] = 0
+        return l
+
+    def do_pgd_gpu(lambda_block: PartitionedGPUArray, x_block: PartitionedGPUArray, nnt: ScatteredGPUArray, bias: ScatteredGPUArray,
+                   x_block_0: PartitionedGPUArray, step_size: float, n_iter: int, mask: PartitionedGPUArray, epsilon: float) -> PartitionedGPUArray:
         """
         A variant of `do_memory_efficient_pgd` suited for running on one or more GPUs.
         """
         for _ in range(n_iter):
-            lambda_block = zip_map([nnt, lambda_block, c_block], lambda nn, l, c: l - step_size * (nn @ l + c))
-            zip_map([lambda_block, mask], lambda l, m: np.maximum(l, 0, out=l, where=~m))
+            lambda_block = zip_map([nnt, lambda_block, x_block, bias, x_block_0], 
+                                   lambda nn, l, x, b, x0: l - step_size * (nn @ (l - epsilon + x - cp.expand_dims(b, axis=1)) + x0))
+            zip_map([lambda_block, mask], lambda l, m: conditional_relu(l, m))
         return lambda_block
 
 except ModuleNotFoundError:

@@ -2,32 +2,29 @@ import time
 import numpy as np
 import networkx as nx
 import asyncio.exceptions
-from collections import defaultdict
-from typing import List, Tuple, Optional, Union
+from typing import List, Optional, Union
 from te.algorithms.base import *
 from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
 from topologies.utils import get_graph_M_matrix, get_adjacency_null_space, get_commodity_in_out_mask
 from utils.exceptions import SolutionInterrupted
-from utils.logging import as_info, as_success, log_subsection_separator, ShortTQDM
+from utils.logging import as_info, as_success, ShortTQDM
 from te.algorithms.array_utils import set_global_precision
 from te.algorithms.array_utils.cpu_utils import (CPUArray, BooleanCPUArray, CPUCSRArray, CPUCSCArray,
                                                  cpu_array, cpu_zeros, cpu_double_array, set_cpu_float_precision)
-from te.algorithms.utils import get_solution_maximum_utilization
 # TODO: Finish the `SharingWrapper` for the inner loop
 from te.algorithms.sub_algorithms.admm import ADMMWrapper
 from te.algorithms.sub_algorithms.feasible_assignment import get_feasible_flow_assignment
 from te.algorithms.sub_algorithms.admm_consensus_test import outer_admm_consensus_test, inner_admm_consensus_test
-from te.algorithms.sub_algorithms.link_capacity_test import check_capacity_constraint
-from te.algorithms.sub_algorithms.flow_conservation_test import check_flow_conservation
 from te.algorithms.statistics.helpers import record_cpu_runtime, record_return_value
 from . import SynchADMMSolverParams
 from .base import SynchADMMControllerBackendBase
 from ..base import DistributedSolverNodeBase, DistributedSolverNodeParams
+from ...base import EdgeBasedTEBase
 from te.algorithms.sub_algorithms.mlu_backends.base import ControllerMLUSolver, ControllerMLUException
 
 
-class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
+class SynchADMMControllerNode(EdgeBasedTEBase, DistributedSolverNodeBase):
     def __init__(self, 
                  problem_description: TrafficEngineeringProblemDescription,
                  solver_params: SynchADMMSolverParams,
@@ -163,16 +160,13 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
     def _initialize_variables_and_residuals(self):
         K = len(self._commodity_list)
         NUM_EDGES = self._NUM_EDGES
-        # self._capacities = cpu_double_array([item[-1] for item in self._graph.edges(data='capacity')])
         self._c_norm = np.linalg.norm(self._capacities)
-        # self._alpha = self._c_norm * np.sqrt(NUM_EDGES)
         self._alpha = 1 / np.sqrt(NUM_EDGES)
-        # self._X_ek = cpu_array(self._X_ek_start)
         self._X_ek_sum_e = cpu_array(self._Z_e_start)
         self._sharing_mean_1 = self._Z_e_start / K
         self._sharing_mean_2 = cpu_array(self._sharing_mean_1)
         self._sharing_dual = cpu_zeros((NUM_EDGES,))
-        # The objective convergance tolerance for the MLU problem _MUST_ stricter than the
+        # The objective convergance tolerance for the MLU problem _MUST_ be stricter than the
         # tolerance for the distributed algorithm itself.
         assert self._solver_params.ConvTol >= self._mlu_params.ConvTol, \
             f"{self._solver_params.ConvTol} < {self._mlu_params.ConvTol}"
@@ -186,27 +180,6 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
 
         self._outer_admm_wrapper = ADMMWrapper(NUM_EDGES, self._solver_params.Rho)
         self._outer_admm_wrapper.initialize(self._X_ek_sum_e)
-    
-    def _report_problem_size(self):
-        M = len(self._graph.nodes)
-        N = len(self._graph.edges)
-        T = self._T
-        K = len(self._commodity_list)
-
-        print(as_info(log_subsection_separator()))
-        print(as_info(f"Graph Size: {M} nodes | {N} edges"))
-        print(as_info(f"Number of commodities: {K}"))
-        print(as_info(f"Nullity of commodity assignment matrix: {T}"))
-        print(as_info(log_subsection_separator()))
-        print(as_info("CONTROLLER PROBLEM:\n" +
-              f"\t TOTAL NUMBER OF VARIABLES: {N + 1}\n"
-              f"\t TOTAL NUMBER OF CONSTRAINTS: {N + 1}"))
-        print(as_info(log_subsection_separator()))
-        print(as_info("NODE PROBLEM:\n" +
-              f"\t NUMBER OF INDEPENDENT QPs PER NODE: {M - 1}\n"
-              f"\t NUMBER OF VARIABLES PER QP PER NODE: {T}\n"
-              f"\t NUMBER CONSTRAINTS PER QP PER NODE: {T}"))
-        print(as_info(log_subsection_separator()))
 
     def initialize_to(self, assignment: np.ndarray):
         raise NotImplementedError
@@ -221,6 +194,7 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
     def _set_X_ek(self):
         self._X_ek = self.backend.get_X_ek()
         np.multiply(self._X_ek, cpu_array(self._capacities)[:, None], out=self._X_ek)
+        # remove_noisy_loops(self._X_ek, self._graph)
     
     def _add_constraints(self):
         assert self._mlu_solver is not None
@@ -364,52 +338,9 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
 
     def check(self):
         eval_params = self._problem_description.EvalParams
-
-        # Are outer ADMM pairs in consensus?
         outer_admm_consensus_test(self._X_ek_sum_e, self._get_Z_value(), eval_params=eval_params)
-        
-        # Are inner ADMM pairs in consensus?
         inner_admm_consensus_test(self._sharing_mean_1, self._sharing_mean_2, eval_params=eval_params)
-        
-        # Now, check flow conservation ...
-        X_EK = self._X_ek
-        unsat_ratio, unsat_commodities, total_satisfcation = check_flow_conservation(
-            X_EK, self._graph, self._commodity_list, eval_params=eval_params)
-        congested_ratio, congested_links = check_capacity_constraint(
-            X_EK, self._graph, self._commodity_list, eval_params=eval_params)
-        self.check_result = TrafficEngineeringLPCheckResult(
-            unsat_ratio=unsat_ratio,
-            congested_ratio=congested_ratio,
-            unsat_commodities=unsat_commodities,
-            congested_links=congested_links,
-            density=np.count_nonzero(X_EK) / X_EK.size,
-            total_satisfcation=total_satisfcation
-        )
-
-    def get_solution_commodity_list(self) -> List[Tuple[Commodity, Commodity]]:
-        assert self._X_ek is not None
-
-        COMMODITIES = self._commodity_list
-        GRAPH = self._graph
-        X = self._X_ek
-
-        ls = []
-        for k, commodity in enumerate(COMMODITIES):
-            flow_out = defaultdict(list)
-            flow_in = defaultdict(list)
-            for e, edge in enumerate(GRAPH.edges()):
-                flow_out[edge[0]].append(X[e, k])
-                flow_in[edge[1]].append(X[e, k])
-            commodity_sent = Commodity(
-                source=commodity.source, destination=commodity.destination,
-                demand=sum(flow_out[commodity.source])
-            )
-            commodity_received = Commodity(
-                source=commodity.source, destination=commodity.destination,
-                demand=sum(flow_in[commodity.destination])
-            )
-            ls.append((commodity_sent, commodity_received))
-        return ls
+        super().check()
     
     def update_traffic_matrix(self, tm):
         # First, record the matrix and the new commodities

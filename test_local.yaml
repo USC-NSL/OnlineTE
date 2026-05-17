@@ -1,9 +1,12 @@
 # topo: Kdl
 topo: Interoute
+# topo: Forthnet
+# topo: UsCarrier
 # topo: Claranet
 tm_seed: 12345
 objective: MLU
 report_unsat: True
+check_conservation: True
 # scale_factor: 20.0
 scale_factor: 10.0
 synch:
@@ -12,19 +15,18 @@ synch:
   mlu_backend: pdlp
   SolverParams:
     InnerLoopRounds: 5
-    OuterLoopRounds: 70
+    OuterLoopRounds: 200
     SwitchIterations: 1
     Precision: single
     # Rho: 0.1
     Eta: 0.15
-    # Beta: 8e-5
+    Beta: null
     X0Type: PSEUDO_INVERSE
-    # X0Type: CSR_SHORTEST_PATH
-    ConvTol: 1e-5
+    ConvTol: 2e-4
   PDLPMLUParams:
     Threads: 1
     ConvTol: 1e-6
   comm_backend: grpc-parbar
   ParBargRPC:
-    BarrierSize: 1
-    MaxLag: 2
+    BarrierSize: 5
+    MaxLag: 1

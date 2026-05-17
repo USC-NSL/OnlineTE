@@ -3,7 +3,8 @@ import time
 import numpy as np
 from typing import Optional, Tuple, Union
 from te.algorithms.array_utils import set_global_precision
-from te.algorithms.array_utils.cpu_utils import CPUArray, BooleanCPUArray, CPUCSRArray, CPUCSCArray, cpu_zeros, cpu_array, set_cpu_float_precision
+from te.algorithms.array_utils.cpu_utils import (CPUArray, BooleanCPUArray, CPUCSRArray, CPUCSCArray,
+                                                 cpu_zeros, cpu_array, set_cpu_float_precision, cpu_cast_float)
 from ..base import DistributedSolverNodeBase, DistributedSolverNodeParams
 from . import SynchADMMSolverParams
 from .base import SynchADMMWorkerBackendBase
@@ -25,6 +26,7 @@ class DenseSolver:
         self._X_ek = cpu_array(X_0)
         self._pgd_step = pgd_step
         self._pgd_iters = pgd_iters
+        self._epsilon = cpu_cast_float(1e-1 * (self._X_ek.shape[1])**(-1.5))
 
     @property
     def X_ek(self) -> CPUArray:
@@ -39,9 +41,10 @@ class DenseSolver:
             x_block_0=self._X_0,
             step_size=self._pgd_step, 
             n_iter=self._pgd_iters, 
-            mask=self._mask
+            mask=self._mask,
+            epsilon=self._epsilon
         )
-        self._X_ek += self._NNT @ (self._lambda_ek - np.expand_dims(sharing_bias, axis=1))
+        self._X_ek += self._NNT @ (self._lambda_ek - self._epsilon - np.expand_dims(sharing_bias, axis=1))
         return np.mean(self._X_ek, axis=1)
 
 
@@ -63,6 +66,7 @@ class DualSolver:
         return self._X_0 + self._NNT @ self._lambda_sum_ek
     
     def update(self, sharing_bias: CPUArray) -> CPUArray:
+        # TODO: Add loop regularizer for the dual solver
         self._lambda_ek = do_dual_pgd(
             lambda_block=self._lambda_ek, 
             lambda_sum_block=self._lambda_sum_ek,
@@ -164,14 +168,14 @@ class SynchADMMWorkerNode(DistributedSolverNodeBase):
         assert self._NUM_EDGES == N
         assert self._CHUNK_LEN == K
         if self._solver_params.Beta is None:
-            # self._dense_solver = DenseSolver(
-            #     self._X_ek_start_chunk, self._NNT_M, self._MASK_M_chunk, 
-            #     self._solver_params.Gamma, self._solver_params.SwitchIterations
-            # )
-            self._dual_solver = DualSolver(
+            self._dense_solver = DenseSolver(
                 self._X_ek_start_chunk, self._NNT_M, self._MASK_M_chunk, 
                 self._solver_params.Gamma, self._solver_params.SwitchIterations
             )
+            # self._dual_solver = DualSolver(
+            #     self._X_ek_start_chunk, self._NNT_M, self._MASK_M_chunk, 
+            #     self._solver_params.Gamma, self._solver_params.SwitchIterations
+            # )
         else:
             self._sparse_solver = SparseSolver(
                 self._X_ek_start_chunk, self._NNT_M, self._MASK_M_chunk,
@@ -192,8 +196,8 @@ class SynchADMMWorkerNode(DistributedSolverNodeBase):
     def do_inner_loop_pgd_update(self, epoch: int) -> Tuple[int, CPUArray]:
         start = time.perf_counter_ns()
         if self._solver_params.Beta is None:
-            # means = self._dense_solver.update(self._sharing_bias_cached)
-            means = self._dual_solver.update(self._sharing_bias_cached)
+            means = self._dense_solver.update(self._sharing_bias_cached)
+            # means = self._dual_solver.update(self._sharing_bias_cached)
         else:
             means = self._sparse_solver.update(self._sharing_bias_cached)
         return (time.perf_counter_ns() - start) // 1000, means
@@ -206,8 +210,8 @@ class SynchADMMWorkerNode(DistributedSolverNodeBase):
     
     def report_chunk(self) -> CPUArray:
         if self._solver_params.Beta is None:
-            # return self._dense_solver.X_ek
-            return self._dual_solver.X_ek
+            return self._dense_solver.X_ek
+            # return self._dual_solver.X_ek
         else:
             return self._sparse_solver.X_ek
     

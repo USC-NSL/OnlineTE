@@ -386,13 +386,18 @@ class TrafficEngineeringLPCheckResult:
         A set of commodity indices that are unsatisfied.
     congested_links: Set[int]
         Set of link (edge) indices that are congested.
+    loop_free: bool
+        The final solution was certified to be loop-free.
+    total_satisfcation: Optional[float]
+        Total demand satisfaction.
     density: Optional[float]
-        Final solution density
+        Final solution density.
     """
     unsat_ratio: float
     congested_ratio: float
     unsat_commodities: Set[int]
     congested_links: Set[int]
+    loop_free: bool
     total_satisfcation: Optional[float] = None
     density: Optional[float] = None
 
@@ -406,6 +411,10 @@ class TrafficEngineeringLPCheckResult:
             out.append(as_success("ALL LINK CAPCITIES WERE HONORED"))
         else:
             out.append(as_fail("{:.1f}% OF LINKS ARE CONGESTED".format(self.congested_ratio*100)))
+        if not self.loop_free:
+            out.append(as_fail("Solution contains loops(s)!"))
+        else:
+            out.append(as_success("No loops were found."))
         if self.total_satisfcation is not None:
             out.append(as_info("TOTAL SATISFACTION: {:.1f}%".format(self.total_satisfcation*100)))
         if self.density is not None:

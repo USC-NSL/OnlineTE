@@ -7,13 +7,12 @@ from gurobipy import GRB, GurobiError
 from te.algorithms.base import *
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
 from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
-from te.algorithms.sub_algorithms.link_capacity_test import check_capacity_constraint
-from te.algorithms.sub_algorithms.flow_conservation_test import check_flow_conservation
 from utils.logging import as_info, as_fail, ShortTQDMEnumerate
 from . import GurobiSolverParams, make_model
+from ..base import EdgeBasedTEBase
 
 
-class GurobiTE(TrafficEngineeringLP):
+class GurobiTE(EdgeBasedTEBase):
     """
     An honest implementation of edge-based MLU with Gurobi.
     Becomes too sluggish for very large topologies, but solutions look very nice.
@@ -32,12 +31,15 @@ class GurobiTE(TrafficEngineeringLP):
         self._demand_constraints: Optional[List[Tuple[gurobipy.Constr, gurobipy.Constr]]] = None
         self._capacity_constraints: Optional[gurobipy.tupledict] = None
         self._X_ek: Optional[np.ndarray] = None
+
+        self._demand_objective: Optional[gurobipy.LinExpr] = None
+        self._regularizer_objective: Optional[gurobipy.LinExpr] = None
         
         self._report_problem_size()
     
     @property
     def alg_name(self) -> str:
-        return 'Centralized'
+        return 'Centralized-Gurobi'
     
     @property
     def graph(self) -> nx.DiGraph:
@@ -67,14 +69,6 @@ class GurobiTE(TrafficEngineeringLP):
     def assignments(self) -> np.ndarray:
         assert self._X_ek is not None
         return self._X_ek
-
-    def _report_problem_size(self):
-        M = len(self._graph.nodes)
-        N = len(self._graph.edges)
-        K = len(self._commodity_list)
-
-        print(as_info(f"Graph Size: {M} nodes | {N} edges"))
-        print(as_info(f"Number of commodities: {K}"))
 
     def initialize_to(self, solution: EdgeBasedMinimizeMaximumUtilitySolution):
         assert self._model is not None and self._flows is not None
@@ -167,13 +161,15 @@ class GurobiTE(TrafficEngineeringLP):
         demand_constraints = []
         # For the case of Max-Flow / Max-Concurrent-Flow, we should just build the
         # objective now so that we won't traverse the commodity list again ...
-        non_mlu_objective = gurobipy.LinExpr()
+        demand_objective = gurobipy.LinExpr()
+        total_demand = 0
         print(as_info("Adding demand/flow-conservation constraints"))
         for k, commodity in ShortTQDMEnumerate(COMMODITIES):
             SOURCE = commodity.source
             DESTINATION = commodity.destination
             DEMAND = commodity.demand
-
+            
+            total_demand += DEMAND
             flow_out = defaultdict(gurobipy.LinExpr)
             flow_in = defaultdict(gurobipy.LinExpr)
             for e, edge in enumerate(GRAPH.edges()):
@@ -198,7 +194,7 @@ class GurobiTE(TrafficEngineeringLP):
                     
                     # Update objective for non-MLU case
                     if self._problem_description.EvalParams.Objective != TEObjective.MLU:
-                        non_mlu_objective.add(flow_out[v], -1)
+                        demand_objective.add(flow_out[v], -1)
                 elif v == DESTINATION:
                     # Demand constraint in destination
                     if self._problem_description.EvalParams.Objective == TEObjective.MLU:
@@ -213,29 +209,31 @@ class GurobiTE(TrafficEngineeringLP):
             demand_constraints.append((source_constraint, destination_constraint))
         self._demand_constraints = demand_constraints
 
-        if not self._problem_description.is_mlu:
-            self._objective = non_mlu_objective
+        # The regularizer objective is needed to ensure loops do not happen!
+        # We use a linear regularizer for this.
+        regularizer_objective = gurobipy.LinExpr()
+        for k in range(K):
+            for e in range(GRAPH.number_of_edges()):
+                regularizer_objective.addTerms(0.01/total_demand, FLOWS[(e, k)])
+
+        self._demand_objective = demand_objective
+        self._regularizer_objective = regularizer_objective
 
     def _add_objective(self):
         assert self._model is not None and \
-                self._flows is not None
+            self._flows is not None and \
+            self._objective is None
         
         MODEL = self._model
 
         if self._problem_description.is_mlu:
-            assert self._objective is None
-            self._objective = self._utility
+            self._objective = self._utility + self._regularizer_objective
         else:
-            assert self._objective is not None
+            self._objective = self._demand_objective + self._regularizer_objective
         MODEL.setObjective(self._objective, GRB.MINIMIZE)
     
     def close(self):
         self._model.close()
-    
-    def make_lp(self):
-        self._make_variables()
-        self._add_constraints()
-        self._add_objective()
     
     def reset(self, with_params: False):
         self._model.reset()
@@ -258,50 +256,6 @@ class GurobiTE(TrafficEngineeringLP):
         except GurobiError as e:
             print(as_fail(f'Error code {e.errno}: {e}'))
             return -1
-
-    def check(self):
-        eval_params = self._problem_description.EvalParams
-        unsat_ratio, unsat_commodities, total_satisfcation = check_flow_conservation(
-            self._X_ek, self._graph, self._commodity_list,
-            eval_params
-        )
-        congested_ratio, congested_links = check_capacity_constraint(
-            self._X_ek, self._graph, self._commodity_list,
-            eval_params
-        )
-        self.check_result = TrafficEngineeringLPCheckResult(
-            unsat_ratio=unsat_ratio,
-            congested_ratio=congested_ratio,
-            unsat_commodities=unsat_commodities,
-            congested_links=congested_links,
-            density=np.count_nonzero(np.clip(self._X_ek)) / self._X_ek.size,
-            total_satisfcation=total_satisfcation
-        )
-    
-    def get_solution_commodity_list(self) -> List[Tuple[Commodity, Commodity]]:
-        assert self._X_ek is not None
-
-        COMMODITIES = self._commodity_list
-        GRAPH = self._graph
-        X = self._X_ek
-
-        ls = []
-        for k, commodity in enumerate(COMMODITIES):
-            flow_out = defaultdict(list)
-            flow_in = defaultdict(list)
-            for e, edge in enumerate(GRAPH.edges()):
-                flow_out[edge[0]].append(X[e, k])
-                flow_in[edge[1]].append(X[e, k])
-            commodity_sent = Commodity(
-                source=commodity.source, destination=commodity.destination,
-                demand=sum(flow_out[commodity.source])
-            )
-            commodity_received = Commodity(
-                source=commodity.source, destination=commodity.destination,
-                demand=sum(flow_in[commodity.destination])
-            )
-            ls.append((commodity_sent, commodity_received))
-        return ls
 
     def update_traffic_matrix(self, tm: TrafficMatrixBase):
         # First, record the new commodity list

@@ -19,6 +19,7 @@ if __name__ == '__main__':
     if args.solver == 'gurobi':
         GUROBI_PARAMS = parse_centralized_gurobi_solver_params(solver_subparser_args)
         solve_te_and_check(problem, GurobiTE, GUROBI_PARAMS)
+    # TODO: Should we just get rid of `gurobi-dual`? It isn't really necessary anymore ...
     # elif args.solver == 'gurobi-dual':
     #     GUROBI_PARAMS = parse_centralized_dual_gurobi_solver_params(solver_subparser_args)
     #     solve_te_and_check(problem, DualGurobiTE, GUROBI_PARAMS)
@@ -27,6 +28,6 @@ if __name__ == '__main__':
         solve_te_and_check(problem, PDLPTE, PDLP_PARAMS)
     elif args.solver == 'gpuadmm':
         GPUADMM_PARAMS = parse_centralized_gpuadmm_solver_params(solver_subparser_args)
-        solve_te_and_check(problem, GPUADMMTE, GPUADMM_PARAMS, PDLPMLU, PDLPMLUParams(Threads=1))
+        solve_te_and_check(problem, GPUADMMTE, GPUADMM_PARAMS, PDLPMLU, PDLPMLUParams(Threads=1, ConvTol=1e-5))
     else:
         raise ValueError(f'Invalid solver name: {args.solver}.\nAvailable solvers are: {list(AVAILABLE_SOLVERS.keys())}')

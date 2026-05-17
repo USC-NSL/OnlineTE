@@ -205,12 +205,6 @@ class DistributedSolverNodeBase(ABC):
         Initialize the solver node.
         MUST be called before `run`.
         """
-    
-    # @abstractmethod
-    # def wait(self):
-    #     """
-    #     Wait until the communication backend terminates.
-    #     """
 
     @abstractmethod
     def run(self):

@@ -3,18 +3,16 @@ import networkx as nx
 import scipy.sparse
 from dataclasses import dataclass
 from typing import List, Tuple, Optional, Dict
-from collections import defaultdict
 from . import PDLPParams
+from ..base import EdgeBasedTEBase
 from ortools.pdlp import solve_log_pb2
 from ortools.pdlp import solvers_pb2
 from ortools.pdlp.python import pdlp
 from te.algorithms.base import *
 from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, traffic_to_list_of_tuples, Commodity
 from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
-from te.algorithms.sub_algorithms.link_capacity_test import check_capacity_constraint
-from te.algorithms.sub_algorithms.flow_conservation_test import check_flow_conservation
 from topologies.utils import get_node_in_array, get_node_out_array
-from utils.logging import as_info, as_fail, ShortTQDMEnumerate
+from utils.logging import as_fail, ShortTQDMEnumerate
 
 
 @dataclass
@@ -43,7 +41,7 @@ class ConstraintVector:
         lp.constraint_upper_bounds = self.uppers
 
 
-class PDLPTE(TrafficEngineeringLP):
+class PDLPTE(EdgeBasedTEBase):
     def __init__(self, problem_description: TrafficEngineeringProblemDescription, solver_params: PDLPParams) -> None:
         super().__init__(problem_description, solver_params)
         self._graph = problem_description.Graph
@@ -92,22 +90,14 @@ class PDLPTE(TrafficEngineeringLP):
     
     @property
     def objective_trace(self) -> Optional[List[float]]:
-        # TODO: Anyway to get this from Gurobi?
+        # TODO: Anyway to get this from PDLP?
         return None
     
     @property
     def assignments(self) -> np.ndarray:
         assert self._X_ek is not None
         return self._X_ek
-
-    def _report_problem_size(self):
-        M = len(self._graph.nodes)
-        N = len(self._graph.edges)
-        K = len(self._commodity_list)
-
-        print(as_info(f"Graph Size: {M} nodes | {N} edges"))
-        print(as_info(f"Number of commodities: {K}"))
-
+    
     def initialize_to(self, solution: EdgeBasedMinimizeMaximumUtilitySolution):
         raise NotImplementedError
         # assert self._model is not None and self._flows is not None
@@ -118,9 +108,9 @@ class PDLPTE(TrafficEngineeringLP):
         N = len(self._graph.edges)
         if self._problem_description.is_mlu:
             self._utility = result.primal_solution[-1]
-            self._X_ek = np.reshape(result.primal_solution[:-1], newshape=(N, K))
+            self._X_ek = np.reshape(result.primal_solution[:-1], shape=(N, K))
         else:
-            self._X_ek = np.reshape(result.primal_solution, newshape=(N, K))
+            self._X_ek = np.reshape(result.primal_solution, shape=(N, K))
         self._set_last_objective(result)
     
     def _set_last_objective(self, result: pdlp.SolverResult):
@@ -218,7 +208,8 @@ class PDLPTE(TrafficEngineeringLP):
         assert counter == M-2
 
     def _get_objective_vector(self) -> Tuple[float, np.ndarray]:
-        vec = np.zeros(shape=(self._NUM_VARIABLES,))
+        total_demand = sum([commodity.demand for commodity in self._commodity_list])
+        vec = np.full(shape=(self._NUM_VARIABLES,), fill_value=0.01/total_demand)
         if self._problem_description.is_mlu:
             vec[-1] = 1.0
         else:
@@ -265,11 +256,6 @@ class PDLPTE(TrafficEngineeringLP):
     def close(self):
         pass
     
-    def make_lp(self):
-        self._make_variables()
-        self._add_constraints()
-        self._add_objective()
-    
     def reset(self, with_params: False):
         raise NotImplementedError
     
@@ -300,50 +286,6 @@ class PDLPTE(TrafficEngineeringLP):
         except Exception as e:
             print(as_fail(f"Error while solving: {e}"))
             return -1
-
-    def check(self):
-        eval_params = self._problem_description.EvalParams
-        unsat_ratio, unsat_commodities, total_satisfcation = check_flow_conservation(
-            self._X_ek, self._graph, self._commodity_list,
-            eval_params
-        )
-        congested_ratio, congested_links = check_capacity_constraint(
-            self._X_ek, self._graph, self._commodity_list,
-            eval_params
-        )
-        self.check_result = TrafficEngineeringLPCheckResult(
-            unsat_ratio=unsat_ratio,
-            congested_ratio=congested_ratio,
-            unsat_commodities=unsat_commodities,
-            congested_links=congested_links,
-            density=np.count_nonzero(np.clip(self._X_ek)) / self._X_ek.size,
-            total_satisfcation=total_satisfcation
-        )
-    
-    def get_solution_commodity_list(self) -> List[Tuple[Commodity, Commodity]]:
-        assert self._X_ek is not None
-
-        COMMODITIES = self._commodity_list
-        GRAPH = self._graph
-        X = self._X_ek
-
-        ls = []
-        for k, commodity in enumerate(COMMODITIES):
-            flow_out = defaultdict(list)
-            flow_in = defaultdict(list)
-            for e, edge in enumerate(GRAPH.edges()):
-                flow_out[edge[0]].append(X[e, k])
-                flow_in[edge[1]].append(X[e, k])
-            commodity_sent = Commodity(
-                source=commodity.source, destination=commodity.destination,
-                demand=sum(flow_out[commodity.source])
-            )
-            commodity_received = Commodity(
-                source=commodity.source, destination=commodity.destination,
-                demand=sum(flow_in[commodity.destination])
-            )
-            ls.append((commodity_sent, commodity_received))
-        return ls
 
     def update_traffic_matrix(self, tm: TrafficMatrixBase):
         raise NotImplementedError

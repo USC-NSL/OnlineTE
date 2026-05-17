@@ -85,7 +85,7 @@ class PDLPMLU(ControllerMLUSolver):
 
     def _get_variable_upper_bound_vector(self) -> np.ndarray:
         out = np.full((self._NUM_VARIABLES,), np.inf)
-        out[-1] = 1.0
+        # out[-1] = 1.0
         return out
 
     def _get_capacity_constraint(self) -> ConstraintVector:
