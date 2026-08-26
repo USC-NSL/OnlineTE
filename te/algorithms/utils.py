@@ -1,16 +1,11 @@
 import json
-import contextlib
 import numpy as np
 import seaborn as sns
 import networkx as nx
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
-from typing import Optional, Type
-from utils.logging import as_info, as_warning, str_round, log_section_title, log_subsection_title
-from te.traffic_models.base import TrafficMatrixBase
-from te.algorithms.base import TrafficEngineeringLP, SolverParams, TrafficEngineeringLPEvaluationParams
-from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution, EdgeBasedMinimizeMaximumUtilitySolutionParams
-from te.algorithms.statistics.base import stringify_collected_stats
+from utils.logging import as_warning
+from te.algorithms.base import TELP, TEEvaluationParams
 from te.algorithms.sub_algorithms.stretch import get_average_stretch, get_utilizations
 
 
@@ -26,11 +21,11 @@ def round_floats(obj):
     return obj
 
 
-def get_solution_confusion_matrix(lp: TrafficEngineeringLP, eval_params: TrafficEngineeringLPEvaluationParams):
+def get_solution_confusion_matrix(lp: TELP, eval_params: TEEvaluationParams):
     """
     Plot the solution and output the objective trace.
     """
-    def write_traces(_lp: TrafficEngineeringLP):
+    def write_traces(_lp: TELP):
         objective_trace = _lp.objective_trace
         objective_gap_trace = _lp.objective_gap_trace
         average_stretch: np.ndarray = np.round(get_average_stretch(
@@ -60,7 +55,7 @@ def get_solution_confusion_matrix(lp: TrafficEngineeringLP, eval_params: Traffic
         with open(eval_params.TraceOutputPath, 'w') as traces:
             json.dump(round_floats(data), traces, indent=4)
 
-    def make_fig(_lp: TrafficEngineeringLP) -> Figure:
+    def make_fig(_lp: TELP) -> Figure:
         avg_stretch = get_average_stretch(
             lp.commodity_list,
             lp.assignments,
@@ -124,32 +119,31 @@ def get_solution_maximum_utilization(assignments: np.ndarray, graph: nx.DiGraph)
     return u
 
 
-def test_mlu(lp_cls: Type[TrafficEngineeringLP], graph: nx.DiGraph, tm: TrafficMatrixBase, 
-             solver_params: SolverParams,
-             eval_params: TrafficEngineeringLPEvaluationParams,
-             solution_params: Optional[EdgeBasedMinimizeMaximumUtilitySolutionParams] = None, ):
-    print(as_info(log_section_title("MLU PROBLEM")))
-    with contextlib.closing(lp_cls(graph, tm, solver_params)) as lp:
-        print(as_info(f"Solving With: {lp.alg_name}"))
-        print(as_info(f"Evaluating With Parameters:\n{eval_params}"))
-        print(as_info(f"Solving With Parameters:\n{solver_params}"))
-        print(as_info(log_subsection_title("MAKING TE LP")))
-        lp.make_lp()
-        print(as_info(log_subsection_title(f"SOLVING WITH: {lp.alg_name}")))
-        t = lp.solve()
-        print(as_info(log_subsection_title("CHECKING SOLUTION")))
-        if t >= 0:
-            lp.check(eval_params)
-            print(lp.check_result)
-            get_solution_confusion_matrix(lp, eval_params)
-            print(as_info(f"Solved in {str_round(t, 2)} seconds"))
-            print(as_info(f"Final objective value: {str_round(lp.objective_value, 4)}"))
-            print(as_info(f"Actual utilization: {str_round(get_solution_maximum_utilization(lp.assignments, lp.graph), 4)}"))
-        stats = stringify_collected_stats()
-        if stats is not None:
-            print(as_info(stats))
-        if solution_params:
-            solution = EdgeBasedMinimizeMaximumUtilitySolution(params=solution_params)
-            lp.add_solution_elements(solution)
-            solution.dump_elements()
-            solution.dump(name=solution_params.sol_name)
+# def test_mlu(lp_cls: Type[TELP], graph: nx.DiGraph, tm: TrafficMatrixBase, 
+#              solver_params: SolverParams,
+#              eval_params: TEEvaluationParams):
+#     print(as_info(log_section_title("MLU PROBLEM")))
+#     with contextlib.closing(lp_cls(graph, tm, solver_params)) as lp:
+#         print(as_info(f"Solving With: {lp.alg_name}"))
+#         print(as_info(f"Evaluating With Parameters:\n{eval_params}"))
+#         print(as_info(f"Solving With Parameters:\n{solver_params}"))
+#         print(as_info(log_subsection_title("MAKING TE LP")))
+#         lp.make_lp()
+#         print(as_info(log_subsection_title(f"SOLVING WITH: {lp.alg_name}")))
+#         t = lp.solve()
+#         print(as_info(log_subsection_title("CHECKING SOLUTION")))
+#         if t >= 0:
+#             lp.check(eval_params)
+#             print(lp.check_result)
+#             get_solution_confusion_matrix(lp, eval_params)
+#             print(as_info(f"Solved in {str_round(t, 2)} seconds"))
+#             print(as_info(f"Final objective value: {str_round(lp.objective_value, 4)}"))
+#             print(as_info(f"Actual utilization: {str_round(get_solution_maximum_utilization(lp.assignments, lp.graph), 4)}"))
+#         stats = stringify_collected_stats()
+#         if stats is not None:
+#             print(as_info(stats))
+#         if solution_params:
+#             solution = EdgeBasedMinimizeMaximumUtilitySolution(params=solution_params)
+#             lp.add_solution_elements(solution)
+#             solution.dump_elements()
+#             solution.dump(name=solution_params.sol_name)

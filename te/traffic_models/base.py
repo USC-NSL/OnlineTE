@@ -1,154 +1,80 @@
-import os
-import pickle
+"""
+For all intents and purposes, a Traffic Matrix (TM) is _just_ a Numpy array.
+However, it is rare that we want to evaluate just one traffic matrix, and
+in fact will likely test on many in a sequence.
+As such, we define a TM _generator_, `TMGenerator`, which is essentially just a Python 
+`generator` that iterates on some sequence of traffic matrices. We do this since
+loading many traffic matrices at once can be costly and the generator can afford to be
+lazy.
+"""
+
+import argparse
 import numpy as np
-import te.constants
-from te import TE_PATH
-from typing import Dict, Type, List, ClassVar, Optional, Tuple
+import networkx as nx
+from numpy.typing import DTypeLike
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from collections import defaultdict
+from dataclasses import dataclass, field
+from typing import List, ClassVar, Tuple, Iterator, Optional
 
 
-@dataclass
-class TrafficMatrixParamsBase:
-    _type: ClassVar[Optional[str]] = None
-
-    @classmethod
-    def type(cls) -> str:
-        assert cls._type is not None
-        return cls._type
-
-
-class TrafficMatrixBase(ABC):
-    TM_FILE_NAME_FORMAT = "{name}_{seed}.pkl"
-
-    def __init__(self, tm: Optional[np.ndarray] = None, seed: Optional[int] = None, 
-                 params: Optional[Type[TrafficMatrixParamsBase]] = None):
-        self.seed = seed
-        self.params = params
-
-        self._rng = np.random.default_rng(self.seed)
-
-        if tm is None:
-            # If no TM is given, make one from scratch
-            self._make_tm()
-        else:
-            # If a TM is given, it must be square
-            assert (len(tm.shape) == 2 and tm.shape[0] == tm.shape[1])
-            self.tm = tm
-        
-        self.fname = self.TM_FILE_NAME_FORMAT.format(name=self.name, seed=self.seed)
-
-    def serialize(self, path=None):
-        """
-        Serialize matrix and pickle it.
-        The object that we save is of the form:
-        
-        ```
-        {
-            'tm': 'The matrix array'
-            'type': 'A string showing the type of the matrix'
-            'params': 'The parameters of this specific traffic'
-            'seed': 'The RNG seed used to generate the matrix'
-        }
-        ```
-        """
-        if not path:
-            path = os.path.join(TE_PATH, te.constants.TM_DIR)
-        
-        if not os.path.exists(path):
-            os.makedirs(path)
-
-        file_path = os.path.join(path, self.fname)
-
-        with open(file_path, 'wb') as f:
-            pickle.dump({
-                'tm': self.tm,
-                'type': self.type(),
-                'params': self.params,
-                'seed': self.seed
-            }, f)
+@dataclass(frozen=True, kw_only=True)
+class TMGeneratorParams:
+    """
+    A base class for all TM parameters.
     
-    def rescale(self, scale_factor: float):
-        """Rescale the current TM with the given scale factor"""
-        np.multiply(self.tm, scale_factor, out=self.tm, dtype=self.tm.dtype)
+    Parameters
+    ----------
+    seed: Optional[int]
+        A random number generator seed that can be used when generating
+        matrices of this class.
+    count: int
+        Number of traffic matrices to generate.
+    dtype: numpy.DTypeLike
+        The data-type of the matrix.
+    scale_factor: float
+        The traffic matrix scale factor. During iteration, any TM we
+        generate is scaled by this amount before output.
+    """
+    seed: Optional[int] = field(default=None, metadata={'help': argparse.SUPPRESS})
+    count: int = field(default=1, metadata={'help': argparse.SUPPRESS})
+    dtype: DTypeLike = field(default=np.float32, metadata={'help': argparse.SUPPRESS})
+    scale_factor: float = field(default=1.0, metadata={'help': argparse.SUPPRESS})
 
-    @staticmethod
-    def deserialize(path: str):
-        """
-        Unpickle the matrix in the given path.
-        The models must be registered in `_MODELS` for this to work.
-        """
-        global _MODELS
 
-        with open(path, 'rb') as f:
-            tm_object = pickle.load(f)
-        
-        assert isinstance(tm_object, dict)
-        assert set(tm_object.keys()) == {'tm', 'type', 'params', 'seed'}
+class TMGenerator(ABC):
+    """
+    ABC that implements a sequence of traffic matrices generated from a
+    given family (e.g. uniform).
+    The general pattern of use is to just iterate on the generator one
+    at a time.
+    These objects have no memory and thus it should be possible to iterate
+    and exhaust them, and then get the exact same sequence of matrices upon
+    reiteration.
+    """
+    _TYPE: ClassVar[str] = ''
 
-        tm_class = _MODELS[tm_object['type']]
-        
-        return tm_class(
-            tm=tm_object['tm'],
-            seed=tm_object['seed'],
-            params=tm_object['params']
-        )
+    def __init__(self, params: TMGeneratorParams):
+        self._params = params
+        assert len(self._TYPE) > 0
 
     @abstractmethod
-    def _make_tm(self):
-        """
-        Makes a TM with the given seed and parameters.
-        """
+    def __iter__(self) -> Iterator[np.ndarray]:
+        """This object can be iterated to generate traffic matrices."""
         pass
+
+    def get_rng(self):
+        return np.random.default_rng(self.params.seed)
 
     @property
-    @abstractmethod
-    def name(self) -> str:
-        """
-        Full name of the matrix (including with the parameters).
-        """
-        pass
+    def params(self) -> TMGeneratorParams:
+        """Generator parameters."""
+        return self._params
 
     @classmethod
-    @abstractmethod
     def type(cls) -> str:
-        """
-        The type of this traffic matrix.
-        """
-        pass
-
-
-"""
-This maps the type name of a traffic matrix to the class that implements
-it. All traffic matrices that we want to consider MUST be registered in
-this before we want deserialize them.
-"""
-_MODELS: Dict[str, Type[TrafficMatrixBase]] = dict()
-
-# TODO: The values MUST be a dataclass. Is there a reliable way to check that?
-_PARAMS: Dict[str, Type[TrafficMatrixParamsBase]] = dict()
-
-
-def traffic_matrix(cls: Type[TrafficMatrixBase]) -> TrafficMatrixBase:
-    """Decorator that registers any Traffic Matrix class for use"""
-    global _MODELS
-
-    assert issubclass(cls, TrafficMatrixBase)
-    tpe = cls.type()
-    assert tpe not in _MODELS
-    _MODELS[tpe] = cls
-
-    return cls
-
-def traffic_matrix_param(name: str) -> TrafficMatrixParamsBase:
-    """Decorator that registers any Traffic Matrix Parameter dataclass for use"""
-    def wrapper(cls: Type[TrafficMatrixParamsBase]):
-        global _PARAMS
-        assert name not in _PARAMS
-        cls._type = name
-        _PARAMS[name] = cls
-        return cls
-    return wrapper
+        """The type of this traffic matrix."""
+        return cls._TYPE
 
 
 @dataclass(frozen=True)
@@ -159,84 +85,60 @@ class Commodity:
     demand: float
 
 
-def traffic_to_commodity(tm: TrafficMatrixBase) -> List[Commodity]:
+def traffic_to_commodity(tm: np.ndarray) -> List[Commodity]:
     """Convert a traffic matrix to a list of commodities"""
-    TM = tm.tm
     return [
-        Commodity(src_idx, dst_idx, TM[src_idx, dst_idx]) \
-            for src_idx, dst_idx in np.ndindex(TM.shape) \
+        Commodity(src_idx, dst_idx, tm[src_idx, dst_idx]) \
+            for src_idx, dst_idx in np.ndindex(tm.shape) \
             if src_idx != dst_idx
     ]
 
 
-def traffic_to_list_of_tuples(tm: TrafficMatrixBase) -> List[Tuple[float, int, int]]:
+def traffic_to_list_of_tuples(tm: np.ndarray) -> List[Tuple[float, int, int]]:
     """Convert a traffic matrix to a list of tuples"""
-    TM = tm.tm
     return [
-        (src_idx, dst_idx, TM[src_idx, dst_idx]) \
-            for src_idx, dst_idx in np.ndindex(TM.shape) \
+        (src_idx, dst_idx, tm[src_idx, dst_idx]) \
+            for src_idx, dst_idx in np.ndindex(tm.shape) \
             if src_idx != dst_idx
     ]
 
 
-@dataclass
-class TrafficMatrixConverterParamsBase:
-    _type: ClassVar[Optional[str]] = None
+def edge_based_to_commodities(
+    assignments: np.ndarray, commodities: List[Commodity],
+    graph: nx.DiGraph
+) -> List[Tuple[Commodity, Commodity]]:
+    """
+    A handy function that takes the edge-based assignment and returns the list
+    of _routed_ commodities. We need this to check if the amount a node sends
+    or receives is correctly balanced.
 
-    @classmethod
-    def type(cls) -> str:
-        assert cls._type is not None
-        return cls._type
-
-
-class TrafficMatrixConverterBase(ABC):
-    _type: Optional[str] = None
-
-    def __init__(self, seed: int = None, params: Optional[Type[TrafficMatrixConverterParamsBase]] = None):
-        assert self._type is not None
-        super().__init__()
-        self._seed = seed
-        self._params = params
-    
-    @property
-    @abstractmethod
-    def params(self) -> TrafficMatrixConverterParamsBase:
-        return self._params
-    
-    @classmethod
-    def type(cls) -> str:
-        assert cls._type is not None
-        return cls._type
-    
-    @abstractmethod
-    def convert(self, tm: TrafficMatrixBase) -> TrafficMatrixBase:
-        """
-        Convert a given TM into another TM given the current state of the
-        converter instance.
-        """
+    Returns
+    -------
+    ls: List[Tuple[Commodity, Commodity]]
+        List of tuples, containing the amount sent and received respectively.
+    """
+    ls = []
+    for k, commodity in enumerate(commodities):
+        flow_out = defaultdict(list)
+        flow_in = defaultdict(list)
+        for e, edge in enumerate(graph.edges()):
+            flow_out[edge[0]].append(assignments[e, k])
+            flow_in[edge[1]].append(assignments[e, k])
+        commodity_sent = Commodity(
+            source=commodity.source,
+            destination=commodity.destination,
+            demand=sum(flow_out[commodity.source])
+        )
+        commodity_received = Commodity(
+            source=commodity.source,
+            destination=commodity.destination,
+            demand=sum(flow_in[commodity.destination])
+        )
+        ls.append((commodity_sent, commodity_received))
+    return ls
 
 
-_CONVERTERS: Dict[str, Type[TrafficMatrixConverterBase]] = dict()
-_CONVERTER_PARAMS: Dict[str, Type[TrafficMatrixConverterParamsBase]] = dict()
 
-
-def traffic_matrix_converter(name: str) -> TrafficMatrixConverterBase:
-    """Decorator that registers a traffic matrix converter"""
-    def wrapper(cls: Type[TrafficMatrixConverterBase]):
-        global _CONVERTERS
-        assert name not in _CONVERTERS
-        cls._type = name
-        _CONVERTERS[name] = cls
-        return cls
-    return wrapper
-
-
-def traffic_matrix_converter_param(name: str) -> TrafficMatrixConverterParamsBase:
-    """Decorator that registers a traffic matrix converter parameters"""
-    def wrapper(cls: Type[TrafficMatrixConverterParamsBase]):
-        global _CONVERTER_PARAMS
-        assert name not in _CONVERTER_PARAMS
-        cls._type = name
-        _CONVERTER_PARAMS[name] = cls
-        return cls
-    return wrapper
+__all__ = ['TMGenerator', 'TMGeneratorParams', 'Commodity',
+           'traffic_to_commodity', 'traffic_to_list_of_tuples',
+           'edge_based_to_commodities']

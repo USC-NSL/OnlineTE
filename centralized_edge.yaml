@@ -1,7 +1,7 @@
 # topo: Kdl
 # topo: Cogentco
 # topo: UsCarrier
-topo: Interoute
+# topo: Interoute
 # topo: Forthnet
 # topo: Claranet
 # topo: B4
@@ -13,24 +13,24 @@ objective: MLU
 # scale_factor: 20.0
 scale_factor: 10
 # scale_factor: 0.02
-# gurobi:
-#   SolverParams:
-#     ConvTol: 1e-3
-#     Threads: 8
-#     FeasibilityTol: 1e-6
-# pdlp:
+gurobi:
+  SolverParams:
+    ConvTol: 1e-3
+    Threads: 8
+    FeasibilityTol: 1e-6
+#pdlp:
 #   SolverParams:
 #     ConvTol: 1e-3
 #     Threads: 16
 #     FeasibilityTol: 1e-6
-gpuadmm:
-  SolverParams:
-    ConvTol: 1e-4
-    InnerLoopRounds: 5
-    OuterLoopRounds: 200
-    SwitchIterations: 1
-    Precision: single
-    Eta: 0.15
-    Rho: 1.0
-    Gamma: 1.0
+#gpuadmm:
+#  SolverParams:
+#    ConvTol: 1e-4
+#    InnerLoopRounds: 5
+#    OuterLoopRounds: 200
+#    SwitchIterations: 1
+#    Precision: single
+#    Eta: 0.15
+#    Rho: 1.0
+#    Gamma: 1.0
   

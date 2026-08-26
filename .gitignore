@@ -49,3 +49,6 @@ te/algorithms/sub_algorithms/mdc_backends
 
 # The SPHERE service file
 *.service
+
+# Presentation dir
+presentation/

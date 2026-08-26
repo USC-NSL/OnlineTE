@@ -28,7 +28,7 @@ from .base import MasterCommunicationBackendBase
 from te.algorithms.sub_algorithms.mlu_backends.base import ControllerMLUSolver, ControllerMLUException
 
 
-class MasterNode(TrafficEngineeringLP, DistributedSolverNodeBase):
+class MasterNode(TELP, DistributedSolverNodeBase):
     def __init__(self, params: DistributedSolverNodeParams, mlu_cls: ControllerMLUSolver, 
                  mlu_params: SolverParams, partitions: List[Tuple[int, int]]) -> None:
         super().__init__(
@@ -78,8 +78,8 @@ class MasterNode(TrafficEngineeringLP, DistributedSolverNodeBase):
         self.backend: MasterCommunicationBackendBase = params.CommunicationBackendCLS(params.RPCParams_)
         self.backend.start()
 
-        self._objective_trace: TrafficEngineeringLPObjectiveTrace = \
-            TrafficEngineeringLPObjectiveTrace(['Perceived Utilization', 'Actual Utilization'])
+        self._objective_trace: TEObjectiveTrace = \
+            TEObjectiveTrace(['Perceived Utilization', 'Actual Utilization'])
         self._objective_gap_trace = []
 
         set_global_precision(self._solver_params.Precision)
@@ -144,7 +144,7 @@ class MasterNode(TrafficEngineeringLP, DistributedSolverNodeBase):
         return self._mlu_solver.current_u
     
     @property
-    def objective_trace(self) -> Optional[TrafficEngineeringLPObjectiveTrace]:
+    def objective_trace(self) -> Optional[TEObjectiveTrace]:
         return self._objective_trace
 
     @property
@@ -326,7 +326,7 @@ class MasterNode(TrafficEngineeringLP, DistributedSolverNodeBase):
         except asyncio.exceptions.CancelledError:
             return -1
 
-    def check(self, eval_params: TrafficEngineeringLPEvaluationParams):
+    def check(self, eval_params: TEEvaluationParams):
         # Are outer ADMM pairs in consensus?
         X_EK_SUM_E = np.sum(self._X_dek_sum_de, axis=0)
         Z_E = np.sum(self._Z_de, axis=0)
@@ -342,7 +342,7 @@ class MasterNode(TrafficEngineeringLP, DistributedSolverNodeBase):
             X_EK, self._graph, self._commodity_list, eval_params=eval_params)
         congested_ratio, congested_links = check_capacity_constraint(
             X_EK, self._graph, self._commodity_list, eval_params=eval_params)
-        self.check_result = TrafficEngineeringLPCheckResult(
+        self.check_result = TECheckResult(
             unsat_ratio=unsat_ratio,
             congested_ratio=congested_ratio,
             unsat_commodities=unsat_commodities,

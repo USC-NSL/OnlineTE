@@ -14,13 +14,13 @@ from utils.logging import as_info, as_fail, as_success, as_warning, ShortTQDM, S
 from . import GurobiSolverParams, make_model
 
 
-class DualGurobiTE(TrafficEngineeringLP):
+class DualGurobiTE(TELP):
     """
     Similar to `CentralizedEdgeBasedLP`, but it also cleanly returns all the dual variables
     and explicitly checks the dual infesibility.
     This is mostly used for debug, but the output solution can be helpful for exact warm starts.
     """
-    def __init__(self, problem_description: TrafficEngineeringProblemDescription, solver_params: GurobiSolverParams) -> None:
+    def __init__(self, problem_description: TEProblemDescription, solver_params: GurobiSolverParams) -> None:
         super().__init__(problem_description, solver_params)
         self._graph = problem_description.Graph
         self._traffic = problem_description.TM
@@ -232,7 +232,7 @@ class DualGurobiTE(TrafficEngineeringLP):
             self._X_ek, self._graph, self._commodity_list,
             eval_params
         )
-        self.check_result = TrafficEngineeringLPCheckResult(
+        self.check_result = TECheckResult(
             unsat_ratio=unsat_ratio,
             congested_ratio=congested_ratio,
             unsat_commodities=unsat_commodities,
@@ -337,7 +337,7 @@ class DualGurobiTE(TrafficEngineeringLP):
         # Record the new TM
         self._traffic = tm
     
-    def add_solution_elements(self, solution: TrafficEngineeringLPSolution):
+    def add_solution_elements(self, solution: TESolution):
         solution.add_solution_element(self._utility, 'utility')
         solution.add_solution_element(self._flows, 'assignments')
         # solution.add_solution_element(self._capacity_constraints, 'capacity_constraints')

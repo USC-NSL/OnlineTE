@@ -30,7 +30,7 @@ class DistributedMLUSolverDescription:
     of the solver and see how it works.
     """
     AlgorithmParams: SolverParams
-    MasterCLS: type[TrafficEngineeringLP]
+    MasterCLS: type[TELP]
     MasterBackendCLS: type[CommunicationBackendBase]
     MasterRPCParams: RPCParams
     MLUCLS: type[ControllerMLUSolver]
@@ -97,11 +97,11 @@ def parse_distributed_synchronous_admm(args: jsonargparse.Namespace) -> Distribu
 
 
 def spawn_distributed_synchronous_solver(
-    problem: TrafficEngineeringProblemDescription, 
+    problem: TEProblemDescription, 
     solver: DistributedMLUSolverDescription,
     is_local: bool = False
-) -> Optional[TrafficEngineeringLPObjectiveTrace]:
-    def _spawn_distributed_synchronous_solver() -> Optional[TrafficEngineeringLPObjectiveTrace]:
+) -> Optional[TEObjectiveTrace]:
+    def _spawn_distributed_synchronous_solver() -> Optional[TEObjectiveTrace]:
         print(as_info(
             f'Using master node communication backend `{solver.MasterBackendCLS.backend_name()}` with parameters:\n'+
             solver.MasterRPCParams.str_all()

@@ -90,3 +90,13 @@ SHOW_PROGRESS_BAR = True
 """
 Print `tqdm` progress bars
 """
+
+"""
+Values for vector consensus tests.
+"""
+
+SEVERE_CONSENSUS_VIOLATION_REL_TOL = 5e-2
+"""
+If any element within two vectors are this far apart relateively,
+then they are not in consensus at all.
+"""

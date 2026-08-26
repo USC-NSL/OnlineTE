@@ -1,82 +1,44 @@
 import gurobipy
 import numpy as np
-import networkx as nx
 from typing import List, Tuple, Optional
 from collections import defaultdict
-from gurobipy import GRB, GurobiError
+from gurobipy import GRB
 from te.algorithms.base import *
-from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
-from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
-from utils.logging import as_info, as_fail, ShortTQDMEnumerate
+from te.traffic_models.base import *
+from utils.logging import as_info, ShortTQDMEnumerate
 from . import GurobiSolverParams, make_model
-from ..base import EdgeBasedTEBase
 
 
-class GurobiTE(EdgeBasedTEBase):
+class GurobiTE(TELP):
     """
     An honest implementation of edge-based MLU with Gurobi.
     Becomes too sluggish for very large topologies, but solutions look very nice.
     """
-    def __init__(self, problem_description: TrafficEngineeringProblemDescription, solver_params: GurobiSolverParams) -> None:
+    def __init__(self, problem_description: TEProblemDescription, solver_params: GurobiSolverParams) -> None:
         super().__init__(problem_description, solver_params)
-        self._graph = problem_description.Graph
-        self._traffic = problem_description.TM
-        self._solver_params: GurobiSolverParams = solver_params
         self._env: Optional[gurobipy.Env] = None
         self._model: Optional[gurobipy.Model] = None
         self._flows: Optional[gurobipy.tupledict] = None
         self._utility: Optional[gurobipy.Var] = None
         self._objective: Optional[gurobipy.LinExpr] = None
-        self._commodity_list: List[Commodity] = traffic_to_commodity(self._traffic)
         self._demand_constraints: Optional[List[Tuple[gurobipy.Constr, gurobipy.Constr]]] = None
         self._capacity_constraints: Optional[gurobipy.tupledict] = None
         self._X_ek: Optional[np.ndarray] = None
 
         self._demand_objective: Optional[gurobipy.LinExpr] = None
         self._regularizer_objective: Optional[gurobipy.LinExpr] = None
-        
-        self._report_problem_size()
     
     @property
     def alg_name(self) -> str:
         return 'Centralized-Gurobi'
-    
-    @property
-    def graph(self) -> nx.DiGraph:
-        return self._graph
-    
-    @property
-    def traffic(self) -> TrafficMatrixBase:
-        return self._traffic
-    
-    @property
-    def commodity_list(self) -> List[Commodity]:
-        return self._commodity_list
 
     @property
-    def objective_value(self) -> float:
-        if self._problem_description.is_mlu:
-            return self._utility.X
-        else:
-            return -self._objective.getValue()
-    
-    @property
-    def objective_trace(self) -> Optional[List[float]]:
-        # TODO: Anyway to get this from Gurobi?
-        return None
-    
-    @property
-    def assignments(self) -> np.ndarray:
-        assert self._X_ek is not None
-        return self._X_ek
-
-    def initialize_to(self, solution: EdgeBasedMinimizeMaximumUtilitySolution):
-        assert self._model is not None and self._flows is not None
-        solution.initiate_model_from_basis(self._model)
+    def current_objective(self) -> float:
+        return abs(self._objective.getValue())
 
     def _set_X_ek(self):
-        K = len(self._commodity_list)
-        N = len(self._graph.edges)
+        K = self.number_of_commodities
+        N = self.number_of_edges
         FLOWS = self._flows
         X_EK = np.ndarray(shape=(N, K))
         for k in range(K):
@@ -95,8 +57,8 @@ class GurobiTE(EdgeBasedTEBase):
         `X[e]` gives the flow of each commodity on edge `e`.
         """
 
-        K = len(self._commodity_list)
-        N = len(self._graph.edges)
+        K = self.number_of_commodities
+        N = self.number_of_edges
         
         ENV = gurobipy.Env()
         ENV.start()
@@ -107,19 +69,22 @@ class GurobiTE(EdgeBasedTEBase):
         # This implicitly encodes the condition for `X_{ke} >= 0`
         print(as_info("Adding commodity assignment variables"))
         self._flows = MODEL.addVars(N, K, lb=0.0, vtype=GRB.CONTINUOUS, name='X')
-        # (MLU Only) Link utilization upper bound, may not be important based on what we need
-        if self._problem_description.is_mlu:
-            self._utility = MODEL.addVar(lb=0.0, ub=1.0, vtype=GRB.CONTINUOUS, name='U')
+        # (MLU Only) Link utilization upper bound
+        if self._problem_description.Objective == TEObjective.MLU:
+            self._utility = MODEL.addVar(lb=0.0, vtype=GRB.CONTINUOUS, name='U')
     
     def _add_constraints(self):
         assert self._model is not None and self._flows is not None
 
-        K = len(self._commodity_list)
+        K = self.number_of_commodities
+        M = self.number_of_nodes
+        N = self.number_of_edges
         MODEL = self._model
         GRAPH = self._graph
         FLOWS = self._flows
         UTILITY = self._utility
-        COMMODITIES = self._commodity_list
+        # We build the model with a demand of 1 for every pair
+        DEMAND = 1
 
         # Capacity constraint
         print(as_info("Adding capacity constraints"))
@@ -162,14 +127,9 @@ class GurobiTE(EdgeBasedTEBase):
         # For the case of Max-Flow / Max-Concurrent-Flow, we should just build the
         # objective now so that we won't traverse the commodity list again ...
         demand_objective = gurobipy.LinExpr()
-        total_demand = 0
         print(as_info("Adding demand/flow-conservation constraints"))
-        for k, commodity in ShortTQDMEnumerate(COMMODITIES):
-            SOURCE = commodity.source
-            DESTINATION = commodity.destination
-            DEMAND = commodity.demand
-            
-            total_demand += DEMAND
+        for k, od_pair in ShortTQDMEnumerate(np.ndindex((M, M))):
+            SOURCE, DESTINATION = od_pair
             flow_out = defaultdict(gurobipy.LinExpr)
             flow_in = defaultdict(gurobipy.LinExpr)
             for e, edge in enumerate(GRAPH.edges()):
@@ -213,8 +173,8 @@ class GurobiTE(EdgeBasedTEBase):
         # We use a linear regularizer for this.
         regularizer_objective = gurobipy.LinExpr()
         for k in range(K):
-            for e in range(GRAPH.number_of_edges()):
-                regularizer_objective.addTerms(0.01/total_demand, FLOWS[(e, k)])
+            for e in range(N):
+                regularizer_objective.addTerms(1e-3/(N*K), FLOWS[(e, k)])
 
         self._demand_objective = demand_objective
         self._regularizer_objective = regularizer_objective
@@ -234,48 +194,25 @@ class GurobiTE(EdgeBasedTEBase):
     
     def close(self):
         self._model.close()
-    
-    def reset(self, with_params: False):
-        self._model.reset()
-        if with_params:
-            self._model.resetParams()
-    
-    def solve(self, params: SolverParams = None) -> float:
-        self.check_result = None
-        if params:
-            self.reset(with_params=True)
-            self._params = params
-            for key, value in self.solver_params._asdict().items():
-                self._model.setParam(key, value)
-        try:
-            self._model.optimize()
-            if self._model.Status == gurobipy.GRB.OPTIMAL:
-                self._set_X_ek()
-                return self._model.Runtime
-            return -1
-        except GurobiError as e:
-            print(as_fail(f'Error code {e.errno}: {e}'))
-            return -1
+        self._env.close()
 
-    def update_traffic_matrix(self, tm: TrafficMatrixBase):
-        # First, record the new commodity list
+    def _solve_for_tm(self, tm: np.ndarray):
+        self._model.optimize()
+        if self._model.Status == gurobipy.GRB.OPTIMAL:
+            self._set_X_ek()
+        else:
+            raise RuntimeError(f"Problem when solving. Gurobi status: {self._model.Status}")
+
+    def _update_constraits(self, tm: np.ndarray):
         COMMODITIES = traffic_to_commodity(tm)
-        self._commodity_list = COMMODITIES
-
-        # Now, update demand constraints
         for constraints, commodity in zip(self._demand_constraints, COMMODITIES):
             DEMAND = commodity.demand
             source_constraint, destination_constraint = constraints
             source_constraint.RHS = DEMAND
             destination_constraint.RHS = DEMAND
-        
-        # Record the new TM
-        self._traffic = tm
-    
-    def add_solution_elements(self, solution: TrafficEngineeringLPSolution):
-        solution.add_solution_element(self._utility, 'utility')
-        solution.add_solution_element(self._flows, 'assignments')
-        # solution.add_solution_element(self._capacity_constraints, 'capacity_constraints')
+
+    def _update_objective(self, tm: np.ndarray):
+        pass
 
 
 import jsonargparse

@@ -9,7 +9,7 @@ from te.algorithms.formulations.aggregate import (
 )
 from te.algorithms.formulations.edge_based_centralized import PDLPParams
 from te.algorithms.formulations.edge_based_centralized.edge_based_centralized_pdlp import CentralizedEdgeBasedPDLP
-from te.algorithms.base import TrafficEngineeringLPEvaluationParams
+from te.algorithms.base import TEEvaluationParams
 from te.algorithms.utils import test_mlu
 from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolutionParams, default_solution_name
 from topologies.utils import get_uniform_tm_problem_with_capacity_heuristic
@@ -34,28 +34,28 @@ ARTIFICIAL_MEDIUM_TOPOLOGY_4 = 'Artificial-400'
 NUMBER_OF_PATHS = 16
 
 
-SMALL_EVAL_PARAMS = TrafficEngineeringLPEvaluationParams(
+SMALL_EVAL_PARAMS = TEEvaluationParams(
     TopologyName='Claranet', Seed=RNG_SEED, PrintReports=True,
     FeasibilityRatio=FEASIBILITY_RATIO,
     FloatResolution=FLOAT_RES
 )
-SMALL_MEDIUM_EVAL_PARAMS = TrafficEngineeringLPEvaluationParams(
+SMALL_MEDIUM_EVAL_PARAMS = TEEvaluationParams(
     TopologyName='Forthnet', Seed=RNG_SEED, PrintReports=True,
     FeasibilityRatio=FEASIBILITY_RATIO,
     FloatResolution=FLOAT_RES
 )
-MEDIUM_EVAL_PARAMS = TrafficEngineeringLPEvaluationParams(
+MEDIUM_EVAL_PARAMS = TEEvaluationParams(
     TopologyName='Interoute', Seed=RNG_SEED, PrintReports=False,
     FeasibilityRatio=FEASIBILITY_RATIO,
     FloatResolution=FLOAT_RES
 )
-MEDIUM_LARGE_EVAL_PARAMS = TrafficEngineeringLPEvaluationParams(
+MEDIUM_LARGE_EVAL_PARAMS = TEEvaluationParams(
     TopologyName='Cogentco', Seed=RNG_SEED, PrintReports=False,
     FeasibilityRatio=FEASIBILITY_RATIO,
     FloatResolution=FLOAT_RES,
     ScaleFactor=20.0
 )
-LARGE_EVAL_PARAMS = TrafficEngineeringLPEvaluationParams(
+LARGE_EVAL_PARAMS = TEEvaluationParams(
     TopologyName='Kdl', Seed=RNG_SEED, PrintReports=False,
     FeasibilityRatio=FEASIBILITY_RATIO,
     FloatResolution=FLOAT_RES,
@@ -63,7 +63,7 @@ LARGE_EVAL_PARAMS = TrafficEngineeringLPEvaluationParams(
 )
 
 
-def centralized_edge_based_test(eval_params: TrafficEngineeringLPEvaluationParams, method: int = GRB.METHOD_BARRIER, 
+def centralized_edge_based_test(eval_params: TEEvaluationParams, method: int = GRB.METHOD_BARRIER, 
                                 crossover: bool = False):
     c, graph, tm = get_uniform_tm_problem_with_capacity_heuristic(eval_params.TopologyName, eval_params.Seed, scale_factor=eval_params.ScaleFactor)
     print(f"Network link capacity is: {str(round(c, 2))}")
@@ -82,7 +82,7 @@ def centralized_edge_based_test(eval_params: TrafficEngineeringLPEvaluationParam
     test_mlu(CentralizedEdgeBasedLP, graph, tm, solver_params, eval_params, solution_params=solution_params)
 
 
-def centralized_edge_based_pdlp_test(eval_params: TrafficEngineeringLPEvaluationParams, num_threads: int):
+def centralized_edge_based_pdlp_test(eval_params: TEEvaluationParams, num_threads: int):
     c, graph, tm = get_uniform_tm_problem_with_capacity_heuristic(eval_params.TopologyName, eval_params.Seed, scale_factor=eval_params.ScaleFactor)
     print(f"Network link capacity is: {str(round(c, 2))}")
 
@@ -93,7 +93,7 @@ def centralized_edge_based_pdlp_test(eval_params: TrafficEngineeringLPEvaluation
     test_mlu(CentralizedEdgeBasedPDLP, graph, tm, solver_params, eval_params, solution_params=solution_params)
 
 
-def centralized_path_based_test(eval_params: TrafficEngineeringLPEvaluationParams, method: int = GRB.METHOD_BARRIER, 
+def centralized_path_based_test(eval_params: TEEvaluationParams, method: int = GRB.METHOD_BARRIER, 
                                 crossover: bool = False):
     c, graph, tm = get_uniform_tm_problem_with_capacity_heuristic(eval_params.TopologyName, eval_params.Seed, scale_factor=eval_params.ScaleFactor)
     print(f"Network link capacity is: {str(round(c, 2))}")
@@ -117,7 +117,7 @@ def centralized_path_based_test(eval_params: TrafficEngineeringLPEvaluationParam
     test_mlu(CentralizedPathBasedLP, graph, tm, solver_params, eval_params, solution_params=solution_params)
 
 
-def regularized_admm_test(eval_params: TrafficEngineeringLPEvaluationParams):
+def regularized_admm_test(eval_params: TEEvaluationParams):
     c, graph, tm = get_uniform_tm_problem_with_capacity_heuristic(eval_params.TopologyName, eval_params.Seed, scale_factor=eval_params.ScaleFactor)
     print(f"Network link capacity is: {str(round(c, 2))}")
     n = graph.number_of_nodes()
@@ -142,7 +142,7 @@ def regularized_admm_test(eval_params: TrafficEngineeringLPEvaluationParams):
     test_mlu(RegularizedADMMLP, graph, tm, solver_params, eval_params)
 
 
-def unregulated_admm_test(eval_params: TrafficEngineeringLPEvaluationParams):
+def unregulated_admm_test(eval_params: TEEvaluationParams):
     c, graph, tm = get_uniform_tm_problem_with_capacity_heuristic(eval_params.TopologyName, eval_params.Seed, scale_factor=eval_params.ScaleFactor)
     print(f"Network link capacity is: {str(round(c, 2))}")
     n = graph.number_of_nodes()
@@ -170,7 +170,7 @@ def unregulated_admm_test(eval_params: TrafficEngineeringLPEvaluationParams):
     test_mlu(UnregulatedADMMLP, graph, tm, solver_params, eval_params)
 
 
-def gpu_unregulated_admm_test(eval_params: TrafficEngineeringLPEvaluationParams):
+def gpu_unregulated_admm_test(eval_params: TEEvaluationParams):
     c, graph, tm = get_uniform_tm_problem_with_capacity_heuristic(eval_params.TopologyName, eval_params.Seed, scale_factor=eval_params.ScaleFactor)
     print(f"Network link capacity is: {str(round(c, 2))}")
     m = graph.number_of_nodes()
@@ -197,7 +197,7 @@ def gpu_unregulated_admm_test(eval_params: TrafficEngineeringLPEvaluationParams)
     test_mlu(GPUUnregulatedADMMLP, graph, tm, solver_params, eval_params)
 
 
-def multi_gpu_unregulated_admm_test(eval_params: TrafficEngineeringLPEvaluationParams):
+def multi_gpu_unregulated_admm_test(eval_params: TEEvaluationParams):
     c, graph, tm = get_uniform_tm_problem_with_capacity_heuristic(eval_params.TopologyName, eval_params.Seed, scale_factor=eval_params.ScaleFactor)
     print(f"Network link capacity is: {str(round(c, 2))}")
     m = graph.number_of_nodes()

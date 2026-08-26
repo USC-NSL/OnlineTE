@@ -4,13 +4,11 @@ import scipy.sparse
 from dataclasses import dataclass
 from typing import List, Tuple, Optional, Dict
 from . import PDLPParams
-from ..base import EdgeBasedTEBase
 from ortools.pdlp import solve_log_pb2
 from ortools.pdlp import solvers_pb2
 from ortools.pdlp.python import pdlp
 from te.algorithms.base import *
-from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, traffic_to_list_of_tuples, Commodity
-from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
+from te.traffic_models.base import TMGenerator, traffic_to_commodity, traffic_to_list_of_tuples, Commodity
 from topologies.utils import get_node_in_array, get_node_out_array
 from utils.logging import as_fail, ShortTQDMEnumerate
 
@@ -41,13 +39,9 @@ class ConstraintVector:
         lp.constraint_upper_bounds = self.uppers
 
 
-class PDLPTE(EdgeBasedTEBase):
-    def __init__(self, problem_description: TrafficEngineeringProblemDescription, solver_params: PDLPParams) -> None:
+class PDLPTE(TELP):
+    def __init__(self, problem_description: TEProblemDescription, solver_params: PDLPParams) -> None:
         super().__init__(problem_description, solver_params)
-        self._graph = problem_description.Graph
-        self._traffic = problem_description.TM
-        self._solver_params: SolverParams = solver_params
-        self._capacities = np.array([c_e for _, _, c_e in self._graph.edges(data='capacity')])
         self._lp: Optional[pdlp.QuadraticProgram] = None
         self._commodity_list: List[Commodity] = traffic_to_commodity(self._traffic)
         self._commodity_tuple_list: List[Commodity] = traffic_to_list_of_tuples(self._traffic)
@@ -290,7 +284,7 @@ class PDLPTE(EdgeBasedTEBase):
     def update_traffic_matrix(self, tm: TrafficMatrixBase):
         raise NotImplementedError
     
-    def add_solution_elements(self, solution: TrafficEngineeringLPSolution):
+    def add_solution_elements(self, solution: TESolution):
         raise NotImplementedError
 
 

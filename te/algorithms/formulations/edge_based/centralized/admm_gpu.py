@@ -73,7 +73,7 @@ class GPUADMMTE(EdgeBasedTEBase):
     that can run locally on one or more GPU units.
     """
     def __init__(self,
-                 problem_description: TrafficEngineeringProblemDescription,
+                 problem_description: TEProblemDescription,
                  solver_params: GPUParams, mlu_cls: type[ControllerMLUSolver],
                  mlu_params: SolverParams) -> None:
         super().__init__(problem_description, solver_params)
@@ -137,8 +137,8 @@ class GPUADMMTE(EdgeBasedTEBase):
 
         self._dense_solver: Optional[DenseSolver] = None
 
-        self._objective_trace: TrafficEngineeringLPObjectiveTrace = \
-            TrafficEngineeringLPObjectiveTrace(['Perceived Utilization', 'Actual Utilization'])
+        self._objective_trace: TEObjectiveTrace = \
+            TEObjectiveTrace(['Perceived Utilization', 'Actual Utilization'])
         self._objective_gap_trace = []
 
         set_global_precision(self._solver_params.Precision)
@@ -176,7 +176,7 @@ class GPUADMMTE(EdgeBasedTEBase):
         return self._mlu_solver.current_u
     
     @property
-    def objective_trace(self) -> Optional[TrafficEngineeringLPObjectiveTrace]:
+    def objective_trace(self) -> Optional[TEObjectiveTrace]:
         return self._objective_trace
 
     @property

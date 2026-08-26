@@ -1,12 +1,11 @@
 import numpy as np
-import scipy.sparse
 from dataclasses import dataclass
 from typing import Optional
 from ortools.pdlp import solve_log_pb2
 from ortools.pdlp import solvers_pb2
 from ortools.pdlp.python import pdlp
 from te.algorithms.base import TEObjective
-from te.algorithms.utils import as_info
+from utils.logging import as_info
 from te.algorithms.array_utils.cpu_utils import CPUArray, cpu_array, cpu_cast_float
 from te.algorithms.formulations.edge_based.centralized import PDLPParams
 from te.algorithms.formulations.edge_based.centralized.pdlp import ConstraintVector

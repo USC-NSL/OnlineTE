@@ -5,7 +5,7 @@ from typing import List, Tuple, Optional
 from collections import defaultdict
 from gurobipy import GRB, GurobiError
 from te.algorithms.base import *
-from te.traffic_models.base import TrafficMatrixBase, traffic_to_commodity, Commodity
+from te.traffic_models.base import *
 from te.algorithms.solution import EdgeBasedMinimizeMaximumUtilitySolution
 from te.algorithms.sub_algorithms.link_capacity_test import check_capacity_constraint
 from te.algorithms.sub_algorithms.flow_conservation_test import check_flow_conservation
@@ -15,8 +15,8 @@ from ...edge_based.centralized import make_model
 from . import GurobiPathBasedSolverParams
 
 
-class GurobiPathBasedTE(TrafficEngineeringLP):
-    def __init__(self, problem_description: TrafficEngineeringProblemDescription, solver_params: GurobiPathBasedSolverParams) -> None:
+class GurobiPathBasedTE(TELP):
+    def __init__(self, problem_description: TEProblemDescription, solver_params: GurobiPathBasedSolverParams) -> None:
         super().__init__(problem_description, solver_params)
         self._graph = problem_description.Graph
         self._traffic = problem_description.TM
@@ -26,10 +26,11 @@ class GurobiPathBasedTE(TrafficEngineeringLP):
         self._Y_tk: Optional[gurobipy.tupledict] = None
         self._utility: Optional[gurobipy.Var] = None
         self._objective: Optional[gurobipy.LinExpr] = None
-        self._commodity_list: List[Commodity] = traffic_to_commodity(self._traffic)
         self._X_ek: Optional[np.ndarray] = None
         self._splits: Optional[np.ndarray] = None
         self._capacities: List[float] = [c_e for _, _, c_e in self._graph.edges.data('capacity')]
+        self._objective_trace: TEObjectiveTrace = \
+            TEObjectiveTrace(names=['Objective'])
 
         self._path_object: Optional[TShortestPaths] = None
         self._demands: np.ndarray = np.array([commodity.demand for commodity in self._commodity_list])
@@ -38,11 +39,18 @@ class GurobiPathBasedTE(TrafficEngineeringLP):
         self._initialize()
     
     def _initialize(self):
-        self._path_object = get_or_make_path_object_for_topology_name(
-            topo_name=self._problem_description.EvalParams.TopologyName,
-            T=self._solver_params.NumberOfPathsPerCommodity,
-            edge_disjoint=False
-        )
+        try:
+            self._path_object = get_or_make_path_object_for_topology_name(
+                topo_name=self._problem_description.EvalParams.TopologyName,
+                T=self._solver_params.NumberOfPathsPerCommodity,
+                edge_disjoint=False
+            )
+        except FileNotFoundError:
+            self._path_object = TShortestPaths.make_from_graph(
+                graph=self.graph,
+                T=self._solver_params.NumberOfPathsPerCommodity,
+                edge_disjoint=False
+            )
     
     @property
     def alg_name(self) -> str:
@@ -71,7 +79,7 @@ class GurobiPathBasedTE(TrafficEngineeringLP):
     @property
     def objective_trace(self) -> Optional[List[float]]:
         # TODO: Anyway to get this from Gurobi?
-        return None
+        return self._objective_trace
     
     @property
     def assignments(self) -> np.ndarray:
@@ -194,6 +202,7 @@ class GurobiPathBasedTE(TrafficEngineeringLP):
             self._model.optimize()
             if self._model.Status == gurobipy.GRB.OPTIMAL:
                 self._set_X_ek()
+                self._objective_trace.append(self._model.ObjVal)
                 return self._model.Runtime
             return -1
         except GurobiError as e:
@@ -209,13 +218,15 @@ class GurobiPathBasedTE(TrafficEngineeringLP):
             self._X_ek, self._graph, self._commodity_list,
             self._problem_description.EvalParams
         )
-        self.check_result = TrafficEngineeringLPCheckResult(
+        self.check_result = TECheckResult(
             unsat_ratio=unsat_ratio,
             congested_ratio=congested_ratio,
             unsat_commodities=unsat_commodities,
             congested_links=congested_links,
             density=np.count_nonzero(self._X_ek) / self._X_ek.size,
-            total_satisfcation=total_satisfcation
+            total_satisfcation=total_satisfcation,
+            # This is path-based. We _ASSUME_ paths don't have loops
+            loop_free=True
         )
     
     def get_solution_commodity_list(self) -> List[Tuple[Commodity, Commodity]]:
@@ -244,9 +255,28 @@ class GurobiPathBasedTE(TrafficEngineeringLP):
         return ls
 
     def update_traffic_matrix(self, tm: TrafficMatrixBase):
-        raise NotImplementedError
+        self._problem_description.TM = tm
+        self._commodity_list = traffic_to_commodity(tm)
+        for i, commodity in enumerate(self._commodity_list):
+            self._demands[i] = commodity.demand
+        # Update model
+        ALPHA_K = self._path_object.alpha
+        COMMODITIES = self._commodity_list
+        MODEL = self._model
+        CAPS = self._capacity_constraints
+        Y_TK = self._Y_tk
+        for k, commodity in ShortTQDMEnumerate(COMMODITIES):
+            D_K = commodity.demand
+            rows = ALPHA_K.rows[k]
+            cols = ALPHA_K.cols[k]
+            nnz = len(rows)
+            for i in range(nnz):
+                e = rows[i]
+                t = cols[i]
+                MODEL.chgCoeff(CAPS[e], Y_TK[(t, k)], D_K)
+        MODEL.update()
     
-    def add_solution_elements(self, solution: TrafficEngineeringLPSolution):
+    def add_solution_elements(self, solution: TESolution):
         # print(self._splits)
         raise NotImplementedError
 

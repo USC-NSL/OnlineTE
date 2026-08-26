@@ -1,31 +1,31 @@
 # topo: Kdl
-topo: Cogentco
-# topo: Interoute
+# topo: Cogentco
+topo: Interoute
 # topo: Claranet
 tm_seed: 12345
 objective: MLU
 # report_unsat: True
 # scale_factor: 40.0
 # scale_factor: 50.0
-scale_factor: 20.0
-# scale_factor: 10.0
+# scale_factor: 20.0
+scale_factor: 10.0
 check_conservation: false
 synch:
   # num_workers: 251
   # num_workers: 174
-  num_workers: 49
-  # num_workers: 5
-  # local: True
+  # num_workers: 49
+  num_workers: 5
+  local: True
   mlu_backend: pdlp
   SolverParams:
-    InnerLoopRounds: 1
-    OuterLoopRounds: 200
+    InnerLoopRounds: 2
+    OuterLoopRounds: 100
     SwitchIterations: 1
     Precision: single
     # Precision: double
     # Eta: 0.1
     # Gamma: 0.5
-    # Beta: 1e-7
+    Beta: 1e-7
     Rho: 0.2
     Eta: 0.1
     X0Type: PSEUDO_INVERSE

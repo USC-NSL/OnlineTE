@@ -2,22 +2,19 @@ import contextlib
 import jsonargparse
 from typing import Optional, Tuple
 from te.algorithms.base import *
-from topologies.utils import get_uniform_tm_problem_with_capacity_heuristic, load_topology, get_uniform_tm_problem
-from te.algorithms.utils import get_solution_confusion_matrix, get_solution_maximum_utilization, stringify_collected_stats
-from te.traffic_models.models import FilebackedTrafficMatrix, FilebackedTrafficMatrixParams
-from te.traffic_models.converters import SampledConverter, SampledTrafficMatrixConverterParams
-from te.algorithms.solution import (EdgeBasedMinimizeMaximumUtilitySolutionParams, 
-                                    EdgeBasedMinimizeMaximumUtilitySolution)
-from utils.logging import as_info, as_fail, log_subsection_title, str_round, log_section_title
+from topologies.utils import load_zoo_topology, set_random_capacities
+from te.traffic_models.generators import attach_TM_class_parser, parse_and_get_TM
+from te.algorithms.utils import get_solution_confusion_matrix, get_solution_maximum_utilization
+from utils.logging import as_info, as_fail, as_warning, log_subsection_title, str_round, log_section_title
 
 
-def solve_lp_and_report(lp: TrafficEngineeringLP):
+def solve_lp_and_report(lp: TELP):
     """
     Helper method that receives the LP object and the evaluation parameters and solves the MLU problem.
 
     Arguments
     ---------
-    lp: type[TrafficEngineeringLP]
+    lp: type[TELP]
         The full LP object that we can use to solve the problem
     """
     t = lp.solve()
@@ -33,11 +30,11 @@ def solve_lp_and_report(lp: TrafficEngineeringLP):
 
 
 def solve_te_and_check(
-    problem: TrafficEngineeringProblemDescription, 
-    solver_cls: type[TrafficEngineeringLP], 
+    problem: TEProblemDescription, 
+    solver_cls: type[TELP], 
     solver_params: SolverParams, 
     *args, **kwargs
-) -> Optional[TrafficEngineeringLPObjectiveTrace]:
+) -> TETracer:
     """
     Create the TE LP instance, solve it, and finally check it.
     
@@ -45,7 +42,7 @@ def solve_te_and_check(
     ---------
     problem: TrafficEngineeringProblemDescription
         Full TE problem input and evaluation description
-    solver_cls: type[TrafficEngineeringLP]
+    solver_cls: type[TELP]
         TE solver class to instantiate
     solver_params: SolverParams
         TE solver parameters
@@ -54,7 +51,7 @@ def solve_te_and_check(
     
     Returns
     -------
-    trace: Optional[TrafficEngineeringLPObjectiveTrace]
+    trace: Optional[TEObjectiveTrace]
         The objective trace (along with any debug info) recorded as
         the algorithm was executed.
     """
@@ -83,91 +80,11 @@ def solve_te_and_check(
         
         get_solution_confusion_matrix(lp, problem.EvalParams)
         
-        stats = stringify_collected_stats()
-        if stats is not None:
-            print(as_info(stats))
+        # stats = stringify_collected_stats()
+        # if stats is not None:
+        #     print(as_info(stats))
         
-        return lp.objective_trace
-
-
-def te_input_helper(
-    eval_params: TrafficEngineeringLPEvaluationParams,
-    warmstart_params: Optional[TrafficEngineeringLPWarmStartParams] = None,
-    solution_params: Optional[TrafficEngineeringLPSolutionParams] = None
-) -> TrafficEngineeringProblemDescription:
-    """
-    A helper for quickly creating some TE problem and its inputs.
-    
-    Arguments
-    ---------
-    eval_params: TrafficEngineeringLPEvaluationParams
-        The set of evaluation parameters to use
-    warmstart_params: Optional[TrafficEngineeringLPWarmStartParams]
-        Optional set of warm-start parameters
-    solution_params: Optional[TrafficEngineeringLPSolutionParams]
-        Optional set of solution output parameters
-    
-    Returns
-    -------
-    te_problem: TrafficEngineeringProblemDescription
-        Full description of some TE problem.
-    """
-    if eval_params.Seed is not None and eval_params.TMPath is None:
-        print(as_info(f"No TM path given. Generating matrix from seed {eval_params.Seed}"))
-        c, graph, tm = get_uniform_tm_problem(
-            eval_params.TopologyName, 
-            eval_params.Seed, 
-            scale_factor=eval_params.ScaleFactor
-        )
-    elif eval_params.Seed is None and eval_params.TMPath is not None:
-        as_info(f"Loading matrix from path {eval_params.TMPath}")
-        graph, has_cap = load_topology(eval_params.TopologyName)
-        assert has_cap
-        tm_params = FilebackedTrafficMatrixParams(eval_params.TMPath)
-        caps = set([d['capacity'] for _, _, d in graph.edges(data=True)])
-        # Check if all values are the same
-        assert len(caps) == 1
-        c = list(caps)[0]
-        tm = FilebackedTrafficMatrix(params=tm_params)
-    else:
-        raise ValueError('Specifying both or neither of TM Seed and TM Path is most likely a mistake. Aborting ...')
-
-    if warmstart_params is not None:
-        print(as_info(log_section_title(f"{eval_params.Objective} PROBLEM (WITH WARM-START)")))
-        # TODO: Implement different converter passing here ...
-        converter = SampledConverter(
-            seed=warmstart_params.ConverterSeed,
-            params=warmstart_params.ConverterParams
-        )
-    else:
-        print(as_info(log_section_title(f"{eval_params.Objective} PROBLEM")))
-        converter = None
-    
-    if c is not None:
-        print(as_info(f"Network link capacity is: {str(round(c, 2))}"))
-
-    if eval_params.SaveSol:
-        if converter is None:
-            solution = EdgeBasedMinimizeMaximumUtilitySolution(
-                EdgeBasedMinimizeMaximumUtilitySolutionParams(
-                    TMSeed=eval_params.Seed, 
-                    TopologyName=eval_params.TopologyName, 
-                    Capacity=c,
-                    TMModelName=tm.type(), 
-                    TMModelParams=tm.params,
-                    Path=solution_params.Path, 
-                    Name=solution_params.Name
-                )
-            )
-        else:
-            raise NotImplementedError('Will not save solution for warm-tests for now ... (takes too much space!)')
-    else:
-        solution = None
-    
-    return TrafficEngineeringProblemDescription(
-        EvalParams=eval_params, Graph=graph, TM=tm, Converter=converter, 
-        WarmStartParams=warmstart_params, Solution= solution
-    )
+        return lp.tracer
 
 
 def te_problem_description_parser(prog_name: str) -> jsonargparse.ArgumentParser:
@@ -195,6 +112,7 @@ def te_problem_description_parser(prog_name: str) -> jsonargparse.ArgumentParser
         TE objective to solve for
     `tm-path`: Optional[str]
         Path to a TM file that will be loaded as a file-backed matrix
+    
     Runtime Parameters
     ------------------
     `feas-tol`: float
@@ -206,20 +124,7 @@ def te_problem_description_parser(prog_name: str) -> jsonargparse.ArgumentParser
     `report-unsat`: bool
         Whether or not to output the details of unsatisfied demands or
         congested links.
-    Warm-Start Parameters
-    ---------------------
-    `converter-seed`: int
-        RNG seed for the TM converter
-    `warm-iters`: int
-        Number of warm-start iterations
-    Sampled TM Converter Parameters
-    -------------------------------
-    `delta-max`: float
-        Maximum value of change to a single pertrubed demand
-    `delta-min`: float
-        Minimum value of change to a single perturbed demand
-    `num-samples`: int
-        Number of samples to perturb for each iteration
+    
     Solution Output Parameters
     --------------------------
     `save-sol`: bool
@@ -232,54 +137,31 @@ def te_problem_description_parser(prog_name: str) -> jsonargparse.ArgumentParser
     parser = jsonargparse.ArgumentParser(prog_name)
 
     parser.add_argument('--config', action='config')
+
+    # Objective
+    parser.add_argument('--objective', help='TE Objective', type=TEObjective, default=TEObjective.MLU)
     
-    # Topology name and TM seed are _ALWAYS_ needed
-    parser.add_argument('--topo', help='Topology name', required=True)
-    parser.add_argument('--tm-path', help='Path to a TM', type=Optional[str])
-    parser.add_argument('--tm-seed', type=Optional[int], help='TM RNG seed')
-    parser.add_argument('--objective', help='TE Objective', type=TEObjective, required=True)
+    # Topology params
+    topo_group = parser.add_argument_group('Topology')
+    topo_group.add_argument('--topo-path', help='Path to a topology file', type=Optional[str])
+    topo_group.add_argument('--topo-name', help='Name of a topology from the zoo', type=Optional[str])
 
-    # These runtime parameters are also always needed
-    runtime_params_group = parser.add_argument_group('Runtime Parameters')
-    runtime_params_group.add_argument('--feas-tol', help='Feasibility tolerance', type=Optional[float], default=1e-3)
-    runtime_params_group.add_argument('--conv-tol', help='Optimality tolerance', type=Optional[float], default=1e-3)
-    runtime_params_group.add_argument('--scale-factor', type=float, default=10.0, 
-                                      help='Link capacity scaling factor.')
-    runtime_params_group.add_argument('--report-unsat', action='store_true', 
-                                      help='Fully report unsatisfied commodity assignments (if False, only gives a summary)')
-    runtime_params_group.add_argument('--check-conservation', action='store_true', 
-                                      help='Check flow conservation on the final edge-based solution.')
+    # RNG seeds if we have to generate anything
+    rng_seed_group = parser.add_argument_group('RNG Seeds')
+    rng_seed_group.add_argument('--tm-seed', help='RNG seed for generating traffic matrix sequences')
+    rng_seed_group.add_argument('--topo-seed', help='RNG seed for generating topology capacities')
 
-    # Parameters for warm-start tests
-    warm_start_params_group = parser.add_argument_group('Warm Start Parameters')
-    warm_start_params_group.add_argument('--converter-seed', type=int, help='RNG seed for TM converter')
-    warm_start_params_group.add_argument('--warm-iters', type=int, help='Number of warm-start iterations')
+    # Evaluation parameters
+    parser.add_class_arguments(TEEvaluationParams, 'EvaluationParams', help='TE Evaluation Parameters')
 
-    sampled_tm_converter_params_group = parser.add_argument_group('Sampled TM Converter Parameters')
-    sampled_tm_converter_params_group.add_argument('--delta-max', type=float, default=0.4, 
-                                                   help='Maximum change of demand value')
-    sampled_tm_converter_params_group.add_argument('--delta-min', type=float, default=0.2, 
-                                                   help='Minimum change of demand value')
-    sampled_tm_converter_params_group.add_argument('--num-samples', type=int, default=10, 
-                                                   help='Number of concurrent demand changes')
+    # TM class selection
+    attach_TM_class_parser(parser)
 
-    # Parameters for recording solutions
-    solution_params_group = parser.add_argument_group('Solution Handling Parameters')
-    solution_params_group.add_argument('--save-sol', action='store_true', help='Save the final solution')
-    solution_params_group.add_argument('--path-sol', help='Directory path to store the solution(s) in')
-    solution_params_group.add_argument('--name-sol', help='Name (prefix) for solution files')
-    
-    trace_params_group = parser.add_argument_group('Runtime Trace Parameters')
-    trace_params_group.add_argument('--path-trace', help='Path to store the runtime trace record file',
-                                    default='res.json')
-    trace_params_group.add_argument('--path-plt', help='Path to store the runtime trace plot file',
-                                    default='res.png')
-    
     return parser
 
 
 def parse_te_problem_description_args(parser: jsonargparse.ArgumentParser) -> Tuple[
-    TrafficEngineeringProblemDescription,
+    TEProblemDescription,
     jsonargparse.Namespace]:
     """
     Parse all the default arguments needed for the TE problem.
@@ -297,47 +179,44 @@ def parse_te_problem_description_args(parser: jsonargparse.ArgumentParser) -> Tu
         The namespace object of parsed arguments to further process
     """
     args = parser.parse_args()
-    eval_params = TrafficEngineeringLPEvaluationParams(
-        TopologyName=args.topo, 
-        Seed=args.tm_seed, 
-        TMPath=args.tm_path,
-        Objective=args.objective,
-        SaveSol=args.save_sol,
-        ScaleFactor=args.scale_factor,
-        FeasibilityTolerance=args.feas_tol, 
-        FeasibilityRatio=None,
-        PrintReports=args.report_unsat,
-        TraceOutputPath=args.path_trace,
-        PLTOutputPath=args.path_plt,
-        CheckConservation=args.check_conservation
+
+    # Objective
+    objective = args.objective
+
+    # Load the topology
+    if args.topo_path is not None:
+        # graph = load_topo_from_path(args.topo_path)
+        # print(as_info(f'Loaded topology from path {args.topo_path}'))
+        raise NotImplementedError
+    elif args.topo_name is not None:
+        graph = load_zoo_topology(args.topo_name)
+        print(as_info(f'Loaded zoo topology {args.topo_name}'))
+    else:
+        raise ValueError('No topology provided!')
+    # Assign the capacities
+    if not all('capacity' in graph[u][v] for u, v in graph.edges()):
+        print(as_warning('Some edges have missing capacities. Will generate random capacity values for all edges'))
+        set_random_capacities(graph, args.topo_seed)
+
+    # Seeds
+    tm_seed = args.tm_seed
+    topo_seed = args.topo_seed
+    print(as_info(f'RNG Seeds:\tTopo:{topo_seed}\tTM:{tm_seed}'))
+
+    # Evaluation parameters
+    eval_params = TEEvaluationParams.make_from_args(args)
+    print(as_info(f"Evaluation Parameters:\n{eval_params}"))
+
+    # Traffic matrix
+    tm_generator = parse_and_get_TM(
+        tm_seed=tm_seed, tm_count=eval_params.sequence_length,
+        scale_factor=eval_params.scale_factor, graph=graph,
+        args=args
     )
 
-    converter_seed = args.converter_seed
-    warm_iters = args.warm_iters
-    assert (converter_seed is None and warm_iters is None) or (converter_seed is not None and warm_iters is not None)
-    if warm_iters is not None:
-        warm_start_params = TrafficEngineeringLPWarmStartParams(
-            ConverterSeed=converter_seed,
-            WarmIters=warm_iters,
-            ConverterParams=SampledTrafficMatrixConverterParams(
-                delta_max=args.delta_max,
-                delta_min=args.delta_min,
-                number_of_samples=args.number_samples
-            )
-        )
-    else:
-        warm_start_params = None
-    
-    if args.save_sol:
-        solution_params = TrafficEngineeringLPSolutionParams(
-            Name=args.name_sol, Path=args.path_sol
-        )
-    else:
-        solution_params = None
-    
-    problem_description = te_input_helper(
-        eval_params=eval_params, warmstart_params=warm_start_params,
-        solution_params=solution_params
+    problem_description = TEProblemDescription(
+        objective=objective, eval_params=eval_params,
+        graph=graph, tm_generator=tm_generator
     )
     
     return problem_description, args
@@ -345,6 +224,6 @@ def parse_te_problem_description_args(parser: jsonargparse.ArgumentParser) -> Tu
 
 __all__ = [
     'solve_lp_and_report', 'solve_te_and_check',
-    'te_input_helper', 'parse_te_problem_description_args', 
+    'parse_te_problem_description_args', 
     'te_problem_description_parser'
 ]

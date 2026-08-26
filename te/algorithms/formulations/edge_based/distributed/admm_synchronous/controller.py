@@ -16,6 +16,9 @@ from te.algorithms.array_utils.cpu_utils import (CPUArray, BooleanCPUArray, CPUC
 from te.algorithms.sub_algorithms.admm import ADMMWrapper
 from te.algorithms.sub_algorithms.feasible_assignment import get_feasible_flow_assignment
 from te.algorithms.sub_algorithms.admm_consensus_test import outer_admm_consensus_test, inner_admm_consensus_test
+from te.algorithms.sub_algorithms.path_count import count_all_demand_paths
+from te.algorithms.sub_algorithms.noisy_loop_remover import remove_noisy_loops
+from te.algorithms.sub_algorithms.cycle_remover import remove_all_cycles
 from te.algorithms.statistics.helpers import record_cpu_runtime, record_return_value
 from . import SynchADMMSolverParams
 from .base import SynchADMMControllerBackendBase
@@ -26,7 +29,7 @@ from te.algorithms.sub_algorithms.mlu_backends.base import ControllerMLUSolver, 
 
 class SynchADMMControllerNode(EdgeBasedTEBase, DistributedSolverNodeBase):
     def __init__(self, 
-                 problem_description: TrafficEngineeringProblemDescription,
+                 problem_description: TEProblemDescription,
                  solver_params: SynchADMMSolverParams,
                  node_params: DistributedSolverNodeParams, 
                  mlu_cls: type[ControllerMLUSolver], 
@@ -72,8 +75,8 @@ class SynchADMMControllerNode(EdgeBasedTEBase, DistributedSolverNodeBase):
         # self.backend.register_signal_handler()
         self.backend.start()
 
-        self._objective_trace: TrafficEngineeringLPObjectiveTrace = \
-            TrafficEngineeringLPObjectiveTrace(['Perceived Utilization', 'Actual Utilization', '_Wall Clock'])
+        self._objective_trace: TEObjectiveTrace = \
+            TEObjectiveTrace(['Perceived Utilization', 'Actual Utilization', '_Wall Clock'])
         self._objective_gap_trace = []
 
         # These we call right now, as opposed to doing them under `initialize`
@@ -122,7 +125,7 @@ class SynchADMMControllerNode(EdgeBasedTEBase, DistributedSolverNodeBase):
         return self._mlu_solver.current_u
     
     @property
-    def objective_trace(self) -> Optional[TrafficEngineeringLPObjectiveTrace]:
+    def objective_trace(self) -> Optional[TEObjectiveTrace]:
         return self._objective_trace
 
     @property
@@ -194,6 +197,7 @@ class SynchADMMControllerNode(EdgeBasedTEBase, DistributedSolverNodeBase):
     def _set_X_ek(self):
         self._X_ek = self.backend.get_X_ek()
         np.multiply(self._X_ek, cpu_array(self._capacities)[:, None], out=self._X_ek)
+        self._X_ek = remove_all_cycles(self._graph, self._X_ek)
         # remove_noisy_loops(self._X_ek, self._graph)
     
     def _add_constraints(self):
@@ -340,6 +344,9 @@ class SynchADMMControllerNode(EdgeBasedTEBase, DistributedSolverNodeBase):
         eval_params = self._problem_description.EvalParams
         outer_admm_consensus_test(self._X_ek_sum_e, self._get_Z_value(), eval_params=eval_params)
         inner_admm_consensus_test(self._sharing_mean_1, self._sharing_mean_2, eval_params=eval_params)
+        ls = count_all_demand_paths(self.graph, self.assignments, self.commodity_list)
+        print(np.median(ls))
+        print(np.percentile(ls, 95))
         super().check()
     
     def update_traffic_matrix(self, tm):

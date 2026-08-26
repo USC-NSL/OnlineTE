@@ -29,9 +29,9 @@ from te.algorithms.formulations.edge_based.distributed.base import DistributedSo
 from te.algorithms.sub_algorithms.mlu_backends.base import ControllerMLUSolver, ControllerMLUException
 
 
-class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
+class SynchADMMControllerNode(TELP, DistributedSolverNodeBase):
     def __init__(self, 
-                 problem_description: TrafficEngineeringProblemDescription,
+                 problem_description: TEProblemDescription,
                  solver_params: SynchADMMSolverParams,
                  node_params: DistributedSolverNodeParams, 
                  mlu_cls: type[ControllerMLUSolver], 
@@ -74,8 +74,8 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
         # self.backend.register_signal_handler()
         self.backend.start()
 
-        self._objective_trace: TrafficEngineeringLPObjectiveTrace = \
-            TrafficEngineeringLPObjectiveTrace(['Perceived Utilization', 'Actual Utilization'])
+        self._objective_trace: TEObjectiveTrace = \
+            TEObjectiveTrace(['Perceived Utilization', 'Actual Utilization'])
         self._objective_gap_trace = []
 
         # These we call right now, as opposed to doing them under `initialize`
@@ -128,7 +128,7 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
         return self._mlu_solver.current_u
     
     @property
-    def objective_trace(self) -> Optional[TrafficEngineeringLPObjectiveTrace]:
+    def objective_trace(self) -> Optional[TEObjectiveTrace]:
         return self._objective_trace
 
     @property
@@ -369,7 +369,7 @@ class SynchADMMControllerNode(TrafficEngineeringLP, DistributedSolverNodeBase):
             X_EK, self._graph, self._commodity_list, eval_params=eval_params)
         congested_ratio, congested_links = check_capacity_constraint(
             X_EK, self._graph, self._commodity_list, eval_params=eval_params)
-        self.check_result = TrafficEngineeringLPCheckResult(
+        self.check_result = TECheckResult(
             unsat_ratio=unsat_ratio,
             congested_ratio=congested_ratio,
             unsat_commodities=unsat_commodities,
