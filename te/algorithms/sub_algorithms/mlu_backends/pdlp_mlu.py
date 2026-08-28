@@ -13,7 +13,7 @@ from te.algorithms.statistics.helpers import record_cpu_runtime
 from .base import ControllerMLUSolver, ControllerMLUException
 
 
-@dataclass
+@dataclass(frozen=True)
 class PDLPMLUParams(PDLPParams):
     # TODO: We no longer need these! Get rid of them.
     # _Rho: Optional[float] = None

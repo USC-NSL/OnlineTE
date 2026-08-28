@@ -19,7 +19,7 @@ class GurobiMethod(enum.Enum):
         return self.name
 
 
-@dataclass
+@dataclass(frozen=True)
 class GurobiSolverParams(SolverParams):
     """
     Solver parameters for Gurobi.
@@ -53,17 +53,14 @@ class GurobiSolverParams(SolverParams):
     Method: GurobiMethod = GurobiMethod.BARRIER
     Crossover: int = te.constants.DEFAULT_CROSSOVER
     NumericFocus: int = te.constants.DEFAULT_NUMERIC_FOCUS
-    ConvTol: float = te.constants.DEFAULT_OPTIMALITY_TOLERANCE
-    FeasibilityTol: float = te.constants.DEFAULT_FEASIBILITY_TOLERANCE
+    # ConvTol: float = te.constants.DEFAULT_OPTIMALITY_TOLERANCE
+    # FeasibilityTol: float = te.constants.DEFAULT_FEASIBILITY_TOLERANCE
     Presolve: int = te.constants.DEFAULT_PRESOLVE
     Threads: int = min(cpu_count(), 8)
     LogFile: str = te.constants.DEFAULT_GUROBI_LOG_FILE
 
-    def __post_init__(self):
-        self.left_column_share = 0.5
 
-
-@dataclass
+@dataclass(frozen=True)
 class PDLPParams(SolverParams):
     """
     Solver parameters for `ortools.pdlp`.
@@ -88,11 +85,8 @@ class PDLPParams(SolverParams):
     ConvTol: float = te.constants.DEFAULT_OPTIMALITY_TOLERANCE
     FeasibilityTol: float = te.constants.DEFAULT_FEASIBILITY_TOLERANCE
 
-    def __post_init__(self):
-        self._left_column_share = 0.5
 
-
-@dataclass
+@dataclass(frozen=True)
 class GPUParams(SolverParams):
     OuterLoopRounds: Optional[int] = 100
     """Number of outer loop iterations"""
@@ -122,7 +116,6 @@ class GPUParams(SolverParams):
     """Traffic matrix RNG seed"""
 
     def __post_init__(self):
-        self._left_column_share = 0.5
         if self.Beta is not None:
             assert self.Beta > 0, "L1 penalty coefficient must be strictly greater than 0"
         if self.Rho > self.Eta:
@@ -130,7 +123,9 @@ class GPUParams(SolverParams):
                        f"than inner ADMM step size (`Eta`) = {self.Eta}.\nThis is almost never beneficial.")
 
 
-def make_model(name: str, params: SolverParams, env: Optional[gurobipy.Env], verbose: bool = True, **kwargs):
+def make_model(name: str, params: SolverParams, feasibility_tolerance: float,
+               optimality_tolerance: float , env: Optional[gurobipy.Env], 
+               verbose: bool = True, **kwargs):
     assert issubclass(params.__class__, GurobiSolverParams)
     model = gurobipy.Model(name=name, env=env)
     model.Params.Method = params.Method.value
@@ -139,10 +134,10 @@ def make_model(name: str, params: SolverParams, env: Optional[gurobipy.Env], ver
 
     # We set _both_ of these to the same value to make sure that both
     # Barrier and Simplex converge to within the same tolerance.
-    model.Params.BarConvTol = params.ConvTol
-    model.Params.OptimalityTol = params.ConvTol
+    model.Params.BarConvTol = optimality_tolerance
+    model.Params.OptimalityTol = optimality_tolerance
 
-    model.Params.FeasibilityTol = params.FeasibilityTol
+    model.Params.FeasibilityTol = feasibility_tolerance
     model.Params.LogFile = params.LogFile
     model.Params.Presolve = params.Presolve
 

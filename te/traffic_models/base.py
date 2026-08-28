@@ -11,15 +11,17 @@ lazy.
 import argparse
 import numpy as np
 import networkx as nx
+from itertools import permutations
 from numpy.typing import DTypeLike
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import List, ClassVar, Tuple, Iterator, Optional
+from utils.table_dataclass import TableDataclass
 
 
 @dataclass(frozen=True, kw_only=True)
-class TMGeneratorParams:
+class TMGeneratorParams(TableDataclass):
     """
     A base class for all TM parameters.
     
@@ -40,6 +42,10 @@ class TMGeneratorParams:
     count: int = field(default=1, metadata={'help': argparse.SUPPRESS})
     dtype: DTypeLike = field(default=np.float32, metadata={'help': argparse.SUPPRESS})
     scale_factor: float = field(default=1.0, metadata={'help': argparse.SUPPRESS})
+    _type: ClassVar[str] = ''
+
+    def __post_init__(self):
+        assert len(self._type) > 0
 
 
 class TMGenerator(ABC):
@@ -83,6 +89,16 @@ class Commodity:
     source: int
     destination: int
     demand: float
+
+
+def commodity_od_iterator(num_nodes: int) -> Iterator[Tuple[int, int]]:
+    """Returns an iterator that gives commodity origin-destination pairs"""
+    return permutations(range(num_nodes), 2)
+
+
+def commodity_id_to_od(commodity_id: int, num_nodes: int) -> Tuple[int, int]:
+    """Given commodity ID and number of nodes, returns the source and destination IDs"""
+    return commodity_id // (num_nodes - 1), commodity_id % (num_nodes - 1)
 
 
 def traffic_to_commodity(tm: np.ndarray) -> List[Commodity]:
@@ -141,4 +157,5 @@ def edge_based_to_commodities(
 
 __all__ = ['TMGenerator', 'TMGeneratorParams', 'Commodity',
            'traffic_to_commodity', 'traffic_to_list_of_tuples',
-           'edge_based_to_commodities']
+           'edge_based_to_commodities', 'commodity_id_to_od',
+           'commodity_od_iterator']

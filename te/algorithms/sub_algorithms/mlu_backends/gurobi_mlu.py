@@ -12,7 +12,7 @@ from te.algorithms.formulations.edge_based.centralized import make_model, optimi
 from te.algorithms.formulations.edge_based.centralized import GurobiSolverParams
 
 
-@dataclass
+@dataclass(frozen=True)
 class GurobiMLUParams(GurobiSolverParams):
     _Rho: Optional[float] = None
     _Alpha: Optional[float] = None

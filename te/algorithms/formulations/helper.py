@@ -4,29 +4,8 @@ from typing import Optional, Tuple
 from te.algorithms.base import *
 from topologies.utils import load_zoo_topology, set_random_capacities
 from te.traffic_models.generators import attach_TM_class_parser, parse_and_get_TM
-from te.algorithms.utils import get_solution_confusion_matrix, get_solution_maximum_utilization
-from utils.logging import as_info, as_fail, as_warning, log_subsection_title, str_round, log_section_title
-
-
-def solve_lp_and_report(lp: TELP):
-    """
-    Helper method that receives the LP object and the evaluation parameters and solves the MLU problem.
-
-    Arguments
-    ---------
-    lp: type[TELP]
-        The full LP object that we can use to solve the problem
-    """
-    t = lp.solve()
-    if t > -1:
-        print(as_info(log_subsection_title("CHECKING SOLUTION")))
-        lp.check()
-        print(lp.check_result)
-        print(as_info(f"Solved in {str_round(t, 2)} seconds"))
-        print(as_info(f"Final objective value: {str_round(lp.objective_value, 4)}"))
-        print(as_info(f"Actual utilization: {str_round(get_solution_maximum_utilization(lp.assignments, lp.graph), 4)}"))
-    else:
-        print(as_fail("TE problem couldn't be solved as expected"))
+from te.algorithms.utils import get_solution_confusion_matrix
+from utils.logging import as_info, as_fail, as_warning, log_subsection_title, str_round
 
 
 def solve_te_and_check(
@@ -57,28 +36,14 @@ def solve_te_and_check(
     """
     with contextlib.closing(solver_cls(problem, solver_params, *args, **kwargs)) as lp:
         print(as_info(f"Solving With: {lp.alg_name}"))
-        print(as_info(f"Evaluating With Parameters:\n{problem.EvalParams}"))
+        print(as_info(f"Evaluating With Parameters:\n{problem.eval_params}"))
         print(as_info(f"Solving With Parameters:\n{solver_params.str_all()}"))
         print(as_info(log_subsection_title("MAKING TE LP")))
         lp.make_lp()
         print(as_info(log_subsection_title(f"SOLVING WITH: {lp.alg_name}")))
-        solve_lp_and_report(lp)
-
-        # TODO: Handle the solution save case for warm-starts
+        lp.solve()
         
-        if problem.Solution:
-            lp.add_and_dump_lp_solutions(problem.Solution)
-        
-        if problem.Converter is not None:
-            converted_tm = problem.TM
-            for i in range(problem.WarmStartParams.WarmIters):
-                print(as_info(log_subsection_title(f"WARM-START ITERATION {i}")))
-                converted_tm = problem.Converter.convert(converted_tm)
-                lp.update_traffic_matrix(converted_tm)
-
-                solve_lp_and_report(lp)
-        
-        get_solution_confusion_matrix(lp, problem.EvalParams)
+        # get_solution_confusion_matrix(lp, problem.eval_params)
         
         # stats = stringify_collected_stats()
         # if stats is not None:
@@ -204,7 +169,7 @@ def parse_te_problem_description_args(parser: jsonargparse.ArgumentParser) -> Tu
     print(as_info(f'RNG Seeds:\tTopo:{topo_seed}\tTM:{tm_seed}'))
 
     # Evaluation parameters
-    eval_params = TEEvaluationParams.make_from_args(args)
+    eval_params = TEEvaluationParams.make_from_args(args.EvaluationParams)
     print(as_info(f"Evaluation Parameters:\n{eval_params}"))
 
     # Traffic matrix
@@ -213,6 +178,7 @@ def parse_te_problem_description_args(parser: jsonargparse.ArgumentParser) -> Tu
         scale_factor=eval_params.scale_factor, graph=graph,
         args=args
     )
+    print(as_info(f"Using TM Class `{tm_generator.type()}` With Parameters:\n{tm_generator.params}"))
 
     problem_description = TEProblemDescription(
         objective=objective, eval_params=eval_params,
@@ -223,7 +189,7 @@ def parse_te_problem_description_args(parser: jsonargparse.ArgumentParser) -> Tu
 
 
 __all__ = [
-    'solve_lp_and_report', 'solve_te_and_check',
+    'solve_te_and_check',
     'parse_te_problem_description_args', 
     'te_problem_description_parser'
 ]

@@ -31,7 +31,7 @@ class SolverParams(TableDataclass):
     pass
 
 
-@dataclass
+@dataclass(frozen=True)
 class TEEvaluationParams(SolverParams):
     """
     All generic evaluation parameters go into this class.
@@ -44,10 +44,14 @@ class TEEvaluationParams(SolverParams):
         an `epsilon` tolerance when numerical problems may arise
         (e.g. when a divide by zero is likely).
     feasibility_tolerance: float
-        Absolute contraint violation tolerance. Will override any
-        other values if needed (including the one from Gurobi).
-    feasibility_ratio: float
-        Relative objective _AND_ constraint violation. 
+        Absolute contraint violation tolerance.
+    optimality_tolerance: float
+        Relative objective gap on the final solution.
+    loop_tolerance: float
+        An absolute tolerance value that is used when checking for
+        loops in order to decide if traffic is flowing in some
+        direction.
+        Set **Notes**.
     verbose: bool = False
         Print any constraint violation in full detail.
     skip_checks: bool = False
@@ -56,25 +60,32 @@ class TEEvaluationParams(SolverParams):
         TM scale factor.
     sequence_length: int = 1
         Number of TMs in sequence to evaluate.
-          
-    Note
-    ----
-    For now, exactly one of `feasibility_tolerance` or `feasibility_ratio` must
-    be given.
+    
+    Notes
+    -----
+    With a perfect solver, we could just afford to let `loop_tolerance`
+    be `feasibility_tolerance`. In practice, that doesn't work well as
+    even solvers like Gurobi don't hit their feasibility tolerance 
+    _exactly_ in the end and solver like Barrier can be flagged as producing
+    loops due to numerical noise. The key is to make sure that `feasibility_tolerance`
+    is tighter than `loop_tolerance` so that it becomes very improbable that
+    we violate `loop_tolerance` in the end.
     """
     float_resolution: float = te.constants.FLOAT_RES
-    feasibility_tolerance: Optional[float] = None
-    feasibility_ratio: Optional[float] = None
+    feasibility_tolerance: float = 1e-4
+    optimality_tolerance: float = 1e-2
+    loop_tolerance: float = 1e-3
     verbose: bool = False
     skip_checks: bool = False
     scale_factor: float = 1.0
     sequence_length: int = 1
 
     def __post_init__(self):
-        # UPDATE: We will prevent both tolerances being given, it makes reasoning about things difficult ...
-        assert (self.feasibility_ratio is None) ^ (self.feasibility_tolerance is None), \
-            "Exactly one of `feasibility_tolerance` or `feasibility_ratio` MUST be given"
-        self.left_column_share = 0.5
+        assert self.optimality_tolerance < 1 and self.optimality_tolerance > 0
+        assert self.loop_tolerance > self.feasibility_tolerance
+        if self.loop_tolerance < 2 * self.feasibility_tolerance:
+            print(as_warning(f'`loop_tolerance` is too tight relative to `feasibility_tolerance`, numerical noise'
+                             'may be reported as loops!'))
     
     def __call__(self, **kwargs):
         copy = dataclasses.replace(self)
@@ -272,7 +283,7 @@ class TELP(ABC):
         """
         List of check results for each solved TM so far.
         """
-        return self._check_result
+        return self._check_results
 
     @property
     @abstractmethod
@@ -284,6 +295,14 @@ class TELP(ABC):
         """Return **current** edge-based assignments."""
         assert self._X_ek is not None
         return self._X_ek
+
+    @property
+    def current_traffic_matrix(self) -> np.ndarray:
+        return self._current_TM
+
+    @property
+    def current_commodities(self) -> List[Commodity]:
+        return traffic_to_commodity(self._current_TM)
 
     @property
     @abstractmethod
@@ -343,7 +362,7 @@ class TELP(ABC):
             self._check_results.append(self.check())
         self._tracer.execute_callbacks(self, SolverCallbackType.PostTMSolve)
 
-    def solve(self) -> float:
+    def solve(self):
         """Solve for each matrix in sequence."""
         self._tracer.execute_callbacks(self, SolverCallbackType.PreSolve)
         t_start = time.perf_counter()
@@ -355,31 +374,30 @@ class TELP(ABC):
 
     def check(self) -> TECheckResult:
         """Performs sanity checks on the **current** solution."""
-        assignments = self.assignments
+        assignments = self.current_assignment
         graph = self.graph
-        commodity_list = self.commodity_list
+        commodity_list = self.current_commodities
         eval_params = self.problem_description.eval_params
         feasibility_tolerance = eval_params.feasibility_tolerance
-        feasibility_ratio = eval_params.feasibility_ratio
+        loop_tolerance = eval_params.loop_tolerance
         indexing = self._edge_indexing
-        print(as_info(f"Checking for loops with absolute tolerance of {feasibility_tolerance}"))
+        print(as_info(f"Checking for loops with absolute tolerance of {loop_tolerance}"))
         witness = check_loop_free_assignment(
-            assignments, graph, feasibility_tolerance
+            assignments, graph, loop_tolerance
         )
         if witness is not None:
             print(as_fail(f"Solution contains a loop for commodity {witness[0]}!"))
         leaks = check_flow_leaks(
-            assignments, graph, commodity_list, feasibility_tolerance,
-            feasibility_ratio
+            assignments, graph, commodity_list,
+            feasibility_tolerance, indexing
         )
         congestions = check_capacity_constraint(
-            assignments, graph, commodity_list, eval_params
+            assignments, graph, feasibility_tolerance
         )
         if self._problem_description.objective == TEObjective.MLU:
             satisfaction = check_flow_satisfaction(
                 assignments, graph, commodity_list,
-                feasibility_tolerance, feasibility_ratio,
-                indexing
+                feasibility_tolerance, indexing
             )
         else:
             satisfaction = None

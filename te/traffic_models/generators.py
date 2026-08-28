@@ -5,7 +5,7 @@ import jsonargparse
 import networkx as nx
 from io import BufferedReader
 from dataclasses import dataclass, field
-from typing import Tuple, Optional, Iterator, Callable, Dict
+from typing import Tuple, Optional, Iterator, Callable, List, ClassVar
 from .base import *
 
 #### UNIFORM ####
@@ -17,16 +17,17 @@ class UniformTMGeneratorParams(TMGeneratorParams):
 
     Attributes
     ----------
-    n: int
-        Number of nodes
     min: float
         Minimum admissible demand value
     max: float
         Maximum admissible demand value
+    n: int
+        Number of nodes
     """
+    min: float = 0.0
+    max: float = 1.0
     n: int = field(default=0, metadata={'help': argparse.SUPPRESS})
-    min: float
-    max: float
+    _type: ClassVar[str] = 'uniform'
 
     def __post_init__(self):
         assert self.min >= 0 and self.max >= 0 and self.max >= self.min
@@ -34,7 +35,7 @@ class UniformTMGeneratorParams(TMGeneratorParams):
 
 
 class UniformTMGenerator(TMGenerator):
-    _TYPE = 'Uniform'
+    _TYPE = UniformTMGeneratorParams._type
 
     def __init__(self, params: UniformTMGeneratorParams):
         super().__init__(params)
@@ -64,17 +65,18 @@ class ExponentialTMGeneratorParams(TMGeneratorParams):
 
     Attributes
     ----------
-    graph: nx.DiGraph
-        Topology graph object. We need distances between
-        nodes, so that is why we need it.
     beta: float
         Distribution mean; can be arbitrary positive value.
     gamma: float
         Distribution decay; must be in `(0, 1]`
+    graph: nx.DiGraph
+        Topology graph object. We need distances between
+        nodes, so that is why we need it.
     """
+    beta: float = 0.5
+    gamma: float = 0.1
     graph: nx.DiGraph = field(default=nx.DiGraph(), metadata={'help': argparse.SUPPRESS})
-    beta: float
-    gamma: float
+    _type: ClassVar[str] = 'exponential'
 
     def __post_init__(self):
         assert self.beta > 0 and self.gamma > 0 and self.gamma <= 1
@@ -82,7 +84,7 @@ class ExponentialTMGeneratorParams(TMGeneratorParams):
 
 
 class ExponentialTMGenerator(TMGenerator):
-    _TYPE = 'Exponential'
+    _TYPE = ExponentialTMGeneratorParams._type
 
     def __init__(self, params: ExponentialTMGeneratorParams):
         super().__init__(params)
@@ -128,10 +130,11 @@ class BimodalTMGeneratorParams(TMGeneratorParams):
         What fraction of entries belong to the first distribution.
         Must be in `(0, 1)`.
     """
-    n: int
-    range1: Tuple[float, float]
-    range2: Tuple[float, float]
-    fraction: float
+    range1: Tuple[float, float] = (0, 0.2)
+    range2: Tuple[float, float] = (0.95, 1.0)
+    fraction: float = 0.9
+    n: int = field(default=0, metadata={'help': argparse.SUPPRESS})
+    _type: ClassVar[str] = 'bimodal'
 
     def __post_init__(self):
         assert self.range1[0] <= self.range1[1]
@@ -140,7 +143,7 @@ class BimodalTMGeneratorParams(TMGeneratorParams):
 
 
 class BimodalTMGenerator(TMGenerator):
-    _TYPE = 'Bimodal'
+    _TYPE = BimodalTMGeneratorParams._type
 
     def __init__(self, params: BimodalTMGeneratorParams):
         super().__init__(params)
@@ -172,8 +175,8 @@ class FilebackedTMGeneratorParams(TMGeneratorParams):
 
     Attributes
     ----------
-    paths: Iterator[str]
-        An iterator that returns paths to traffic matrices.
+    paths: List[str]
+        A list of paths to traffic matrices.
     scale: Optional[float]
         If present, the traffic matrix will be divided by this value
         element-wise. If `None`, the matrix is normalized between
@@ -183,13 +186,17 @@ class FilebackedTMGeneratorParams(TMGeneratorParams):
         A callable that takes a file object and returns a Numpy array.
         Defaults to `pickle.load`.
     """
-    paths: Iterator[str]
+    paths: List[str] = field(default_factory=list)
     scale: Optional[float] = 1.0
     loader: Callable[[BufferedReader], np.ndarray] = pickle.load
+    _type: ClassVar[str] = 'file-backed'
+
+    def __post_init__(self):
+        assert len(self.paths) > 0
 
 
-class FilebackedTMGenerator(TMGeneratorParams):
-    _TYPE = 'File-backed'
+class FilebackedTMGenerator(TMGenerator):
+    _TYPE = FilebackedTMGeneratorParams._type
 
     def __init__(self, params: FilebackedTMGeneratorParams):
         super().__init__(params)
@@ -219,9 +226,10 @@ class FilebackedTMGenerator(TMGeneratorParams):
 
 @dataclass(frozen=True)
 class UniformDriftTMGeneratorParams(TMGeneratorParams):
-    initial_tm: np.ndarray
-    delta_max: float
-    delta_min: float
+    delta_max: float = 1.0
+    delta_min: float = 0.0
+    initial_tm: np.ndarray = field(default_factory=lambda: np.empty((1,)), metadata={'help': argparse.SUPPRESS})
+    _type: ClassVar[str] = 'uniform-drift'
 
     def __post_init__(self):
         assert self.delta_max > self.delta_min
@@ -233,7 +241,7 @@ class UniformDriftTMGeneratorParams(TMGeneratorParams):
 
 class UniformDriftTMGenerator(TMGenerator):
     """Shift demands by a random value chosen between `delta_max` and `delta_min`"""
-    _TYPE = 'Uniform Drift'
+    _TYPE = UniformTMGeneratorParams._type
     def __init__(self, params: UniformDriftTMGeneratorParams):
         super().__init__(params)
     
@@ -254,10 +262,11 @@ class UniformDriftTMGenerator(TMGenerator):
 
 @dataclass(frozen=True)
 class SampledTMGeneratorParams(TMGeneratorParams):
-    initial_tm: np.ndarray
-    delta_max: float
-    delta_min: float
-    number_of_samples: int
+    delta_max: float = 1.0
+    delta_min: float = 0.0
+    sample_rate: float = 0.05
+    initial_tm: np.ndarray = field(default_factory=lambda: np.empty((1,)), metadata={'help': argparse.SUPPRESS})
+    _type: ClassVar[str] = 'sampled'
 
     def __post_init__(self):
         assert self.delta_max > self.delta_min
@@ -265,6 +274,7 @@ class SampledTMGeneratorParams(TMGeneratorParams):
         shape = self.initial_tm.shape
         assert len(shape) == 2 and shape[0] == shape[1]
         assert np.allclose(np.diag(self.initial_tm), 0)
+        assert 0 <= self.sample_rate and self.sample_rate <= 1
 
 
 class SampledTMGenerator(TMGenerator):
@@ -272,12 +282,13 @@ class SampledTMGenerator(TMGenerator):
     Shift demands by a random value chosen between `delta_max` and `delta_min`
     for only at most a few randomly chosen demands.
     """
-    _TYPE = 'Sampled'
+    _TYPE = SampledTMGeneratorParams._type
     def __init__(self, params: SampledTMGeneratorParams):
         super().__init__(params)
 
     def __iter__(self) -> Iterator[np.ndarray]:
         PARAMS: SampledTMGeneratorParams = self.params
+        number_of_samples = int(PARAMS.initial_tm.size * PARAMS.sample_rate)
         RNG = self.get_rng()
         arr = PARAMS.initial_tm
         m, _ = arr.shape
@@ -285,10 +296,10 @@ class SampledTMGenerator(TMGenerator):
             sample = np.zeros((m, m))
             indices = [
                 (RNG.integers(0, m), RNG.integers(0, m))
-                    for _ in range(PARAMS.number_of_samples)
+                    for _ in range(number_of_samples)
             ]
             shifts = [RNG.random() * (PARAMS.delta_max - PARAMS.delta_min) + PARAMS.delta_min 
-                    for _ in range(PARAMS.number_of_samples)]
+                    for _ in range(number_of_samples)]
             for index, shift in zip(indices, shifts):
                 sample[index] = shift
             drift = RNG.random(size=arr.shape, dtype=PARAMS.dtype) * (PARAMS.delta_max - PARAMS.delta_min) + \
@@ -297,10 +308,11 @@ class SampledTMGenerator(TMGenerator):
 
 
 @dataclass(frozen=True)
-class NCFlowTrafficMatrixConverterParams(TMGeneratorParams):
-    rel_mean: float
-    rel_stddev: float
-    initial_tm: np.ndarray
+class NCFlowTrafficMatrixGeneratorParams(TMGeneratorParams):
+    rel_mean: float = 0.0
+    rel_stddev: float = 1.0
+    initial_tm: np.ndarray = field(default_factory=lambda: np.empty((1,)), metadata={'help': argparse.SUPPRESS})
+    _type: ClassVar[str] = 'ncflow'
 
     def __post_init__(self):
         assert self.delta_max > self.delta_min
@@ -311,18 +323,18 @@ class NCFlowTrafficMatrixConverterParams(TMGeneratorParams):
         self.original_mean = np.mean(self.initial_tm)
 
 
-class NCFlowTrafficMatrixConverter(TMGenerator):
+class NCFlowTrafficMatrixGenerator(TMGenerator):
     """
     Converter based on what was used for `NCFlow`.
     Pick an up/down direction, perturb by sampling
     a normal distribution, then clip it.
     """
-    _TYPE = 'NCFlow'
-    def __init__(self,  params: NCFlowTrafficMatrixConverterParams):
+    _TYPE = NCFlowTrafficMatrixGeneratorParams._type
+    def __init__(self,  params: NCFlowTrafficMatrixGeneratorParams):
         super().__init__(params)
 
     def __iter__(self) -> Iterator[np.ndarray]:
-        PARAMS: NCFlowTrafficMatrixConverterParams = self.params 
+        PARAMS: NCFlowTrafficMatrixGeneratorParams = self.params 
         RNG = self.get_rng()
         arr = PARAMS.initial_tm
         for _ in range(PARAMS.count):
@@ -332,23 +344,40 @@ class NCFlowTrafficMatrixConverter(TMGenerator):
             yield np.clip(arr + sample, a_min=0, a_max=1)
 
 
+def get_param_class_from_name(name: str) -> Tuple[type[TMGeneratorParams], type[TMGenerator]]:
+    params = None
+    generator = None
+    for param in TMGeneratorParams.__subclasses__():
+        if param._type == name:
+            params = param
+            break
+    for tm_gen in TMGenerator.__subclasses__():
+        if tm_gen.type() == name:
+            generator = tm_gen
+            break
+    assert params is not None and generator is not None
+    return params, generator
+
 def attach_TM_class_parser(parser: jsonargparse.ArgumentParser):
-    parser.add_argument(
-        '--tm-class', required=True, type=TMGeneratorParams,
-        help='Traffic Matrix class'
-    )
+    parser.add_argument('--tm-class', choices=[tp.type() for tp in TMGenerator.__subclasses__()], required=True)
+    for param in TMGeneratorParams.__subclasses__():
+        parser.add_class_arguments(param, nested_key=param._type)
 
 def parse_and_get_TM(
     tm_seed: Optional[int], tm_count: int, scale_factor: float,
     graph: nx.DiGraph, args: jsonargparse.Namespace
 ) -> TMGenerator:
-    args.tm_class.init_args.seed = tm_seed
-    args.tm_class.init_args.count = tm_count
-    args.tm_class.init_args.scale_factor = scale_factor
-    if args.tm_class == UniformTMGeneratorParams.__name__:
-        args.tm_class.init_args.n = graph.number_of_nodes()
-    elif args.tm_class == ExponentialTMGeneratorParams.__name__:
-        args.tm_class.init_args.graph = graph
+    cls_name = args.tm_class
+    tm_class_args = getattr(args, cls_name)
+    tm_class_args.seed = tm_seed
+    tm_class_args.count = tm_count
+    tm_class_args.scale_factor = scale_factor
+    if cls_name == UniformTMGenerator.type():
+        tm_class_args.n = graph.number_of_nodes()
+    elif cls_name == ExponentialTMGenerator.type():
+        tm_class_args.graph = graph
     else:
         raise ValueError
-    return jsonargparse._util.import_object(args.tm_class.class_path)(**vars(args.tm_class.init_args))
+    param_cls, tm_cls = get_param_class_from_name(cls_name)
+    param = param_cls.make_from_args(tm_class_args)
+    return tm_cls(param)

@@ -11,7 +11,7 @@ seaborn==0.13.2
 tqdm==4.66.4
 sympy>=1.13.1
 ortools>=9.12.4544
-jsonargparse==4.43.0
+jsonargparse==4.50.0
 dotenv==0.9.9
 pyparsing==3.2.2
 numba>=0.60.0

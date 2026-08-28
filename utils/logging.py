@@ -99,8 +99,8 @@ class ShortTQDM:
     
 
 class ShortTQDMEnumerate(ShortTQDM):
-    def __init__(self, object: List):
-        self._len = len(object)
+    def __init__(self, object: List, length: Optional[int] = None):
+        self._len = len(object) if length is None else length
         self._object = enumerate(object)
         if te.constants.SHOW_PROGRESS_BAR:
             self._pbar = tqdm.tqdm(object, bar_format=self.pbar_format(), total=self._len)

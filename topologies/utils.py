@@ -12,8 +12,7 @@ import networkx as nx
 from scipy.linalg import null_space
 from typing import Dict, Tuple, Union, List, Optional
 from topologies import TOPOLOGIES_PATH, TOPOLOGY_ZOO_DIR_NAME, TOPOLOGY_ZOO_INDEX_FILE_NAME
-from te.traffic_models.base import Commodity
-# from te.traffic_models.generators import UniformDriftTMGenerator, UniformDriftTMGeneratorParams
+from te.traffic_models.base import Commodity, commodity_od_iterator
 from utils.logging import as_warning
 from networkx.readwrite import json_graph
 
@@ -271,7 +270,7 @@ def set_random_capacities(graph: nx.DiGraph, topo_seed: Optional[int] = None):
     This _always_ makes sure that edges connected to the same nodes
     have the same capacity.
     """
-    degs = list(graph.in_degree())
+    degs = list([d for _, d in graph.in_degree()])
     M = graph.number_of_nodes()
     N = graph.number_of_edges()
     l = min(degs)
@@ -280,11 +279,11 @@ def set_random_capacities(graph: nx.DiGraph, topo_seed: Optional[int] = None):
     assert N % 2 == 0
     caps = (rng.random(size=(N // 2,)) * (u - l) + l) * M
     edges = set()
-    for edge in g.edges(data=False):
+    for edge in graph.edges(data=False):
         if edge not in edges:
             u, v = edge
-            g[u][v]['capacity'] = caps[len(edges)]
-            g[v][u]['capacity'] = caps[len(edges)]
+            graph[u][v]['capacity'] = caps[len(edges) // 2]
+            graph[v][u]['capacity'] = caps[len(edges) // 2]
             edges.add((u, v))
             edges.add((v, u))
 
@@ -320,8 +319,10 @@ def get_sparse_null_space(M_matrix: np.ndarray) -> np.ndarray:
     return np_basis / np.linalg.norm(np_basis, axis=0)
 
 
-def get_commodity_in_out_mask(graph: nx.DiGraph, commodities: List[Commodity], 
-                              edge_indexing: Optional[Dict[Tuple[int, int], int]] = None) -> np.ndarray:
+def get_commodity_in_out_mask(
+    graph: nx.DiGraph,
+    edge_indexing: Dict[Tuple[int, int], int]
+) -> np.ndarray:
     """
     Returns a Boolean valued mask of size `n x k` where entry `ek` is `True`
     for eny edge leaving the destination of commodity `k` or flowing into the
@@ -330,29 +331,29 @@ def get_commodity_in_out_mask(graph: nx.DiGraph, commodities: List[Commodity],
     acceptable solution, since otherwise it means that the final assignment
     may have created loops between the source and the destination.
     """
-    if edge_indexing is None:
-        edge_indexing = get_edge_indexing(graph)
-    mask = np.zeros(dtype=bool, shape=(graph.number_of_edges(), len(commodities)))
-    for k, commodity in enumerate(commodities):
-        for edge in graph.out_edges(nbunch=commodity.destination, data=False):
+    M = graph.number_of_nodes()
+    mask = np.zeros(dtype=bool, shape=(graph.number_of_edges(), M*(M-1)))
+    for k, od_pair in enumerate(commodity_od_iterator(M)):
+        source, destination = od_pair
+        for edge in graph.out_edges(nbunch=destination, data=False):
             mask[edge_indexing[edge], k] = True
-        for edge in graph.in_edges(nbunch=commodity.source, data=False):
+        for edge in graph.in_edges(nbunch=source, data=False):
             mask[edge_indexing[edge], k] = True
     return mask
 
 
 def get_sparse_commodity_satisfaction_mask(
-    graph: nx.DiGraph, commodities: List[Commodity], 
-    edge_indexing: Optional[Dict[Tuple[int, int], int]] = None
+    graph: nx.DiGraph,
+    edge_indexing: Dict[Tuple[int, int], int]
 ) -> Tuple[sparse.csc_matrix, sparse.csc_matrix]:
-    if edge_indexing is None:
-        edge_indexing = get_edge_indexing(graph)
-    mask_source_out = sparse.lil_matrix((graph.number_of_edges(), len(commodities)), dtype=bool)
-    mask_source_in = sparse.lil_matrix((graph.number_of_edges(), len(commodities)), dtype=bool)
-    for k, commodity in enumerate(commodities):
-        for edge in graph.out_edges(nbunch=commodity.source, data=False):
+    M = graph.number_of_nodes()
+    mask_source_out = sparse.lil_matrix((graph.number_of_edges(), M*(M-1)), dtype=bool)
+    mask_source_in = sparse.lil_matrix((graph.number_of_edges(), M*(M-1)), dtype=bool)
+    for k, od_pair in enumerate(commodity_od_iterator(M)):
+        source, _ = od_pair
+        for edge in graph.out_edges(nbunch=source, data=False):
             mask_source_out[edge_indexing[edge], k] = True
-        for edge in graph.in_edges(nbunch=commodity.source, data=False):
+        for edge in graph.in_edges(nbunch=source, data=False):
             mask_source_in[edge_indexing[edge], k] = True
     return mask_source_out.tocsc(), mask_source_in.tocsc()
 
