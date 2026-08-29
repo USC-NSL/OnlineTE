@@ -6,9 +6,9 @@ handling non-negativity constraints.
 import numpy as np
 from typing import Union, Optional
 from numba.typed import List as NumbaList
-from te.algorithms.array_utils.cpu_utils import CPUArray, cpu_cast_float
+from array_utils.cpu.types import *
 from te.algorithms.sub_algorithms.simplex_projection import project_onto_probability_simplex, project_onto_probability_orthant
-from .paths import path_based_projection_nnz, path_based_transpose_vector_product_nnz
+from te.path_providers.sparse_ops import path_based_projection_nnz, path_based_transpose_vector_product_nnz
 
 
 def do_memory_efficient_pgd(lambda_block: CPUArray, x_block: CPUArray, nnt: CPUArray,

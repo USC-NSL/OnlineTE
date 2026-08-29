@@ -1,12 +1,15 @@
+from typing import Optional
 from dataclasses import dataclass
 from ...edge_based.centralized import GurobiSolverParams, PDLPParams
 
 
-@dataclass
+@dataclass(frozen=True)
 class GurobiPathBasedSolverParams(GurobiSolverParams):
-    NumberOfPathsPerCommodity: int = 8
+    max_num_paths_per_commodity: int = 8
+    path_file: Optional[str] = None
 
 
-@dataclass
+@dataclass(frozen=True)
 class PDLPPathBasedSolverParams(PDLPParams):
-    NumberOfPathsPerCommodity: int = 8
+    max_num_paths_per_commodity: int = 8
+    path_file: Optional[str] = None

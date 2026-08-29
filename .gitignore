@@ -52,3 +52,6 @@ te/algorithms/sub_algorithms/mdc_backends
 
 # Presentation dir
 presentation/
+
+# Path files
+*.pkl

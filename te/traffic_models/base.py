@@ -119,6 +119,11 @@ def traffic_to_list_of_tuples(tm: np.ndarray) -> List[Tuple[float, int, int]]:
     ]
 
 
+def traffic_to_demands(tm: np.ndarray) -> np.ndarray:
+    """Convert traffic matrix into a 1D array of demands"""
+    return tm[~np.eye(tm.shape[0], dtype=bool)]
+
+
 def edge_based_to_commodities(
     assignments: np.ndarray, commodities: List[Commodity],
     graph: nx.DiGraph
@@ -158,4 +163,4 @@ def edge_based_to_commodities(
 __all__ = ['TMGenerator', 'TMGeneratorParams', 'Commodity',
            'traffic_to_commodity', 'traffic_to_list_of_tuples',
            'edge_based_to_commodities', 'commodity_id_to_od',
-           'commodity_od_iterator']
+           'commodity_od_iterator', 'traffic_to_demands']

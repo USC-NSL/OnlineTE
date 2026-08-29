@@ -6,10 +6,10 @@ from gurobipy import GRB
 from te.algorithms.base import *
 from te.traffic_models.base import *
 from utils.logging import as_info, ShortTQDMEnumerate, ShortTQDM
-from . import GurobiSolverParams, make_model
+from utils.gurobi_utils import *
 
 
-class GurobiTE(TELP):
+class GurobiTE(TELP[GurobiSolverParams]):
     """
     An honest implementation of edge-based MLU with Gurobi.
     Becomes too sluggish for very large topologies, but solutions look very nice.
@@ -67,6 +67,7 @@ class GurobiTE(TELP):
             name='EdgeBasedTE', params=self._solver_params,
             feasibility_tolerance=self._problem_description.eval_params.feasibility_tolerance,
             optimality_tolerance=self._problem_description.eval_params.optimality_tolerance,
+            verbose=self._problem_description.eval_params.verbose,
             env=ENV
         )
         self._model = MODEL
@@ -87,7 +88,6 @@ class GurobiTE(TELP):
         MODEL = self._model
         GRAPH = self._graph
         FLOWS = self._flows
-        UTILITY = self._utility
         # We build the model with a demand of clear for every pair
         DEMAND = 1
 
@@ -99,7 +99,7 @@ class GurobiTE(TELP):
             for k in range(K):
                 total_flow.addTerms(1, FLOWS[(e, k)])
             if self._problem_description.objective == TEObjective.MLU:
-                capacity_constraints.append(MODEL.addConstr(total_flow <= UTILITY * c_e))
+                capacity_constraints.append(MODEL.addConstr(total_flow <= self._utility * c_e))
             else:
                 capacity_constraints.append(MODEL.addConstr(total_flow <= c_e))
         self._capacity_constraints = capacity_constraints
@@ -199,10 +199,12 @@ class GurobiTE(TELP):
             self._objective = gurobipy.LinExpr(1.0, self._utility)
             MODEL.setObjectiveN(self._objective, index=0, priority=10, name='MLU')
             MODEL.setObjectiveN(self._regularizer_objective, index=1, priority=1, name='Loop')
-        else:
+        elif self._problem_description.objective == TEObjective.MAX_FLOW:
             self._objective = self._demand_objective
             MODEL.setObjectiveN(self._objective, index=0, priority=10, name='MaxFlow')
             MODEL.setObjectiveN(self._regularizer_objective, index=1, priority=1, name='Loop')
+        else:
+            raise ValueError
     
     def close(self):
         self._model.close()
@@ -216,6 +218,7 @@ class GurobiTE(TELP):
             raise RuntimeError(f"Problem when solving. Gurobi status: {self._model.Status}")
 
     def _update_constraits(self, tm: np.ndarray):
+        assert self._demand_constraints is not None
         COMMODITIES = traffic_to_commodity(tm)
         for constraints, commodity in zip(self._demand_constraints, COMMODITIES):
             DEMAND = commodity.demand

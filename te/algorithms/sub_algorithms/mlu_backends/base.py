@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from te.algorithms.base import SolverParams, TEObjective
-from te.algorithms.array_utils.cpu_utils import CPUArray, DoublePrecisionCPUArray
+from array_utils.cpu.types import *
 
 
 class ControllerMLUException(Exception):

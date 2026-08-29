@@ -2,7 +2,7 @@ import te.constants
 import networkx as nx
 from typing import List, Dict
 from te.algorithms.base import Commodity
-from te.algorithms.array_utils.cpu_utils import CPUArray, cpu_array
+from array_utils.cpu.types import *
 
 
 def get_average_stretch(commodity_list: List[Commodity], edge_based_assignment: CPUArray, 

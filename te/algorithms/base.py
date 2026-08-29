@@ -7,10 +7,10 @@ import networkx as nx
 import te.constants
 import dataclasses
 from collections import defaultdict
-from typing import List, Optional, Tuple, Set, Dict, Callable, Any
+from typing import List, Optional, Tuple, Dict, Callable, Any
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from utils.logging import as_success, as_fail, as_warning, as_info
+from utils.logging import as_fail, as_warning, as_info, log_subsection_title, str_round
 from utils.table_dataclass import TableDataclass
 from topologies.utils import get_edge_indexing
 from te.traffic_models.base import *
@@ -214,7 +214,7 @@ class TEProblemDescription:
     tm_generator: TMGenerator
 
 
-class TELP(ABC):
+class TELP[P: SolverParams](ABC):
     """
     Base class for all TE solvers.
     This receives a problem description and a set of solver
@@ -224,7 +224,7 @@ class TELP(ABC):
 
     @abstractmethod
     def __init__(self, problem_description: TEProblemDescription, 
-                 solver_params: SolverParams, **kwargs):
+                 solver_params: P, **kwargs):
         super().__init__(**kwargs)
         self._problem_description = problem_description
         self._solver_params = solver_params
@@ -274,7 +274,7 @@ class TELP(ABC):
         print(as_info(f"Number of commodities: {self.number_of_commodities}"))
 
     @property
-    def solver_params(self) -> SolverParams:
+    def solver_params(self) -> P:
         """Solver parameters"""
         return self._solver_params
 
@@ -357,7 +357,9 @@ class TELP(ABC):
         self._update_objective(tm)
         t_start = time.perf_counter()
         self._solve_for_tm(tm)
-        self._tracer.add_result("objective_trace", (self.current_objective, time.perf_counter() - t_start))
+        runtime = time.perf_counter() - t_start
+        self._tracer.add_result("objective_trace", (self.current_objective, runtime))
+        print(as_info(f"Solved in {str_round(runtime, 3)} seconds. Objective Value: {str_round(self.current_objective, 4)}"))
         if not self._problem_description.eval_params.skip_checks:
             self._check_results.append(self.check())
         self._tracer.execute_callbacks(self, SolverCallbackType.PostTMSolve)
@@ -366,7 +368,10 @@ class TELP(ABC):
         """Solve for each matrix in sequence."""
         self._tracer.execute_callbacks(self, SolverCallbackType.PreSolve)
         t_start = time.perf_counter()
-        for tm in self._tm_generator:
+        for i, tm in enumerate(self._tm_generator):
+            print(as_info(log_subsection_title(
+                f"TM {i+1}/{self._problem_description.eval_params.sequence_length}"
+            )))
             self._current_TM = tm
             self.solve_for_tm(tm)
         self._tracer.add_result("total_solve_time", time.perf_counter() - t_start)
@@ -381,7 +386,6 @@ class TELP(ABC):
         feasibility_tolerance = eval_params.feasibility_tolerance
         loop_tolerance = eval_params.loop_tolerance
         indexing = self._edge_indexing
-        print(as_info(f"Checking for loops with absolute tolerance of {loop_tolerance}"))
         witness = check_loop_free_assignment(
             assignments, graph, loop_tolerance
         )

@@ -2,8 +2,7 @@ import math
 import numpy as np
 import networkx as nx
 from typing import Optional, List, Tuple, Dict
-from utils.logging import ShortTQDMEnumerate
-from te.algorithms.array_utils.cpu_utils import cpu_array
+from array_utils.cpu.types import *
 from te.traffic_models.base import Commodity, commodity_od_iterator
 from topologies.utils import get_sparse_commodity_satisfaction_mask
 
@@ -81,7 +80,7 @@ def check_loop_free_assignment(
 
     witness = None
     edges = np.array(graph.edges(data=False))
-    for k, od_pair in ShortTQDMEnumerate(commodity_od_iterator(M), M*(M-1)):
+    for k, od_pair in enumerate(commodity_od_iterator(M)):
         source, destination = od_pair
         commodity_graph = nx.DiGraph()
         commodity_graph.add_nodes_from(graph.nodes())

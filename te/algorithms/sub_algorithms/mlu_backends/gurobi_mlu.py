@@ -4,12 +4,11 @@ from dataclasses import dataclass
 from typing import Optional, Tuple, List
 from gurobipy import GRB
 from te.algorithms.base import TEObjective
-from te.algorithms.array_utils.cpu_utils import CPUArray, cpu_array, cpu_cast_float
+from array_utils.cpu.types import *
 from utils.logging import as_info
 from .base import ControllerMLUSolver, ControllerMLUException
 from te.algorithms.statistics.helpers import record_cpu_runtime
-from te.algorithms.formulations.edge_based.centralized import make_model, optimize_or_scream
-from te.algorithms.formulations.edge_based.centralized import GurobiSolverParams
+from utils.gurobi_utils import *
 
 
 @dataclass(frozen=True)

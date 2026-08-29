@@ -1,8 +1,8 @@
 import enum
 import math
 import numpy as np
-from typing import Optional, Tuple
-from te.algorithms.array_utils.cpu_utils import CPUArray, cpu_array, cpu_zeros
+from typing import Optional
+from array_utils.cpu.types import *
 
 
 class ADMMMode(str, enum.Enum):
