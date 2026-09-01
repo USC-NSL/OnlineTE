@@ -1,39 +1,13 @@
 import te.constants
 from typing import Optional, Literal
 from dataclasses import dataclass
-from multiprocessing import cpu_count
 from te.algorithms.base import SolverParams
 from utils.logging import as_warning
 from array_utils import SINGLE_PRECISION
 
 
 from utils.gurobi_utils import GurobiSolverParams # noqa
-
-
-@dataclass(frozen=True)
-class PDLPParams(SolverParams):
-    """
-    Solver parameters for `ortools.pdlp`.
-    This is usally our preferred method for the controller backend, as 
-    updating the objective is _MUCH_ faster than Gurobi when solving QPs.
-
-    Attributes
-    ----------
-    Threads: int
-        Number of threads to use for the PDHG backend.
-    Presolve: bool
-        Invoke `ortools.glop` to do a presolve on the problem.
-        For very large problems, this is almost never worth it, and for
-        smaller ones it is rather unpredicitable.
-    ConvTol: float
-        Objective convergence tolerance.
-    FeasibilityTol: float
-        Constraint violation tolerance. 
-    """
-    Threads: int = min(cpu_count(), 8)
-    Presolve: bool = False
-    ConvTol: float = te.constants.DEFAULT_OPTIMALITY_TOLERANCE
-    FeasibilityTol: float = te.constants.DEFAULT_FEASIBILITY_TOLERANCE
+from utils.pdlp_utils import PDLPSolverParams # noqa
 
 
 @dataclass(frozen=True)

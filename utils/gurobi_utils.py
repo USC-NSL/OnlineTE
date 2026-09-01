@@ -40,6 +40,8 @@ class GurobiSolverParams(SolverParams):
     Threads: int
         Number of threads to use for Barrier/Concurrent solver. Simplex methods do
         not benefit from multiple threads.
+        We usually limit this to 8. For most of our problems, that seems to be the
+        sweet-spot.
     LogFile:
         Output log file for Gurobi.
     """
@@ -47,7 +49,7 @@ class GurobiSolverParams(SolverParams):
     Crossover: int = te.constants.DEFAULT_CROSSOVER
     NumericFocus: int = te.constants.DEFAULT_NUMERIC_FOCUS
     Presolve: int = te.constants.DEFAULT_PRESOLVE
-    Threads: int = te.constants.NUM_PROCS
+    Threads: int = min(te.constants.NUM_PROCS, 8)
     LogFile: str = te.constants.DEFAULT_GUROBI_LOG_FILE
 
 

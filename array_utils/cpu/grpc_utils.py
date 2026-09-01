@@ -1,16 +1,17 @@
 import grpc
 import struct
 import numpy as np
+import networkx as nx
 import protos.array.array_pb2 as array_messages
+import protos.graph.graph_pb2 as graph_messages
 from collections.abc import Iterator as IteratorABC
 from typing import Optional, Iterator, Union, List, Tuple, Dict, Type, Generator
-from te.algorithms.array_utils.cpu_utils import cpu_frombuffer, cpu_frombuffer_serial, cpu_csr_frombuffer, get_global_precision, CPUArray, CPUCSRArray
+from .. import get_global_precision
+from .types import *
+from .buffer_ops import *
+from .sparse.types import *
+from .sparse.buffer_ops import *
 
-
-GRPC_ARRAY_STREAM_MAX_LEN = 2**20
-
-
-# TODO: Move this file out of this package into a utility module, we'll need it in a lot of places
 
 ARRAY_TYPE_MAP: Dict[Type, int] = {
     None: 0,
@@ -169,10 +170,30 @@ async def async_rebuild_chunked_array(chunk_async_stream: grpc.aio._call.UnarySt
         return cpu_csr_frombuffer(buffer, shape, lens, dtype)
 
 
+def graph_to_serialized_message(graph: nx.DiGraph) -> graph_messages.Topology:
+    payload = graph_messages.Topology()
+    payload.node_ids.extend([n for n in graph.nodes(data=False)])
+    # TODO: Add other attributes to support here!!!
+    for u, v, data in graph.edges(data=True):
+        edge = payload.edges.add(source=u, target=v)
+        for key, val in data.items():
+            if key in {'capacity'}:
+                edge.attributes[key] = val
+    return payload
+
+
+def serialized_message_to_graph(message: graph_messages.Topology) -> nx.DiGraph:
+    graph = nx.DiGraph()
+    graph.add_nodes_from(message.node_ids)
+    for edge in message.edges:
+        graph.add_edge(edge.source, edge.target, **dict(edge.attributes))
+    return graph
+
+
 __all__ = [
-    'GRPC_ARRAY_STREAM_MAX_LEN', 'ARRAY_TYPE_MAP', 'REVERSE_ARRAY_TYPE_MAP',
-    'array_to_serialized_message', 'serialized_message_to_array',
-    'ARRAY_PREAMBLE_STRUCT_FORMAT', 'parse_array_preamble',
+    'ARRAY_TYPE_MAP', 'REVERSE_ARRAY_TYPE_MAP', 'ARRAY_PREAMBLE_STRUCT_FORMAT',
+    'array_to_serialized_message', 'serialized_message_to_array', 'parse_array_preamble',
     'chunk_big_array','rebuild_chunked_array', 'async_rebuild_chunked_array',
-    'array_list_to_serialized_message', 'serialized_message_to_array_list'
+    'array_list_to_serialized_message', 'serialized_message_to_array_list',
+    'graph_to_serialized_message', 'serialized_message_to_graph'
 ]

@@ -1,25 +1,31 @@
-import tqdm
 import numpy as np
 import networkx as nx
 
 
-def remove_all_cycles(graph: nx.DiGraph, assignments: np.ndarray):
+def remove_all_cycles(
+    graph: nx.DiGraph,
+    assignments: np.ndarray,
+    feasibility_tolerance: float = 1e-6
+):
     """
     Iteratively finds and removes all cycles from the assignment matrix A.
     Uses an explicit stack to prevent RecursionError on deep networks.
+
+    Note
+    ----
+    This does not have to be the full assignment. In fact, we usually call
+    this switch-side where they will only process a single chunk.
     """
     m = graph.number_of_nodes()
     n, K = assignments.shape
     edges = list(graph.edges)
-    # Use a small epsilon to prevent infinite loops from floating-point inaccuracies
-    EPS = 1e-9 
     
-    for k in tqdm.tqdm(range(K)):
+    for k in range(K):
         # 1. Build an active adjacency list for the current demand k
         # Stored as adj[u] = {v: edge_index} for fast lookups and edge mapping
         adj = {i: {} for i in range(m)}
         for e in range(n):
-            if assignments[e][k] > EPS:
+            if assignments[e][k] > feasibility_tolerance:
                 u, v = edges[e]
                 adj[u][v] = e
                 
@@ -81,7 +87,7 @@ def remove_all_cycles(graph: nx.DiGraph, assignments: np.ndarray):
                 assignments[e][k] -= min_flow
                 
                 # If an edge's flow drops to zero, prune it from the active subgraph
-                if assignments[e][k] <= EPS:
+                if assignments[e][k] <= feasibility_tolerance:
                     assignments[e][k] = 0.0
                     u, v = edges[e]
                     if v in adj[u]:

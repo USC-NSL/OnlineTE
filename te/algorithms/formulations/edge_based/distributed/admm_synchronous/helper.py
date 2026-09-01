@@ -46,7 +46,7 @@ def single_controller_topology_address_parser(parser: jsonargparse.ArgumentParse
                             help='Number of worker nodes')
     addr_group.add_argument('--master-addr', type=Tuple[str, int],
                             help='Controller node address')
-    addr_group.add_argument('--worker-addr', type=Tuple[Tuple[str, int]],
+    addr_group.add_argument('--worker-addr', type=List[Tuple[str, int]],
                             help='List of worker node addresses')
     addr_group.add_argument('--local', action='store_true',
                             help='Assume everything must run locally')
@@ -100,8 +100,8 @@ def spawn_distributed_synchronous_solver(
     problem: TEProblemDescription, 
     solver: DistributedMLUSolverDescription,
     is_local: bool = False
-) -> Optional[TEObjectiveTrace]:
-    def _spawn_distributed_synchronous_solver() -> Optional[TEObjectiveTrace]:
+) -> Optional[TETracer]:
+    def _spawn_distributed_synchronous_solver() -> Optional[TETracer]:
         print(as_info(
             f'Using master node communication backend `{solver.MasterBackendCLS.backend_name()}` with parameters:\n'+
             solver.MasterRPCParams.str_all()

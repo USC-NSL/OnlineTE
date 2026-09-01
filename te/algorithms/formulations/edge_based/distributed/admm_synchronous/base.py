@@ -1,7 +1,8 @@
+import networkx as nx
 from abc import abstractmethod
-from typing import Tuple, Optional, Callable, Union
+from typing import Tuple, Callable
 from ..base import CommunicationBackendBase
-from te.algorithms.array_utils.cpu_utils import CPUArray, BooleanCPUArray, CPUCSRArray, CPUCSCArray
+from array_utils.cpu.types import *
 from te.algorithms.base import SolverParams
 
 
@@ -11,14 +12,33 @@ class SynchADMMControllerBackendBase(CommunicationBackendBase):
         return True
     
     @abstractmethod
-    def initialize_worker_nodes(self, solver_params: SolverParams, basis: CPUArray, 
-                                initial_feasible_solution: Union[CPUCSRArray, CPUCSCArray, CPUArray],
-                                in_out_mask: Optional[BooleanCPUArray] = None):
-        """Initialize worker nodes with solver parameters and initial feasible solution (X_ek_0)"""
+    def initialize_worker_nodes(
+        self,
+        solver_params: SolverParams,
+        topology: nx.DiGraph
+    ):
+        """
+        The nodes need to know a few thing before they can start.
+        In particular, they need the full solver parameters and the
+        graph before they can start.
+        The worker nodes are expected to only answer this RPC when
+        all work on their side is finished. This at least includes:
+        - Reading the adjacency matrix from the graph and taking the
+          SVD to find the null-space basis.
+        - Reading the commodity mask for loop-avoidance on endpoints.
+        - Caching the pseudo-inverse basis of the adjacency matrix
+          to quickly find feasible solutions on demand updates (see
+          the note on `get_feasible_assignment` for why we have to
+          do this).
+        """
 
     @abstractmethod
-    def update_demands(self, updated_feasible_solution: CPUArray):
-        """Update the initial feasible solution (X_ek_0)"""
+    def update_demands(self, demands: CPUArray) -> CPUArray:
+        """
+        Given new demands, update all nodes so that we can restart a solve.
+        Must return the new sharing mean (the mean of the assignments) after
+        the update is done.
+        """
     
     @abstractmethod
     def get_X_ek(self) -> CPUArray:
@@ -35,10 +55,6 @@ class SynchADMMControllerBackendBase(CommunicationBackendBase):
     @abstractmethod
     def reconvene_network_updates(self, sharing_mean_1: CPUArray, sharing_mean_2: CPUArray, sharing_dual: CPUArray):
         """Finalize network updates for a single inner ADMM iteration"""
-    
-    @abstractmethod
-    def set_active_commodity_count(self, K: int):
-        """Set total number of active commodities in the network (needed for local updates)"""
 
 
 class SynchADMMWorkerBackendBase(CommunicationBackendBase):
@@ -49,25 +65,18 @@ class SynchADMMWorkerBackendBase(CommunicationBackendBase):
         return True
 
     @property
-    def set_initial_feasible_solution(self) -> Callable[[Union[CPUCSRArray, CPUCSCArray, CPUArray]], None]:
-        return self._set_initial_feasible_solution
-    @set_initial_feasible_solution.setter
-    def set_initial_feasible_solution(self, f: Callable[[Union[CPUCSRArray, CPUCSCArray, CPUArray]], None]):
-        self._set_initial_feasible_solution = f
+    def set_solver_parameters(self) -> Callable[[SolverParams, int], None]:
+        return self._set_solver_parameters
+    @set_solver_parameters.setter
+    def set_solver_parameters(self, f: Callable[[SolverParams, int], None]):
+        self._set_solver_parameters = f
 
     @property
-    def set_null_space_basis(self) -> Callable[[CPUArray], None]:
-        return self._set_null_space_basis
-    @set_null_space_basis.setter
-    def set_null_space_basis(self, f: Callable[[CPUArray], None]):
-        self._set_null_space_basis = f
-
-    @property
-    def set_commodity_in_out_mask(self) -> Callable[[CPUArray], None]:
-        return self._set_commodity_in_out_mask
-    @set_commodity_in_out_mask.setter
-    def set_commodity_in_out_mask(self, f: Callable[[CPUArray], None]):
-        self._set_commodity_in_out_mask = f
+    def set_topology(self) -> Callable[[nx.DiGraph], None]:
+        return self._set_topology
+    @set_topology.setter
+    def set_topology(self, f: Callable[[nx.DiGraph], None]):
+        self._set_topology = f
     
     @property
     def do_inner_loop_update(self) -> Callable[[int], Tuple[int, CPUArray]]:
@@ -75,13 +84,6 @@ class SynchADMMWorkerBackendBase(CommunicationBackendBase):
     @do_inner_loop_update.setter
     def do_inner_loop_update(self, f: Callable[[int], Tuple[int, CPUArray]]):
         self._do_inner_loop_update = f
-
-    @property
-    def set_active_commodity_count(self) -> Callable[[int], None]:
-        return self._set_active_commodity_count
-    @set_active_commodity_count.setter
-    def set_active_commodity_count(self, f: Callable[[int], None]):
-        self._set_active_commodity_count = f
     
     @property
     def update_cached_values(self) -> Callable[[CPUArray, CPUArray, CPUArray], None]:
@@ -105,8 +107,8 @@ class SynchADMMWorkerBackendBase(CommunicationBackendBase):
         self._report_aggregate = f
 
     @property
-    def set_solver_parameters(self) -> Callable[[SolverParams], None]:
-        return self._set_solver_parameters
-    @set_solver_parameters.setter
-    def set_solver_parameters(self, f: Callable[[SolverParams], None]):
-        self._set_solver_parameters = f
+    def update_demands(self) -> Callable[[CPUArray], CPUArray]:
+        return self._update_demands
+    @update_demands.setter
+    def update_demands(self, f: Callable[[CPUArray], CPUArray]):
+        self._update_demands = f

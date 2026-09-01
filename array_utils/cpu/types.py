@@ -1,5 +1,5 @@
 import numpy as np
-from . import _CPU_DTYPE
+from .. import get_global_precision
 from .sparse.types import *
 from typing import Callable, Tuple, Any, Union
 
@@ -32,9 +32,9 @@ with this, since if we mistakenly cast it to float, things still work fine but s
 everything takes forever and eats a lot of memory.
 """
 
-cpu_zeros: Callable[[Tuple[int]], CPUArray] = lambda shape: np.zeros(shape=shape, dtype=_CPU_DTYPE)
+cpu_zeros: Callable[[Tuple[int]], CPUArray] = lambda shape: np.zeros(shape=shape, dtype=get_global_precision())
 """Wrapper for `np.zeros`. Enforces the global data type"""
-cpu_fill: Callable[[Tuple[int], Any], CPUArray] = lambda shape, fill: np.full(shape=shape, fill_value=fill, dtype=_CPU_DTYPE)
+cpu_fill: Callable[[Tuple[int], Any], CPUArray] = lambda shape, fill: np.full(shape=shape, fill_value=fill, dtype=get_global_precision())
 """Wrapper for `np.full`. Enforces the global data type"""
 
 
@@ -48,7 +48,7 @@ def is_float_array(thing: CPUArray) -> bool:
     return dt == np.float16 or dt == np.float32 or dt == np.float64
 
 
-cpu_cast_float: Callable[[Any], Any] = lambda val: _CPU_DTYPE(val)
+cpu_cast_float: Callable[[Any], Any] = lambda val: get_global_precision()(val)
 """Cast a float value to the current global CPU data type"""
 
 
@@ -59,10 +59,10 @@ def cpu_array(thing: Any) -> Union[CPUArray, CPUCOOArray, CPUCSRArray]:
     """
     if isinstance(thing, CPUArray):
         if is_float_array(thing):
-            return np.array(thing, dtype=_CPU_DTYPE)
+            return np.array(thing, dtype=get_global_precision())
         return thing.copy()
     elif isinstance(thing, (list, tuple)):
-        return np.array(thing, dtype=_CPU_DTYPE)
+        return np.array(thing, dtype=get_global_precision())
     elif isinstance(thing, (CPUCOOArray, CPUCSRArray)):
         return thing.copy()
     raise ValueError(f'Unknown matrix type: {type(thing)}')

@@ -11,10 +11,11 @@ from te.algorithms.sub_algorithms.simplex_projection import project_onto_probabi
 from te.path_providers.sparse_ops import path_based_projection_nnz, path_based_transpose_vector_product_nnz
 
 
-def do_memory_efficient_pgd(lambda_block: CPUArray, x_block: CPUArray, nnt: CPUArray,
-                            bias: CPUArray, x_block_0: CPUArray,
-                            step_size: float, n_iter: int, mask: CPUArray, 
-                            epsilon: float) -> CPUArray:
+def do_memory_efficient_pgd(
+    lambda_block: CPUArray, x_block: CPUArray, nnt: CPUArray,
+    bias: CPUArray, x_block_0: CPUArray,
+    step_size: float, n_iter: int, mask: CPUArray
+) -> CPUArray:
     """
     A variant of our plain PGD algorithm that does the bare minimum to handle
     the sharing problem.
@@ -23,14 +24,17 @@ def do_memory_efficient_pgd(lambda_block: CPUArray, x_block: CPUArray, nnt: CPUA
     """
     for _ in range(n_iter):
         # TODO: This can be optimized slightly if `x_block_0` is a least-squares solution ...
-        lambda_block -= step_size * (nnt @ (lambda_block - epsilon + x_block - np.expand_dims(bias, axis=1)) + x_block_0)
-        np.maximum(lambda_block, 0, out=lambda_block, where=~mask)
+        lambda_block -= step_size * (nnt @ (lambda_block + x_block - np.expand_dims(bias, axis=1)) + x_block_0)
+        # np.maximum(lambda_block, 0, out=lambda_block, where=~mask)
+        np.clip(lambda_block, a_min=0, a_max=None, out=lambda_block)
     return lambda_block
 
 
-def do_dual_pgd(lambda_block: CPUArray, lambda_sum_block: CPUArray,
-                nnt: CPUArray, bias: CPUArray, x_block_0: CPUArray,
-                step_size: float, n_iter: int, mask: CPUArray) -> CPUArray:
+def do_dual_pgd(
+    lambda_block: CPUArray, lambda_sum_block: CPUArray,
+    nnt: CPUArray, bias: CPUArray, x_block_0: CPUArray,
+    step_size: float, n_iter: int, mask: CPUArray
+) -> CPUArray:
     """
     A variant of our plain PGD algorithm that only uses dual variables.
     This gets away with one giant matrix multiplication for updating the primal
@@ -44,24 +48,38 @@ def do_dual_pgd(lambda_block: CPUArray, lambda_sum_block: CPUArray,
     initial feasible assignment.
     """
     for _ in range(n_iter):
-        lambda_block -= step_size * (nnt @ (lambda_block + lambda_sum_block - np.expand_dims(bias, axis=1)) + x_block_0)
+        lambda_block -= step_size * (
+            nnt @ (lambda_block + lambda_sum_block - np.expand_dims(bias, axis=1)) +
+            x_block_0
+        )
         np.maximum(lambda_block, 0, out=lambda_block, where=~mask)
     return lambda_block
 
 
-def do_path_based_pgd(y_block: CPUArray, y_block_old: CPUArray, alpha_rows: NumbaList, alpha_cols: NumbaList,
-                      sharing_bias: CPUArray, beta_block: CPUArray, demand_block: CPUArray, num_edges: int, 
-                      num_paths: int, step_sizes: Union[float, np.ndarray], n_iter: int,
-                      capacities: Optional[CPUArray] = None) -> CPUArray:
+def do_path_based_pgd(
+    y_block: CPUArray, y_block_old: CPUArray, alpha_rows: NumbaList, alpha_cols: NumbaList,
+    sharing_bias: CPUArray, beta_block: CPUArray, demand_block: CPUArray, num_edges: int, 
+    num_paths: int, step_sizes: Union[float, np.ndarray], n_iter: int,
+    capacities: Optional[CPUArray] = None
+) -> CPUArray:
     for _ in range(n_iter):
-        grad_block = path_based_projection_nnz(y_block - y_block_old, alpha_rows, alpha_cols, num_edges, demand_block, capacities) + \
-                     path_based_transpose_vector_product_nnz(sharing_bias, alpha_rows, alpha_cols, num_paths, demand_block, capacities)
+        grad_block = \
+            path_based_projection_nnz(
+                y_block - y_block_old, alpha_rows, alpha_cols,
+                num_edges, demand_block, capacities
+            ) + \
+            path_based_transpose_vector_product_nnz(
+                sharing_bias, alpha_rows, alpha_cols,
+                num_paths, demand_block, capacities
+            )
         y_block = project_onto_probability_simplex(y_block - step_sizes * grad_block, beta_block)
     return y_block
 
 
-def do_path_based_maxflow_pgd(y_block: CPUArray, A_block: CPUArray, C_block: CPUArray, D_block: CPUArray,
-                              beta_block: CPUArray, step_size: float, n_iter: int, eta: float) -> CPUArray:
+def do_path_based_maxflow_pgd(
+    y_block: CPUArray, A_block: CPUArray, C_block: CPUArray, D_block: CPUArray,
+    beta_block: CPUArray, step_size: float, n_iter: int, eta: float
+) -> CPUArray:
     for _ in range(n_iter):
         grad_block = eta * (np.einsum('kij,jk->ik', A_block, y_block) - C_block) - D_block[np.newaxis, :]
         y_block = project_onto_probability_orthant(y_block - step_size * grad_block, beta_block)

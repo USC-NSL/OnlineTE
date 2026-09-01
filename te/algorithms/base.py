@@ -116,6 +116,8 @@ class TECheckResult:
         A list of 5-tuples, containing commodity index, source and
         destination followed by the routed demand and declared demand
         value.
+    total_routed_flow: float
+        Total routed flow in this solution.
     density: float
         Number of non-zero entries in the edge-based assignment.
     """
@@ -123,6 +125,7 @@ class TECheckResult:
     congestions: List[Tuple[int, int, int, float, float]]
     leaks: List[Tuple[int, int, int, float]]
     satisfaction: Optional[Tuple[int, int, int, float, float]]
+    # total_routed_flow: float
     density: float
 
 
@@ -241,6 +244,10 @@ class TELP[P: SolverParams](ABC):
         ])
 
     @property
+    def objective(self) -> TEObjective:
+        return self._problem_description.objective
+
+    @property
     def number_of_edges(self) -> int:
         return self._graph.number_of_edges()
 
@@ -272,6 +279,9 @@ class TELP[P: SolverParams](ABC):
         print(as_info(f"Graph Size: {self.number_of_nodes} nodes |"
                       f" {self.number_of_edges} edges"))
         print(as_info(f"Number of commodities: {self.number_of_commodities}"))
+        print(as_info(f"Capacity:\n\tmin: {str_round(np.min(self._capacities), 2)}"
+                      f"\tmed: {str_round(np.median(self._capacities), 2)}"
+                      f"\tmax: {str_round(np.max(self._capacities), 2)}"))
 
     @property
     def solver_params(self) -> P:
@@ -355,6 +365,7 @@ class TELP[P: SolverParams](ABC):
         self._tracer.execute_callbacks(self, SolverCallbackType.PreTMSolve)
         self._update_constraits(tm)
         self._update_objective(tm)
+        print(as_info(f"Total demand: {str_round(np.sum(tm), 1)}"))
         t_start = time.perf_counter()
         self._solve_for_tm(tm)
         runtime = time.perf_counter() - t_start
@@ -399,17 +410,23 @@ class TELP[P: SolverParams](ABC):
             assignments, graph, feasibility_tolerance
         )
         if self._problem_description.objective == TEObjective.MLU:
+            # satisfaction, total_routed_flow = check_flow_satisfaction(
             satisfaction = check_flow_satisfaction(
                 assignments, graph, commodity_list,
                 feasibility_tolerance, indexing
             )
         else:
             satisfaction = None
+            # _, total_routed_flow = check_flow_satisfaction(
+            #     assignments, graph, commodity_list,
+            #     feasibility_tolerance, indexing
+            # )
         return TECheckResult(
             loop_witness=witness,
             congestions=congestions,
             leaks=leaks,
             satisfaction=satisfaction,
+            # total_routed_flow=total_routed_flow,
             density=np.count_nonzero(
                 np.clip(assignments, a_min=0, a_max=None)
             ) / assignments.size

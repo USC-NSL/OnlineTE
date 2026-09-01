@@ -10,11 +10,10 @@ except ModuleNotFoundError:
     cp.get_array_module = lambda x: np
 import networkx as nx
 from scipy.linalg import null_space
-from typing import Dict, Tuple, Union, List, Optional
+from typing import Dict, Tuple, List, Optional
 from topologies import TOPOLOGIES_PATH, TOPOLOGY_ZOO_DIR_NAME, TOPOLOGY_ZOO_INDEX_FILE_NAME
-from te.traffic_models.base import Commodity, commodity_od_iterator
+from te.traffic_models.base import commodity_od_iterator, commodity_id_to_od
 from utils.logging import as_warning
-from networkx.readwrite import json_graph
 
 
 TOPOLGOY_ZOO_PATH = os.path.join(TOPOLOGIES_PATH, TOPOLOGY_ZOO_DIR_NAME)
@@ -288,7 +287,26 @@ def set_random_capacities(graph: nx.DiGraph, topo_seed: Optional[int] = None):
             edges.add((v, u))
 
 
-def get_graph_M_matrix(graph: nx.DiGraph) -> np.ndarray:
+def get_graph_M_matrix(
+    graph: nx.DiGraph,
+    capacities: Optional[np.ndarray] = None
+) -> np.ndarray:
+    """
+    Returns the node-edge incidence matrix (also called simply the topology
+    adjacency matrix sometimes).
+    For a graph with `m` nodes and `n` edges, this matrix is `m x n` and for
+    each node `v` and edge `e`, we have that:
+
+    - `M[v, e] = +1` iff edge `e` _leaves_ `v`
+    - `M[v, w] = -1` iff edge `e` _enters_ `v`
+    
+    All other entries are zero.
+
+    Note
+    ----
+    Sometimes, we scale the problem by capacity (especially when using ADMM).
+    In such a case, each column is **multiplied** by capacity.
+    """
     assert isinstance(graph, nx.DiGraph)
 
     m = len(graph.nodes())
@@ -298,7 +316,9 @@ def get_graph_M_matrix(graph: nx.DiGraph) -> np.ndarray:
     for i, (s, d) in enumerate(graph.edges(data=False)):
         M[s, i] = +1
         M[d, i] = -1
-    
+
+    if capacities is not None:
+        return M * capacities
     return M
 
 
@@ -306,6 +326,14 @@ def get_adjacency_null_space(M_matrix: np.ndarray) -> np.ndarray:
     assert len(M_matrix.shape) == 2
 
     return null_space(M_matrix)
+
+
+def get_graph_null_space_basis(graph: nx.DiGraph, edge_weights: Optional[np.ndarray]) -> np.ndarray:
+    if edge_weights is not None:
+        assert edge_weights.ndim == 1
+        assert len(edge_weights) == graph.number_of_edges()
+    
+    return get_adjacency_null_space(get_graph_M_matrix(graph, edge_weights))
 
 
 def get_sparse_null_space(M_matrix: np.ndarray) -> np.ndarray:
@@ -321,7 +349,9 @@ def get_sparse_null_space(M_matrix: np.ndarray) -> np.ndarray:
 
 def get_commodity_in_out_mask(
     graph: nx.DiGraph,
-    edge_indexing: Dict[Tuple[int, int], int]
+    edge_indexing: Dict[Tuple[int, int], int],
+    commodity_id_start: int = 0,
+    commodity_id_end_exclusive: Optional[int] = None
 ) -> np.ndarray:
     """
     Returns a Boolean valued mask of size `n x k` where entry `ek` is `True`
@@ -332,13 +362,21 @@ def get_commodity_in_out_mask(
     may have created loops between the source and the destination.
     """
     M = graph.number_of_nodes()
-    mask = np.zeros(dtype=bool, shape=(graph.number_of_edges(), M*(M-1)))
-    for k, od_pair in enumerate(commodity_od_iterator(M)):
-        source, destination = od_pair
+    if commodity_id_end_exclusive is None:
+        commodity_id_end_exclusive = M*(M-1)
+    mask = np.zeros(
+        dtype=bool,
+        shape=(
+            graph.number_of_edges(),
+            commodity_id_end_exclusive - commodity_id_start
+        )
+    )
+    for k in range(commodity_id_start, commodity_id_end_exclusive):
+        source, destination = commodity_id_to_od(k, M)
         for edge in graph.out_edges(nbunch=destination, data=False):
-            mask[edge_indexing[edge], k] = True
+            mask[edge_indexing[edge], k - commodity_id_start] = True
         for edge in graph.in_edges(nbunch=source, data=False):
-            mask[edge_indexing[edge], k] = True
+            mask[edge_indexing[edge], k - commodity_id_start] = True
     return mask
 
 

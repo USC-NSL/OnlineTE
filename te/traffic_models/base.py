@@ -98,7 +98,9 @@ def commodity_od_iterator(num_nodes: int) -> Iterator[Tuple[int, int]]:
 
 def commodity_id_to_od(commodity_id: int, num_nodes: int) -> Tuple[int, int]:
     """Given commodity ID and number of nodes, returns the source and destination IDs"""
-    return commodity_id // (num_nodes - 1), commodity_id % (num_nodes - 1)
+    source = commodity_id // (num_nodes - 1)
+    offset = commodity_id % (num_nodes - 1)
+    return source, offset if offset < source else offset + 1
 
 
 def traffic_to_commodity(tm: np.ndarray) -> List[Commodity]:
@@ -122,6 +124,21 @@ def traffic_to_list_of_tuples(tm: np.ndarray) -> List[Tuple[float, int, int]]:
 def traffic_to_demands(tm: np.ndarray) -> np.ndarray:
     """Convert traffic matrix into a 1D array of demands"""
     return tm[~np.eye(tm.shape[0], dtype=bool)]
+
+
+def commodity_source_destination_lists(
+    num_nodes: int,
+    inclusive_start: Optional[int] = 0,
+    exclusive_end: Optional[int] = None
+) -> Tuple[Tuple[int], Tuple[int]]:
+    """Given start and end commodity IDs, returns source and destination lists"""
+    if exclusive_end is None:
+        exclusive_end = num_nodes * (num_nodes - 1)
+    assert inclusive_start < exclusive_end
+    return tuple(zip(*map(
+        lambda idx: commodity_id_to_od(idx, num_nodes),
+        range(inclusive_start, exclusive_end)
+    )))
 
 
 def edge_based_to_commodities(

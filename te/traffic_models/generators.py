@@ -188,7 +188,7 @@ class FilebackedTMGeneratorParams(TMGeneratorParams):
     """
     paths: List[str] = field(default_factory=list)
     scale: Optional[float] = 1.0
-    loader: Callable[[BufferedReader], np.ndarray] = pickle.load
+    loader: Callable[[BufferedReader], np.ndarray] = field(default_factory=lambda: pickle.load, metadata={'help': argparse.SUPPRESS})
     _type: ClassVar[str] = 'file-backed'
 
     def __post_init__(self):

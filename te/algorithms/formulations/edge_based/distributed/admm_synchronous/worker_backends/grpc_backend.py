@@ -1,25 +1,27 @@
 import grpc
-import protos.distributed_lp.distributed_lp_pb2 as distributed_lp_messages
-from typing import Optional, Iterator
+import te.constants
+from typing import Optional
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
 from ..base import SynchADMMWorkerBackendBase
 from .. import SynchADMMSolverParams
 from ...base import RPCParams
-from ...utils import *
+from array_utils.cpu.grpc_utils import *
 
 import protos.array.array_pb2 as array_messages
-from protos.distributed_lp.distributed_lp_pb2_grpc import DistributedADMMSolverServicer, add_DistributedADMMSolverServicer_to_server
+import protos.graph.graph_pb2 as graph_messages
+import protos.distributed_lp.distributed_lp_pb2 as distributed_lp_messages
+from protos.distributed_lp.distributed_lp_pb2_grpc import (
+    DistributedADMMSolverServicer, add_DistributedADMMSolverServicer_to_server)
 from google.protobuf.empty_pb2 import Empty
+from google.protobuf.json_format import MessageToDict
 
 
-@dataclass
+@dataclass(frozen=True)
 class gRPCWorkerBackendParams(RPCParams):
     NumThreads: int = 1
     """Number of threads in the gRPC server pool"""
-    
-    def __post_init__(self):
-        self.left_column_share = 0.2
+    _left_column_share = 0.2
 
 
 class gRPCWorkerBackend(SynchADMMWorkerBackendBase):
@@ -38,6 +40,10 @@ class gRPCWorkerBackend(SynchADMMWorkerBackendBase):
     @property
     def worker_id(self) -> int:
         return self._rpc_params.PeerIndex
+
+    @property
+    def number_of_peers(self):
+        return super().number_of_peers
 
     def _initialize_listener(self):
         assert self._server is None and self._listener is None
@@ -79,17 +85,17 @@ class NetworkWorkerNodeListener(DistributedADMMSolverServicer):
         self._backend = backend
         self._id = backend.worker_id
     
-    def SetInitialFeasibleSolution(self, request_iterator: Iterator[array_messages.Chunk], context):
-        self._backend.set_initial_feasible_solution(rebuild_chunked_array(request_iterator))
+    def SetTopology(self, request: graph_messages.Topology, context):
+        self._backend.set_topology(
+            serialized_message_to_graph(request)
+        )
         return Empty()
 
-    def SetNullSpaceBasis(self, request_iterator: Iterator[array_messages.Chunk], context):
-        self._backend.set_null_space_basis(rebuild_chunked_array(request_iterator))
-        return Empty()
-    
-    def SetCommodityInOutMask(self, request_iterator: Iterator[array_messages.Chunk], context):
-        self._backend.set_commodity_in_out_mask(rebuild_chunked_array(request_iterator))
-        return Empty()
+    def SetDemands(self, request: array_messages.Chunk, context):
+        X_bar = self._backend.update_demands(
+            serialized_message_to_array(request)
+        )
+        return array_to_serialized_message(X_bar)
     
     def DoNetworkUpdate(self, request: distributed_lp_messages.NetworkUpdateRequest, context):
         runtime, means = self._backend.do_inner_loop_update(request.epoch)
@@ -104,7 +110,7 @@ class NetworkWorkerNodeListener(DistributedADMMSolverServicer):
         return Empty()
     
     def RequestChunk(self, request, context):
-        return chunk_big_array(self._backend.report_chunk(), GRPC_ARRAY_STREAM_MAX_LEN)
+        return chunk_big_array(self._backend.report_chunk(), te.constants.GRPC_ARRAY_STREAM_MAX_LEN)
     
     def RequestAggregate(self, request, context):
         return array_to_serialized_message(self._backend.report_aggregate())
@@ -113,19 +119,12 @@ class NetworkWorkerNodeListener(DistributedADMMSolverServicer):
         return distributed_lp_messages.State(ready=self._backend.is_alive)
     
     def SetSolverParameters(self, request: distributed_lp_messages.SolverParameters, context):
-        new_params = SynchADMMSolverParams()
-        for field in new_params.child_fields.keys():
-            if request.HasField(field):
-                setattr(new_params, field, getattr(request, field))
-            else:
-                setattr(new_params, field, None)
-        self._backend.set_solver_parameters(new_params)
+        fields = MessageToDict(request)
+        num_workers = fields.pop('NumWorkers')
+        new_params = SynchADMMSolverParams(**fields)
+        self._backend.set_solver_parameters(new_params, num_workers)
         return Empty()
     
     def Close(self, request, context):
         self._backend.close()
-        return Empty()
-    
-    def SetActiveCommodityCount(self, request: distributed_lp_messages.ActiveCommodityCount, context):
-        self._backend.set_active_commodity_count(request.TotalNumberOfCommodities)
         return Empty()

@@ -6,6 +6,7 @@ from te.algorithms.formulations.edge_based.distributed.admm_synchronous.helper i
 if __name__ == '__main__':
     # Problem description parser
     parser = te_problem_description_parser('Edge-Based Distributed TE')
+
     # Solver params parsers
     solver_subparser = parser.add_subcommands(dest='solver', help='The solver to use', required=True)
     solver_subparser.add_subcommand("synch", distributed_synchronous_admm_parser(), help='Options for the synchronous solver')

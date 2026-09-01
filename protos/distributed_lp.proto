@@ -1,21 +1,18 @@
 syntax = "proto3";
 import "google/protobuf/empty.proto";
 import "array.proto";
+import "graph.proto";
 
 
 service DistributedADMMSolver {
-    rpc SetInitialFeasibleSolution(stream Chunk) returns (google.protobuf.Empty) {}
-    rpc SetNullSpaceBasis(stream Chunk) returns (google.protobuf.Empty) {}
-    rpc SetCommodityInOutMask(stream Chunk) returns (google.protobuf.Empty) {}
+    rpc SetTopology(Topology) returns (google.protobuf.Empty) {}
     rpc DoNetworkUpdate(NetworkUpdateRequest) returns (NetworkUpdateResponse) {}
-    rpc ResetInnerDualVariable(google.protobuf.Empty) returns (google.protobuf.Empty) {}
     rpc UpdateWorkerNode(UpdateMessage) returns (google.protobuf.Empty) {}
-    rpc UpdateMaxFlowWorkerNode(UpdateMessage) returns (google.protobuf.Empty) {}
+    rpc SetDemands(SerializedNumpyArrayMessage) returns (SerializedNumpyArrayMessage) {}
     rpc RequestChunk(google.protobuf.Empty) returns (stream Chunk) {}
     rpc RequestAggregate(google.protobuf.Empty) returns (SerializedNumpyArrayMessage) {}
     rpc QueryState(google.protobuf.Empty) returns (State) {}
     rpc SetSolverParameters(SolverParameters) returns (google.protobuf.Empty) {}
-    rpc SetActiveCommodityCount(ActiveCommodityCount) returns (google.protobuf.Empty) {}
     rpc Close(google.protobuf.Empty) returns (google.protobuf.Empty) {}
 }
 
@@ -48,13 +45,7 @@ message SolverParameters {
     optional float Gamma = 5;
     optional float Beta = 6;
     optional int32 SwitchIterations = 7;
-    optional float ConvTol = 8;
-    optional string Precision = 9;
-    optional int32 TMSeed = 10;
-    optional int32 NumWorkers = 11;
-    optional string X0Type = 12;
-}
-
-message ActiveCommodityCount {
-    int32 TotalNumberOfCommodities = 1;
+    optional string Precision = 8;
+    optional bool ScaleWithCapacity = 9;
+    optional int32 NumWorkers = 10;
 }

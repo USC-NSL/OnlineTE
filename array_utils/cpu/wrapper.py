@@ -1,7 +1,7 @@
 import numpy as np
+from .. import get_global_precision
 from .types import *
 from .sparse.types import *
-from . import _CPU_DTYPE
 from numpy.typing import DTypeLike
 from typing import Any, Callable, Tuple, Optional
 
@@ -26,7 +26,7 @@ cpu_bool_zeros: Callable[[Tuple[int]], BooleanCPUArray] = lambda shape: np.zeros
 def cpu_mmap(path: str, shape: Tuple[int], mode: str, dtype: Optional[DTypeLike] = None):
     """Alias for MMAP"""
     if dtype is None:
-        return np.lib.format.open_memmap(shape=shape, filename=path, mode=mode, dtype=_CPU_DTYPE)
+        return np.lib.format.open_memmap(shape=shape, filename=path, mode=mode, dtype=get_global_precision())
     else:
         return np.lib.format.open_memmap(shape=shape, filename=path, mode=mode, dtype=dtype)
 

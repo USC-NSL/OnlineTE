@@ -4,12 +4,10 @@ from te.algorithms.base import SolverParams
 from .base import DistributedSolverNodeParams, RPCParams, DistributedSolverNodeBase, CommunicationBackendBase
 
 
-@dataclass
+@dataclass(frozen=True)
 class PrettyAddressList(SolverParams):
     Addresses: Tuple[Tuple[str, int]]
-    
-    def __post_init__(self):
-        self._left_column_share = 0.2
+    _left_column_share = 0.2
 
 
 __all__ = [

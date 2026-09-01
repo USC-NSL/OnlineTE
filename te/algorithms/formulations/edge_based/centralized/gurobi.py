@@ -7,6 +7,8 @@ from te.algorithms.base import *
 from te.traffic_models.base import *
 from utils.logging import as_info, ShortTQDMEnumerate, ShortTQDM
 from utils.gurobi_utils import *
+from te.algorithms.objective_evaluators import get_total_routed_flow
+from topologies.utils import get_graph_M_matrix
 
 
 class GurobiTE(TELP[GurobiSolverParams]):
@@ -23,7 +25,6 @@ class GurobiTE(TELP[GurobiSolverParams]):
         self._objective: Optional[gurobipy.LinExpr] = None
         self._demand_constraints: Optional[List[Tuple[gurobipy.Constr, gurobipy.Constr]]] = None
         self._capacity_constraints: Optional[gurobipy.tupledict] = None
-        self._X_ek: Optional[np.ndarray] = None
 
         self._demand_objective: Optional[gurobipy.LinExpr] = None
         self._regularizer_objective: Optional[gurobipy.LinExpr] = None
@@ -45,6 +46,7 @@ class GurobiTE(TELP[GurobiSolverParams]):
             for e in range(N):
                 X_EK[e, k] = FLOWS[(e, k)].X
         self._X_ek = X_EK
+        print(f"Total routed flow: {get_total_routed_flow(self._X_ek, get_graph_M_matrix(self._graph))}")
     
     def _make_variables(self):
         assert self._model is None and self._flows is None
@@ -76,7 +78,7 @@ class GurobiTE(TELP[GurobiSolverParams]):
         print(as_info("Adding commodity assignment variables"))
         self._flows = MODEL.addVars(N, K, lb=0.0, vtype=GRB.CONTINUOUS, name='X')
         # (MLU Only) Link utilization upper bound
-        if self._problem_description.objective == TEObjective.MLU:
+        if self.objective == TEObjective.MLU:
             self._utility = MODEL.addVar(lb=0.0, vtype=GRB.CONTINUOUS, name='U')
     
     def _add_constraints(self):
@@ -98,10 +100,11 @@ class GurobiTE(TELP[GurobiSolverParams]):
             total_flow = gurobipy.LinExpr()
             for k in range(K):
                 total_flow.addTerms(1, FLOWS[(e, k)])
-            if self._problem_description.objective == TEObjective.MLU:
-                capacity_constraints.append(MODEL.addConstr(total_flow <= self._utility * c_e))
-            else:
-                capacity_constraints.append(MODEL.addConstr(total_flow <= c_e))
+            match self.objective:
+                case TEObjective.MLU:
+                    capacity_constraints.append(MODEL.addConstr(total_flow <= self._utility * c_e))
+                case _ :
+                    capacity_constraints.append(MODEL.addConstr(total_flow <= c_e))
         self._capacity_constraints = capacity_constraints
 
         """
@@ -153,24 +156,21 @@ class GurobiTE(TELP[GurobiSolverParams]):
             for v in GRAPH.nodes():
                 if v == SOURCE:
                     # Demand constraint from source
-                    if self._problem_description.objective == TEObjective.MLU:
-                        source_constraint = MODEL.addConstr(flow_out[v] - flow_in[v] == DEMAND)
-                    elif self._problem_description.objective == TEObjective.MAX_FLOW:
-                        source_constraint = MODEL.addConstr(flow_out[v] - flow_in[v] <= DEMAND)
-                    else:
-                        raise NotImplementedError
-                    
-                    # Update objective for non-MLU case
-                    if self._problem_description.objective != TEObjective.MLU:
-                        demand_objective.add(flow_out[v], -1)
+                    match self.objective:
+                        case TEObjective.MLU:
+                            source_constraint = MODEL.addConstr(flow_out[v] - flow_in[v] == DEMAND)
+                        case TEObjective.MAX_FLOW:
+                            source_constraint = MODEL.addConstr(flow_out[v] - flow_in[v] <= DEMAND)
+                            demand_objective.add(flow_out[v], -1)
+                        case _ : raise ValueError
                 elif v == DESTINATION:
                     # Demand constraint in destination
-                    if self._problem_description.objective == TEObjective.MLU:
-                        destination_constraint = MODEL.addConstr(flow_in[v] - flow_out[v] == DEMAND)
-                    elif self._problem_description.objective == TEObjective.MAX_FLOW:
-                        destination_constraint = MODEL.addConstr(flow_in[v] - flow_out[v] <= DEMAND)
-                    else:
-                        raise NotImplementedError
+                    match self.objective:
+                        case TEObjective.MLU:
+                            destination_constraint = MODEL.addConstr(flow_in[v] - flow_out[v] == DEMAND)
+                        case TEObjective.MAX_FLOW:
+                            destination_constraint = MODEL.addConstr(flow_in[v] - flow_out[v] <= DEMAND)
+                        case _ : raise ValueError
                 else:
                     # Flow conservation in transit
                     MODEL.addConstr(flow_out[v] == flow_in[v])
@@ -194,17 +194,16 @@ class GurobiTE(TELP[GurobiSolverParams]):
             self._objective is None
         
         MODEL = self._model
-
-        if self._problem_description.objective == TEObjective.MLU:
-            self._objective = gurobipy.LinExpr(1.0, self._utility)
-            MODEL.setObjectiveN(self._objective, index=0, priority=10, name='MLU')
-            MODEL.setObjectiveN(self._regularizer_objective, index=1, priority=1, name='Loop')
-        elif self._problem_description.objective == TEObjective.MAX_FLOW:
-            self._objective = self._demand_objective
-            MODEL.setObjectiveN(self._objective, index=0, priority=10, name='MaxFlow')
-            MODEL.setObjectiveN(self._regularizer_objective, index=1, priority=1, name='Loop')
-        else:
-            raise ValueError
+        match self.objective:
+            case TEObjective.MLU:
+                self._objective = gurobipy.LinExpr(1.0, self._utility)
+                MODEL.setObjectiveN(self._objective, index=0, priority=10, name='MLU')
+                # MODEL.setObjectiveN(self._regularizer_objective, index=1, priority=1, name='Loop')
+            case TEObjective.MAX_FLOW:
+                self._objective = self._demand_objective
+                MODEL.setObjectiveN(self._objective, index=0, priority=10, name='MaxFlow')
+                # MODEL.setObjectiveN(self._regularizer_objective, index=1, priority=1, name='Loop')
+            case _ : raise ValueError
     
     def close(self):
         self._model.close()

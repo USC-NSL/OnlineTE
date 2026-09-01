@@ -1,17 +1,12 @@
 import jsonargparse
-import te.constants
 from typing import Optional, Literal
 from dataclasses import dataclass
 from te.algorithms.base import SolverParams
-from te.algorithms.array_utils import SINGLE_PRECISION
-from te.algorithms.sub_algorithms.feasible_assignment import InitialSolutionType
+from array_utils import SINGLE_PRECISION
 from utils.logging import as_warning
 
-import warnings
-warnings.filterwarnings("error")
-"""This is mostly to catch overflow, they can be devistating!"""
 
-@dataclass
+@dataclass(frozen=True)
 class SynchADMMSolverParams(SolverParams):
     OuterLoopRounds: Optional[int] = 100
     """Number of outer loop iterations"""
@@ -33,17 +28,12 @@ class SynchADMMSolverParams(SolverParams):
     """
     SwitchIterations: int = 2
     """Number of iterations for each switch-level problem"""
-    ConvTol: float = 1e-2
-    """ADMM convergence tolerance"""
     Precision: Literal['double', 'single', 'half'] = SINGLE_PRECISION
     """Floating point operation precision"""
-    TMSeed: int = te.constants.DEFAULT_SEED
-    """Traffic matrix RNG seed"""
-    X0Type: InitialSolutionType = InitialSolutionType.PSEUDO_INVERSE
-    """Initial feasible solution type"""
+    ScaleWithCapacity: bool = False
+    """Scale everything with link capacities"""
 
     def __post_init__(self):
-        self._left_column_share = 0.5
         if self.Beta is not None:
             assert self.Beta > 0, "L1 penalty coefficient must be strictly greater than 0"
         if self.Rho > self.Eta:

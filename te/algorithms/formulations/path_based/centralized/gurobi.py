@@ -82,7 +82,7 @@ class GurobiPathBasedTE(TELP[GurobiPathBasedSolverParams]):
 
         print(as_info("Adding tunnel assignment variables"))
         self._Y_tk = MODEL.addVars(T, K, lb=0.0, vtype=GRB.CONTINUOUS, name='Y')
-        if self._problem_description.objective == TEObjective.MLU:
+        if self.objective == TEObjective.MLU:
             self._utility = MODEL.addVar(lb=0.0, vtype=GRB.CONTINUOUS, name='U')
     
     def _add_constraints(self):
@@ -108,16 +108,17 @@ class GurobiPathBasedTE(TELP[GurobiPathBasedSolverParams]):
                 t = cols[i]
                 total_flows[e].addTerms(1, Y_TK[(t, k)])
 
-        if self._problem_description.objective == TEObjective.MLU:
-            self._capacity_constraints = [
-                MODEL.addConstr(total_flow <= self._utility * CAPS[e]) \
-                    for e, total_flow in enumerate(total_flows)
-            ]
-        else:
-            self._capacity_constraints = [
-                MODEL.addConstr(total_flow <= CAPS[e]) \
-                    for e, total_flow in enumerate(total_flows)
-            ]
+        match self.objective:
+            case TEObjective.MLU:
+                self._capacity_constraints = [
+                    MODEL.addConstr(total_flow <= self._utility * CAPS[e]) \
+                        for e, total_flow in enumerate(total_flows)
+                ]
+            case _ :
+                self._capacity_constraints = [
+                    MODEL.addConstr(total_flow <= CAPS[e]) \
+                        for e, total_flow in enumerate(total_flows)
+                ]
 
         # Demand constraint
         print(as_info("Adding demand constraints"))
@@ -131,12 +132,17 @@ class GurobiPathBasedTE(TELP[GurobiPathBasedSolverParams]):
         
         # Number of paths constraint
         print(as_info("Adding path availability constraints"))
-        total_flow = gurobipy.LinExpr()
         for k in ShortTQDM(range(K)):
             for t in range(BETA_K[k], T):
                 MODEL.addConstr(Y_TK[(t, k)] == 0)
-                total_flow.addTerms(-1, Y_TK[(t, k)])
-        self._total_flow = total_flow
+
+        # Total flow objective
+        if self.objective == TEObjective.MAX_FLOW:
+            total_flow = gurobipy.LinExpr()
+            for k in range(K):
+                for t in range(T):
+                    total_flow.addTerms(-1, Y_TK[(t, k)])
+            self._total_flow = total_flow
 
     def _add_objective(self):
         assert self._model is not None and \
@@ -145,12 +151,10 @@ class GurobiPathBasedTE(TELP[GurobiPathBasedSolverParams]):
         
         MODEL = self._model
 
-        if self._problem_description.objective == TEObjective.MLU:
-            self._objective = gurobipy.LinExpr(1.0, self._utility)
-        elif self._problem_description.objective == TEObjective.MAX_FLOW:
-            self._objective = self._total_flow
-        else:
-            raise ValueError
+        match self.objective:
+            case TEObjective.MLU: self._objective = gurobipy.LinExpr(1.0, self._utility)
+            case TEObjective.MAX_FLOW: self._objective = self._total_flow
+            case _ : raise ValueError
         
         MODEL.setObjective(self._objective, GRB.MINIMIZE)
     

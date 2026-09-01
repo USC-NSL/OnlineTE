@@ -9,7 +9,8 @@ COMPILE_PROTO = f'{sys.executable} -m grpc_tools.protoc -I {PROTO_PATH} ' \
                 '--python_out={pyout} --pyi_out={pyiout} --grpc_python_out={grpcout} {protobuf}'
 
 DEPENDENCIES = [
-    'array'
+    'array',
+    'graph'
 ]
 
 PROTOS = [

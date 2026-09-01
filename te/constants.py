@@ -122,3 +122,8 @@ For operations done on a single host that can be parallelized over commodities,
 this is the maximum number of commodities that we will handle with one core.
 This number will be ignored in case the compute is limited and we are oversubscribed.
 """
+
+GRPC_ARRAY_STREAM_MAX_LEN = 2**20
+"""
+Maximum length of an array to be transfered at once over a gRPC stream.
+"""

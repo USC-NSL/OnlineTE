@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from ..base import SynchADMMControllerBackendBase, SynchADMMWorkerBackendBase
 from ...base import RPCParams
 from .asynchronous_grpc_backend import *
-from .udp_multicast_backend import *
-from .partial_barrier_grpc_backend import *
+# from .udp_multicast_backend import *
+# from .partial_barrier_grpc_backend import *
 
 
 @dataclass
@@ -19,8 +19,8 @@ class SynchADMMCommunicationBackendDescription:
 def add_communication_backend_params_parser(parser: jsonargparse.ArgumentParser):
     parser.add_argument('--comm_backend', choices=['grpc-asyn', 'grpc-parbar', 'mcast'], default='grpc-asyn')
     add_asyn_grpc_params(parser)
-    add_mcast_params(parser)
-    add_parbar_grpc_params(parser)
+    # add_mcast_params(parser)
+    # add_parbar_grpc_params(parser)
 
 
 def parse_communication_backend_params(
@@ -29,22 +29,20 @@ def parse_communication_backend_params(
     args: jsonargparse.Namespace
 ) -> SynchADMMCommunicationBackendDescription:
     if args.comm_backend == 'grpc-asyn':
-        controller_params = parse_asyn_grpc_params(args)
+        controller_params = parse_asyn_grpc_params(args, controller_addr, worker_addr_list)
         controller_cls = AsynchronousgRPCControllerBackend
         worker_gen = generate_asyn_grpc_worker_params
-    elif args.comm_backend == 'mcast':
-        controller_params = parse_mcast_params(args)
-        controller_cls = MulticastControllerBackend
-        worker_gen = generate_mcast_worker_params
-    elif args.comm_backend == 'grpc-parbar':
-        controller_params = parse_parbar_grpc_params(args)
-        controller_cls = PartialBarriergRPCControllerBackend
-        worker_gen = generate_parbar_grpc_worker_params
+    # elif args.comm_backend == 'mcast':
+    #     controller_params = parse_mcast_params(args)
+    #     controller_cls = MulticastControllerBackend
+    #     worker_gen = generate_mcast_worker_params
+    # elif args.comm_backend == 'grpc-parbar':
+    #     controller_params = parse_parbar_grpc_params(args)
+    #     controller_cls = PartialBarriergRPCControllerBackend
+    #     worker_gen = generate_parbar_grpc_worker_params
     else:
         raise ValueError(f'Unknown communication backend name: {args.comm_backend}')
     
-    controller_params.Peers = tuple([controller_addr])
-    controller_params.Workers = tuple(worker_addr_list)
     worker_params, worker_cls = worker_gen(controller_params)
 
     return SynchADMMCommunicationBackendDescription(

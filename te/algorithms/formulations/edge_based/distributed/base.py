@@ -1,12 +1,15 @@
 import signal
 import contextlib
 import te.constants
-from typing import Tuple
+import networkx as nx
+from typing import Tuple, Optional, Dict
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
 from te.algorithms.base import SolverParams
 from utils.exceptions import SolutionInterrupted
 from utils.logging import as_warning
+from array_utils.cpu.types import CPUArray, cpu_array
+from topologies.utils import get_edge_indexing
 
 
 """
@@ -28,7 +31,7 @@ they fit into any distributed solver.
 """
 
 
-@dataclass
+@dataclass(frozen=True)
 class RPCParams(SolverParams):
     PeerIndex: int = 0
     """Index of _this_ peer within its network"""
@@ -36,9 +39,7 @@ class RPCParams(SolverParams):
     """Address list (as a tuple) of _all_ peers within this network"""
     Workers: Tuple[Tuple[str, int],...] = tuple()
     """Address list of all worker nodes for this peer"""
-    
-    def __post_init__(self):
-        self.left_column_share = 0.2
+    _left_column_share = 0.2
     
     def get_bind_address(self) -> Tuple[str, int]:
         if len(self.Peers) == 1:
@@ -181,12 +182,76 @@ class DistributedSolverNodeBase(ABC):
         self._node_params = node_params
         # First interrupt is graceful, the next one kills the process no questions asked ...
         self._die_on_next_int = False
+        # Currently, we can only set this _ONCE_. This is because changing the number of
+        # workers requires a multi-cast within the network that is quite difficult.
+        # As such, for now, in case of node failure, we just restart the workers rather
+        # than even bothering to send the information across the network.
+        # Fixing this is a big TODO on our plate ...
+        self._number_of_workers: Optional[int] = None
+        # These fields are set automatically the moment the coordinator reveals the
+        # solver parameters and the topology to the workers
+        self._graph: Optional[nx.DiGraph] = None
+        self._indexing: Dict[Tuple[int, int], int] = None
+        self._capacities: Optional[CPUArray] = None
+        self._total_commodity_count: Optional[int] = None
+        self._assigned_commodity_count: Optional[int] = None
+        self._assigned_commodity_start_id: Optional[int] = None
+
         signal.signal(signal.SIGINT, self.stop)
         signal.signal(signal.SIGTERM, self.die)
     
     @property
     def node_params(self) -> DistributedSolverNodeParams:
         return self._node_params
+
+    @property
+    def worker_id(self) -> int:
+        return self._node_params.RPCParams_.PeerIndex
+
+    @property
+    def number_of_workers(self) -> int:
+        return self._number_of_workers
+    @number_of_workers.setter
+    def number_of_workers(self, val: int):
+        assert self._number_of_workers is None
+        self._number_of_workers = val
+
+    @property
+    def graph(self) -> nx.DiGraph:
+        assert self._graph is not None
+        return self._graph
+    @graph.setter
+    def graph(self, G: nx.DiGraph):
+        self._graph = G
+        self._capacities = cpu_array([c_e for _, _, c_e in G.edges(data='capacity')])
+        self._indexing = get_edge_indexing(G)
+        num_endpoints = G.number_of_nodes()
+        self._total_commodity_count = num_endpoints * (num_endpoints - 1)
+        assert self._total_commodity_count % self.number_of_workers == 0
+        self._assigned_commodity_count = self._total_commodity_count // self.number_of_workers
+        self._assigned_commodity_start_id = self.worker_id * self._assigned_commodity_count
+
+    @property
+    def num_edges(self) -> int:
+        return self._graph.number_of_edges()
+    @property
+    def capacities(self) -> CPUArray:
+        return self._capacities
+    @property
+    def edge_indexing(self) -> Dict[Tuple[int, int], int]:
+        return self._indexing
+    @property
+    def total_commodity_count(self) -> int:
+        return self._total_commodity_count
+    @property
+    def assigned_commodity_count(self) -> int:
+        return self._assigned_commodity_count
+    @property
+    def assigned_commodity_start_id(self) -> int:
+        return self._assigned_commodity_start_id
+    @property
+    def assigned_commodity_end_id(self) -> int:
+        return self._assigned_commodity_start_id + self._assigned_commodity_count
     
     @property
     def backend(self) -> CommunicationBackendBase:
@@ -248,7 +313,6 @@ class DistributedSolverNodeBase(ABC):
         with contextlib.closing(cls(node_params, *args, **kwargs)) as node:
             node.initialize()
             node.run()
-
 
 __all__ = [
     'CommunicationBackendBase', 'RPCParams', 
