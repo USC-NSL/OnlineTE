@@ -12,8 +12,7 @@ from array_utils.cpu.types import *
 # TODO: Finish the `SharingWrapper` for the inner loop
 from te.algorithms.sub_algorithms.admm import ADMMWrapper
 from . import SynchADMMSolverParams
-from .base import SynchADMMControllerBackendBase
-from ..base import DistributedSolverNodeBase, DistributedSolverNodeParams
+from te.algorithms.communication import *
 from te.algorithms.sub_algorithms.mlu_backends.base import ControllerMLUSolver, ControllerMLUException
 
 
@@ -47,7 +46,7 @@ class SynchADMMControllerNode(TELP[SynchADMMSolverParams], DistributedSolverNode
         self._sharing_mean_2: Optional[CPUArray] = None
         self._sharing_dual: Optional[CPUArray] = None
         # Communication backend
-        self.backend: SynchADMMControllerBackendBase = \
+        self.backend: CoordinatorBackendBase = \
             node_params.CommunicationBackendCLS(node_params.RPCParams_)
         # self.backend.register_signal_handler()
         self.backend.start()
@@ -109,7 +108,10 @@ class SynchADMMControllerNode(TELP[SynchADMMSolverParams], DistributedSolverNode
         self._mlu_solver.rho = self._solver_params.Rho
         self._mlu_solver.alpha = self._alpha
         # Initialize the consensus wrapper
-        self._outer_admm_wrapper = ADMMWrapper(N, self._solver_params.Rho)
+        self._outer_admm_wrapper = ADMMWrapper(
+            N, self._solver_params.Rho,
+            adaptive_tau=2, adaptive_mu=5, adaptive_T=2
+        )
         # Initialize the sharing wrapper
         self._sharing_dual = cpu_zeros((self.number_of_edges,))
 
@@ -133,7 +135,10 @@ class SynchADMMControllerNode(TELP[SynchADMMSolverParams], DistributedSolverNode
     # @record_cpu_runtime('Controller-Update')
     def _update_controller_objective(self):
         assert self._mlu_solver is not None
-        self._mlu_solver.update_F_m(-self._outer_admm_wrapper.get_Z_step_bias())
+        self._mlu_solver.update_F_m(
+            -self._outer_admm_wrapper.get_Z_step_bias(),
+            self._outer_admm_wrapper.step_size
+        )
     
     def _add_objective(self):
         assert self._mlu_solver is not None
@@ -223,20 +228,16 @@ class SynchADMMControllerNode(TELP[SynchADMMSolverParams], DistributedSolverNode
                 # Inner loop infeasibility is usually very small, no need to bother with it!
                 err = self._outer_admm_wrapper.infeasibility
                 progress_bar.set_postfix({
-                    'Cont. Util.': str(round(self._mlu_solver.current_u, 4)),
-                    'Net. Util.': str(round(max_util, 4)),
-                    'Outer Inf.': str(round(err, 4))
+                    'Cont. Util.': f'{self._mlu_solver.current_u:.4f}',
+                    'Net. Util.': f'{max_util:.4f}',
+                    'Outer Inf.': f'{err:.4f}',
+                    'Outer Step.': f'{self._outer_admm_wrapper.step_size:.2f}'
                 })
-                # if err < self._problem_description.eval_params.optimality_tolerance:
-                #     print(as_success("Crossed the convergance bound. Breaking early ..."))
-                #     break
+                if err < self._problem_description.eval_params.optimality_tolerance:
+                    print(as_success("Crossed the convergance bound. Breaking early ..."))
+                    progress_bar._pbar.close()
+                    break
             self._set_X_ek()
-            # print(f'X: {np.sum(self._X_ek)}')
-            # print(f'X_bar: {np.sum(self._sharing_mean_1)}')
-            # print(f'P_bar: {np.sum(self._sharing_mean_2)}')
-            # print(f'Sharing dual: {np.sum(self._sharing_dual)}')
-            # print(f'Z: {np.sum(self._get_Z_value())}')
-            # print(f'r: {np.sum(self._outer_admm_wrapper.dual_var)}')
         except ControllerMLUException as e:
             raise RuntimeError(as_fail(f'MLU solver failed: {e}'))
         except SolutionInterrupted:

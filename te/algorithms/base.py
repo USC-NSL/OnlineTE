@@ -242,6 +242,18 @@ class TELP[P: SolverParams](ABC):
         self._capacities = np.array([
             c_e for _, _, c_e in self.graph.edges(data='capacity')
         ])
+        self._skip_loop_check: bool = False
+        """
+        In the path-based setting, we may want to skip our loop check.
+        This is because paths overlayed on top of each-other may appear
+        to have loops, for example take a rhombus network with a short
+        digaonal. Paths `s -> a -> b -> t` and `s -> b -> a -> t` are
+        both valid and loop-free, but if used at the same time will be
+        flagged as looped since it appears that we use `a -> b` and 
+        `b -> a` at the same time.
+        We _trust_ that individual paths are loop-free for path-based
+        solvers, and thus, skip loop checking for this reason.
+        """        
 
     @property
     def objective(self) -> TEObjective:
@@ -397,9 +409,12 @@ class TELP[P: SolverParams](ABC):
         feasibility_tolerance = eval_params.feasibility_tolerance
         loop_tolerance = eval_params.loop_tolerance
         indexing = self._edge_indexing
-        witness = check_loop_free_assignment(
-            assignments, graph, loop_tolerance
-        )
+        if not self._skip_loop_check:
+            witness = check_loop_free_assignment(
+                assignments, graph, loop_tolerance
+            )
+        else:
+            witness = None
         if witness is not None:
             print(as_fail(f"Solution contains a loop for commodity {witness[0]}!"))
         leaks = check_flow_leaks(

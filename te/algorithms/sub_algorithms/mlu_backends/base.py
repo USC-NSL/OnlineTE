@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from typing import Optional
 from te.algorithms.base import SolverParams, TEObjective
 from array_utils.cpu.types import *
 
@@ -86,11 +87,14 @@ class ControllerMLUSolver(ABC):
     def reset(self, with_params: False):
         """Reset the solver to a blank state"""
     @abstractmethod
-    def update_F_m(self, F_m: CPUArray):
+    def update_F_m(self, F_m: CPUArray, rho: Optional[float] = None):
         """
         Update the current `F^{(m)}` value (i.e. `sum X_k + r` for iteration `m`) AND the objective.
         Note that calling `_add_objective` here _WILL_ cause an error, the optimization model _MUST_ 
         be modified in-place, not made from scratch as that would be too slow.
+
+        Optionally, this may also accept a new value for `rho`. Note that `rho` _ONLY_ appears in
+        the objective and hence warm-starting is trivial.
         """
     @abstractmethod
     def solve(self):

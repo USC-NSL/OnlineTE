@@ -25,8 +25,11 @@ from array_utils.cpu.types import *
 
 
 @njit(parallel=True)
-def get_initial_total_flow_nnz(rows: List[np.ndarray], beta: np.ndarray, shape: Tuple[int, int, int], D_k: np.ndarray,
-                               C_e: Optional[np.ndarray] = None) -> np.ndarray:
+def get_initial_total_flow_nnz(
+    rows: List[np.ndarray], beta: np.ndarray,
+    shape: Tuple[int, int, int], D_k: np.ndarray,
+    C_e: Optional[np.ndarray] = None
+) -> np.ndarray:
     """
     Returns the total flow over each edge, when all commodities are
     routed evenly on all paths.
@@ -51,9 +54,12 @@ def get_initial_total_flow_nnz(rows: List[np.ndarray], beta: np.ndarray, shape: 
     return output
 
 
-@njit(parallel=True)
-def path_based_to_edge_based_nnz(Y_tk: np.ndarray, rows: List[np.ndarray], cols: List[np.ndarray], N: int, D_k: np.ndarray, 
-                                 C_e: Optional[np.ndarray] = None) -> np.ndarray:
+@njit(parallel=True, cache=True)
+def path_based_to_edge_based_nnz(
+    Y_tk: np.ndarray, rows: List[np.ndarray],
+    cols: List[np.ndarray], N: int, D_k: np.ndarray, 
+    C_e: Optional[np.ndarray] = None
+) -> np.ndarray:
     """
     Implements `D_k * alpha_k Y_k` for each `k` by iterating over non-zero entries.
     On larger topologies, this implementation greatly outperforms `path_based_to_edge_based`.
@@ -81,8 +87,11 @@ def path_based_to_edge_based_nnz(Y_tk: np.ndarray, rows: List[np.ndarray], cols:
 
 
 @njit(parallel=True)
-def path_based_to_edge_based_mean_nnz(Y_tk: np.ndarray, rows: List[np.ndarray], cols: List[np.ndarray], N: int, D_k: np.ndarray,
-                                      C_e: Optional[np.ndarray] = None) -> np.ndarray:
+def path_based_to_edge_based_mean_nnz(
+    Y_tk: np.ndarray, rows: List[np.ndarray],
+    cols: List[np.ndarray], N: int, D_k: np.ndarray,
+    C_e: Optional[np.ndarray] = None
+) -> np.ndarray:
     """
     Implements `D_k * alpha_k Y_k` averaged over all `k` by only iterating non-zero entries.
     On larger topologies, this implementation greatly outperforms `path_based_to_edge_based_mean`.
@@ -109,8 +118,11 @@ def path_based_to_edge_based_mean_nnz(Y_tk: np.ndarray, rows: List[np.ndarray], 
 
 
 @njit(parallel=True)
-def path_based_projection_nnz(Y_tk: np.ndarray, rows: List[np.ndarray], cols: List[np.ndarray], N: int, D_k: np.ndarray,
-                              C_e: Optional[np.ndarray] = None) -> np.ndarray:
+def path_based_projection_nnz(
+    Y_tk: np.ndarray, rows: List[np.ndarray],
+    cols: List[np.ndarray], N: int, D_k: np.ndarray,
+    C_e: Optional[np.ndarray] = None
+) -> np.ndarray:
     """
     Implements `D_k^2 * (alpha_k^T alpha_k) Y_k` for each `k` by only iterating non-zero entries.
     """
@@ -139,8 +151,11 @@ def path_based_projection_nnz(Y_tk: np.ndarray, rows: List[np.ndarray], cols: Li
 
 
 @njit
-def path_based_transpose_product_nnz(X_ek: np.ndarray, rows: List[np.ndarray], cols: List[np.ndarray], T: int, D_k: np.ndarray,
-                                     C_e: Optional[np.ndarray] = None):
+def path_based_transpose_product_nnz(
+    X_ek: np.ndarray, rows: List[np.ndarray],
+    cols: List[np.ndarray], T: int, D_k: np.ndarray,
+    C_e: Optional[np.ndarray] = None
+):
     _, K = X_ek.shape
     is_capped = C_e is not None
     output = np.zeros((K, T), dtype=X_ek.dtype)
@@ -160,8 +175,11 @@ def path_based_transpose_product_nnz(X_ek: np.ndarray, rows: List[np.ndarray], c
 
 
 @njit
-def path_based_transpose_vector_product_nnz(X_e: np.ndarray, rows: List[np.ndarray], cols: List[np.ndarray], T: int, D_k: np.ndarray,
-                                            C_e: Optional[np.ndarray] = None):
+def path_based_transpose_vector_product_nnz(
+    X_e: np.ndarray, rows: List[np.ndarray],
+    cols: List[np.ndarray], T: int, D_k: np.ndarray,
+    C_e: Optional[np.ndarray] = None
+):
     K = D_k.shape[0]
     is_capped = C_e is not None
     output = np.zeros((K, T), dtype=X_e.dtype)
@@ -207,7 +225,19 @@ def path_based_power_method(rows: List[np.ndarray], cols: List[np.ndarray], shap
     return cpu_array(np.sum(np.multiply(res, v), axis=0) / np.sum(np.multiply(v, v), axis=0))
 
 
-def warm_start_jit(rows: List[np.ndarray], cols: List[np.ndarray], shape: Tuple[int, int, int], beta: IntegerCPUArray):
+def warm_start_jit():
+    """
+    A trivial function to warm-start all the Numba functions.
+    Call this to prevent the JIT overhead of calling other functions
+    when you actually need them.
+    Here, we just call them with dummy data to do the JIT.
+    """
+    from utils.logging import as_info
+    print(as_info("Warm-starting JIT functions"))
+    rows = [np.array([0, 1], dtype=np.int32), np.array([2, 3], dtype=np.int32)]
+    cols = [np.array([0, 0], dtype=np.int32), np.array([1, 1], dtype=np.int32)]
+    shape = (2, 4, 2)
+    beta = np.array([2, 2], dtype=np.int32)
     K, N, T = shape
     C_e = cpu_zeros((N,)) + 1
     D_k = cpu_zeros((K,))

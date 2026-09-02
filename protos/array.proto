@@ -1,15 +1,28 @@
 syntax = "proto3";
 
+// Many times, we exchange Numpy arrays over the network.
+// This is a minimal message definition for that.
+
+// Wrapper for binary data. Used for sending large arrays bit-by-bit.
 message Chunk {
     bytes data = 1;
 }
 
+// A wire-ready serializataion of a full Numpy array. When the array
+// is small to fit into a single message (dictated by the parameter
+// setting in `te.constrants`), we serialize it into a single packet
+// and send it off.
 message SerializedNumpyArrayMessage {
+    // Binary representation of array
     bytes array = 1;
+    // Array shape
     repeated int32 dims = 2;
+    // Array data-type
     optional int32 dtype = 3;
 }
 
+// Shape of a Numpy array
 message ArrayShape {
+    // Array dimensions
     repeated int32 dims = 1;
 }

@@ -4,9 +4,8 @@ import networkx as nx
 from typing import Optional, Tuple
 from array_utils import set_global_precision
 from array_utils.cpu.types import *
-from ..base import DistributedSolverNodeBase, DistributedSolverNodeParams
 from . import SynchADMMSolverParams
-from .base import SynchADMMWorkerBackendBase
+from te.algorithms.communication import *
 from topologies.utils import get_adjacency_null_space, get_graph_M_matrix, get_commodity_in_out_mask
 from te.algorithms.objective_evaluators import get_total_routed_flow
 from te.algorithms.sub_algorithms.pgd import do_memory_efficient_pgd, do_dual_pgd
@@ -169,10 +168,9 @@ class SynchADMMWorkerNode(DistributedSolverNodeBase):
         self._total_routed_flow: Optional[float] = None
         # self._dual_solver: Optional[DualSolver] = None
         # self._sparse_solver: Optional[SparseSolver] = None
-
         assert issubclass(
-            params.CommunicationBackendCLS, SynchADMMWorkerBackendBase)
-        self.backend: SynchADMMWorkerBackendBase =\
+            params.CommunicationBackendCLS, WorkerBackendBase), "NOT TRUE!!!"
+        self.backend: WorkerBackendBase =\
             params.CommunicationBackendCLS(params.RPCParams_)
         self.backend.start()
 

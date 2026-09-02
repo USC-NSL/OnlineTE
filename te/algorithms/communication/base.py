@@ -314,7 +314,15 @@ class DistributedSolverNodeBase(ABC):
             node.initialize()
             node.run()
 
+
+@dataclass(frozen=True)
+class PrettyAddressList(SolverParams):
+    Addresses: Tuple[Tuple[str, int]]
+    _left_column_share = 0.2
+
+
 __all__ = [
     'CommunicationBackendBase', 'RPCParams', 
-    'DistributedSolverNodeBase', 'DistributedSolverNodeParams'
+    'DistributedSolverNodeBase', 'DistributedSolverNodeParams',
+    'PrettyAddressList'
 ]

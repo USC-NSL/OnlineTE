@@ -1,18 +1,49 @@
 import jsonargparse
 from typing import Tuple, List
 from dataclasses import dataclass
-from ..base import SynchADMMControllerBackendBase, SynchADMMWorkerBackendBase
-from ...base import RPCParams
 from .asynchronous_grpc_backend import *
 # from .udp_multicast_backend import *
 # from .partial_barrier_grpc_backend import *
+from te.algorithms.communication import *
+from te.algorithms.communication.grpc import *
+from ..worker_backends.grpc_backend import SynchADMMgRPCWorkerBackend
+
+
+
+def add_asyn_grpc_params(parser: jsonargparse.ArgumentParser):
+    parser.add_class_arguments(AsynchronousgRPCCoordinatorBackendParams, 'AsyngRPC', 
+                               help='Asynchronous gRPC Communication Backend Parameters')
+
+def parse_asyn_grpc_params(
+    args: jsonargparse.Namespace,
+    controller_addr: Tuple[str, int],
+    worker_addr_list: List[Tuple[str, int]],
+) -> AsynchronousgRPCCoordinatorBackendParams:
+    args.AsyngRPC.Peers = tuple([controller_addr])
+    args.AsyngRPC.Workers = tuple(worker_addr_list)
+    return AsynchronousgRPCCoordinatorBackendParams.make_from_args(args.AsyngRPC)
+
+
+def generate_asyn_grpc_worker_params(
+    controller_params: AsynchronousgRPCCoordinatorBackendParams
+) -> Tuple[List[gRPCWorkerBackendParams], type[SynchADMMgRPCWorkerBackend]]:
+    return [gRPCWorkerBackendParams(
+        PeerIndex=i, Peers=tuple([addr]),
+        NumThreads=1
+    ) for i, addr in enumerate(controller_params.Workers)], SynchADMMgRPCWorkerBackend
+
+
+# __all__ = [
+#     'AsynchronousgRPCCoordinatorBackendParams', 
+#     'parse_asyn_grpc_params', 'add_asyn_grpc_params', 'generate_asyn_grpc_worker_params'
+# ]
 
 
 @dataclass
 class SynchADMMCommunicationBackendDescription:
-    ControllerBackendCLS: type[SynchADMMControllerBackendBase]
+    ControllerBackendCLS: type[CoordinatorBackendBase]
     ControllerBackendParams: RPCParams
-    WorkerBackendCLS: type[SynchADMMWorkerBackendBase]
+    WorkerBackendCLS: type[WorkerBackendBase]
     WorkerBackendParams: List[RPCParams]
 
 
@@ -30,7 +61,7 @@ def parse_communication_backend_params(
 ) -> SynchADMMCommunicationBackendDescription:
     if args.comm_backend == 'grpc-asyn':
         controller_params = parse_asyn_grpc_params(args, controller_addr, worker_addr_list)
-        controller_cls = AsynchronousgRPCControllerBackend
+        controller_cls = SynchADMMCoordinatorBackend
         worker_gen = generate_asyn_grpc_worker_params
     # elif args.comm_backend == 'mcast':
     #     controller_params = parse_mcast_params(args)

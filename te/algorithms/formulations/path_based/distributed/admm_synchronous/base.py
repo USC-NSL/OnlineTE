@@ -1,7 +1,8 @@
 from abc import abstractmethod
 from typing import Tuple, List, Callable
+# TODO: Move the base coordinator backend into a separate file
 from te.algorithms.formulations.edge_based.distributed.base import CommunicationBackendBase
-from te.algorithms.array_utils.cpu_utils import CPUArray, IntegerCPUArray
+from array_utils.cpu.types import CPUArray, IntegerCPUArray
 from te.algorithms.base import SolverParams
 
 
@@ -11,13 +12,15 @@ class SynchADMMControllerBackendBase(CommunicationBackendBase):
         return True
     
     @abstractmethod
-    def initialize_worker_nodes(self, solver_params: SolverParams,
-                                alpha_rows: List[IntegerCPUArray],
-                                alpha_cols: List[IntegerCPUArray],
-                                alpha_shape: Tuple[int, int, int],
-                                beta_k: IntegerCPUArray,
-                                demands_k: CPUArray,
-                                capacities_e: CPUArray):
+    def initialize_worker_nodes(self,
+        solver_params: SolverParams,
+        alpha_rows: List[IntegerCPUArray],
+        alpha_cols: List[IntegerCPUArray],
+        alpha_shape: Tuple[int, int, int],
+        beta_k: IntegerCPUArray,
+        demands_k: CPUArray,
+        capacities_e: CPUArray
+    ):
         """Initialize worker nodes with solver parameters and the path mask matrix"""
 
     @abstractmethod

@@ -10,15 +10,12 @@ COMPILE_PROTO = f'{sys.executable} -m grpc_tools.protoc -I {PROTO_PATH} ' \
 
 DEPENDENCIES = [
     'array',
-    'graph'
+    'graph',
+    'core'
 ]
 
 PROTOS = [
-    'distributed_lp',
-    'regularized_admm',
-    'asynchronous_lp',
-    'path_based_distributed_lp',
-    'hierarchical_lp'
+    'edge_based',
 ]
 
 def make_proto_dir(proto: str) -> Tuple[str, str]:

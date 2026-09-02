@@ -6,9 +6,9 @@ from dataclasses import dataclass
 from typing import Tuple, List, Optional
 from utils.logging import as_info, as_warning, log_section_title
 from te.algorithms.base import *
+from te.algorithms.communication.base import *
 from te.algorithms.formulations.helper import *
 from te.algorithms.sub_algorithms.mlu_backends.aggregate import *
-from te.algorithms.formulations.edge_based.distributed.helper import *
 from . import add_synch_solver_params_parser, parse_synch_solver_params
 from .controller_backends.aggregate import *
 from .controller import SynchADMMControllerNode

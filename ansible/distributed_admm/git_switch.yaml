@@ -1,6 +1,6 @@
-# Simple script for changing the workign branch on all nodes
+# Simple script for changing the working branch on all nodes
 - name: Switch branch
-  hosts: controller_group:workers_group
+  hosts: workers_group
   gather_facts: false
   remote_user: "{{ lookup('env', 'SPHERE_USER') }}"
   vars: 
@@ -11,7 +11,7 @@
   - name: Switch branch
     no_log: true
     ansible.builtin.git:
-      repo: https://{{access_token}}@github.com/USC-NSL/DistributedTE.git
+      repo: https://{{access_token}}@github.com/USC-NSL/OnlineTE.git
       force: true
       dest: "{{path_home}}"
       version: "{{branch}}"

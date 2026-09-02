@@ -15,7 +15,7 @@
       rsync_opts:
         - "--exclude=.git"
         - "--exclude=results"
-        - "--filter=:- .gitignore"
+        # - "--filter=: .gitignore"
   - name: Compile protobuffs
     ansible.builtin.shell: "{{path_venv}}/bin/python protos/__init__.py"
     args:

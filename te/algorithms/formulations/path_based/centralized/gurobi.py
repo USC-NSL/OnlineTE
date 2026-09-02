@@ -24,13 +24,14 @@ class GurobiPathBasedTE(TELP[GurobiPathBasedSolverParams]):
         self._path_object: Optional[PathProvider] = None
         self._demand_constraints: Optional[List[gurobipy.Constr]] = None
         self._total_flow: Optional[gurobipy.LinExpr] = None
+        self._skip_loop_check = True
         
         self._initialize()
     
     def _initialize(self):
         path = self._solver_params.path_file
         if path is not None:
-            self._path_object = PathProvider.load()
+            self._path_object = PathProvider.load(path)
         else:
             self._path_object = build_provider(
                 T=self._solver_params.max_num_paths_per_commodity,

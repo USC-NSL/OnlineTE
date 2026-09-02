@@ -1,130 +1,16 @@
-import grpc
-import te.constants
-from typing import Optional
-from dataclasses import dataclass
-from concurrent.futures import ThreadPoolExecutor
-from ..base import SynchADMMWorkerBackendBase
+from typing import Any, Optional
 from .. import SynchADMMSolverParams
-from ...base import RPCParams
-from array_utils.cpu.grpc_utils import *
+from te.algorithms.communication.grpc.worker_backend import *
+from utils.logging import as_fail
 
-import protos.array.array_pb2 as array_messages
-import protos.graph.graph_pb2 as graph_messages
-import protos.distributed_lp.distributed_lp_pb2 as distributed_lp_messages
-from protos.distributed_lp.distributed_lp_pb2_grpc import (
-    DistributedADMMSolverServicer, add_DistributedADMMSolverServicer_to_server)
-from google.protobuf.empty_pb2 import Empty
+from protos.edge_based.edge_based_pb2 import EdgeBasedSolverParameters
 from google.protobuf.json_format import MessageToDict
 
 
-@dataclass(frozen=True)
-class gRPCWorkerBackendParams(RPCParams):
-    NumThreads: int = 1
-    """Number of threads in the gRPC server pool"""
-    _left_column_share = 0.2
-
-
-class gRPCWorkerBackend(SynchADMMWorkerBackendBase):
-    def __init__(self, rpc_params: gRPCWorkerBackendParams):
-        super().__init__(rpc_params)
-
-        self._server: Optional[grpc.Server] = None
-        self._listener: Optional[NetworkWorkerNodeListener] = None
-
-        self._initialize_listener()
-
-    @classmethod
-    def backend_name(cls) -> str:
-        return 'gRPC'
-    
-    @property
-    def worker_id(self) -> int:
-        return self._rpc_params.PeerIndex
-
-    @property
-    def number_of_peers(self):
-        return super().number_of_peers
-
-    def _initialize_listener(self):
-        assert self._server is None and self._listener is None
-        RPC_PARAMS: gRPCWorkerBackendParams = self._rpc_params
-        IP, PORT = RPC_PARAMS.get_bind_address()
-        self._server = grpc.server(thread_pool=ThreadPoolExecutor(max_workers=RPC_PARAMS.NumThreads))
-        self._listener = NetworkWorkerNodeListener(self)
-        add_DistributedADMMSolverServicer_to_server(self._listener, self._server)
-        addr = ":".join([IP, str(PORT)])
-        self._server.add_insecure_port(addr)
-    
-    def start(self):
-        assert self._server is not None and self._listener is not None
-        self._server.start()
-        self.is_alive = True
-        self.killed = False
-
-    def stop(self):
-        self.is_alive = False
-    
-    def die(self):
-        self.is_alive = False
-        if self._server is not None:
-            self._server.stop(1)
-        self.killed = True
-
-    def wait(self):
-        if self._server is not None:
-            self._server.wait_for_termination()
-    
-    def close(self):
-        if not self.killed:
-            self._server.stop(1)
-
-
-class NetworkWorkerNodeListener(DistributedADMMSolverServicer):
-    def __init__(self, backend: gRPCWorkerBackend):
-        super().__init__()
-        self._backend = backend
-        self._id = backend.worker_id
-    
-    def SetTopology(self, request: graph_messages.Topology, context):
-        self._backend.set_topology(
-            serialized_message_to_graph(request)
-        )
-        return Empty()
-
-    def SetDemands(self, request: array_messages.Chunk, context):
-        X_bar = self._backend.update_demands(
-            serialized_message_to_array(request)
-        )
-        return array_to_serialized_message(X_bar)
-    
-    def DoNetworkUpdate(self, request: distributed_lp_messages.NetworkUpdateRequest, context):
-        runtime, means = self._backend.do_inner_loop_update(request.epoch)
-        return distributed_lp_messages.NetworkUpdateResponse(
-            runtime_ns=runtime, means=array_to_serialized_message(means)
-        )
-    
-    def UpdateWorkerNode(self, request: distributed_lp_messages.UpdateMessage, context):
-        self._backend.update_cached_values(
-            serialized_message_to_array(request.sharing_bias)
-        )
-        return Empty()
-    
-    def RequestChunk(self, request, context):
-        return chunk_big_array(self._backend.report_chunk(), te.constants.GRPC_ARRAY_STREAM_MAX_LEN)
-    
-    def RequestAggregate(self, request, context):
-        return array_to_serialized_message(self._backend.report_aggregate())
-    
-    def QueryState(self, request, context):
-        return distributed_lp_messages.State(ready=self._backend.is_alive)
-    
-    def SetSolverParameters(self, request: distributed_lp_messages.SolverParameters, context):
-        fields = MessageToDict(request)
-        num_workers = fields.pop('NumWorkers')
-        new_params = SynchADMMSolverParams(**fields)
-        self._backend.set_solver_parameters(new_params, num_workers)
-        return Empty()
-    
-    def Close(self, request, context):
-        self._backend.close()
-        return Empty()
+class SynchADMMgRPCWorkerBackend(gRPCWorkerBackend[SynchADMMSolverParams]):
+    def deserialize_solver_params(self, buf: Any) -> Optional[SynchADMMSolverParams]:
+        if buf.Is(EdgeBasedSolverParameters.DESCRIPTOR):
+            new_params = EdgeBasedSolverParameters()
+            buf.Unpack(new_params)
+            return SynchADMMSolverParams(**MessageToDict(new_params))
+        print(as_fail(f"Failed to parse solver parameters from coordinator!"))

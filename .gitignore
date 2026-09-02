@@ -55,3 +55,7 @@ presentation/
 
 # Path files
 *.pkl
+
+# Numba compiled functions
+*.nbc
+*.nbi

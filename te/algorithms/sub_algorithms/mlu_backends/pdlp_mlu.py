@@ -105,7 +105,6 @@ class PDLPMLU(ControllerMLUSolver):
         return constraints
     
     def _get_objective_matrix_diagonal(self) -> np.ndarray:
-        # d = np.full((self._NUM_VARIABLES,), fill_value=self._solver_params._Rho)
         d = np.full((self._NUM_VARIABLES,), fill_value=self.rho)
         d[-1] = 0
         # d[-1] = self._solver_params._Alpha * self.num_domains
@@ -113,14 +112,15 @@ class PDLPMLU(ControllerMLUSolver):
     
     def _get_objective_vector(self) -> np.ndarray:
         out = np.zeros((self._NUM_VARIABLES,))
-        # out[:-1] = -self._current_F * self._solver_params._Rho
         out[:-1] = -self._current_F * self.rho
         if self.is_mlu:
             # out[-1] = self._solver_params._Alpha * self.num_domains
             out[-1] = self.alpha * self.num_domains
         return out
 
-    def update_F_m(self, new_F: CPUArray):
+    def update_F_m(self, new_F: CPUArray, rho: Optional[float] = None):
+        if rho is not None:
+            self.rho = rho
         self._current_F = np.array(new_F, dtype=np.float64).flatten()
         self._solved = False
         self._lp.set_objective_matrix_diagonal(self._get_objective_matrix_diagonal())

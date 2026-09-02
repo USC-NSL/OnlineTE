@@ -35,6 +35,11 @@ def hopbyhop_to_indexed_path(hopbyhop: List[int], edge_indexing: Dict[Tuple[int,
     return [edge_indexing[edge] for edge in pairwise(hopbyhop)]
 
 
+def indexed_path_to_hopbyhop(indexed: List[int], edges: List[Tuple[int, int]]) -> List[int]:
+    """Convert indexed path into a hopbyhop one (mostly for debugging)"""
+    return [edges[index][1] for index in indexed]
+
+
 @dataclass
 class PathProvider:
     """
@@ -158,6 +163,7 @@ class PathProvider:
         """Try to load a stored object from `path`"""
         with open(path, 'rb') as f:
             return pickle.load(f)
+
 
 def _get_paths(
     edge_indexing: Dict[Tuple[int, int], int], 
