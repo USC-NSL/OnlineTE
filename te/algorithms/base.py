@@ -242,6 +242,7 @@ class TELP[P: SolverParams](ABC):
         self._capacities = np.array([
             c_e for _, _, c_e in self.graph.edges(data='capacity')
         ])
+        self._c_norm = np.linalg.norm(self._capacities) / len(self._capacities)
         self._skip_loop_check: bool = False
         """
         In the path-based setting, we may want to skip our loop check.
@@ -286,6 +287,10 @@ class TELP[P: SolverParams](ABC):
     def tracer(self) -> TETracer:
         """Return the runtime tracer object"""
         return self._tracer
+
+    @property
+    def unscaled_outer_inf_bound(self) -> float:
+        return self._problem_description.eval_params.optimality_tolerance * self._c_norm
 
     def report_problem_size(self):
         print(as_info(f"Graph Size: {self.number_of_nodes} nodes |"

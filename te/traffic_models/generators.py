@@ -5,7 +5,7 @@ import jsonargparse
 import networkx as nx
 from io import BufferedReader
 from dataclasses import dataclass, field
-from typing import Tuple, Optional, Iterator, Callable, List, ClassVar
+from typing import Tuple, Optional, Iterator, Callable, List, ClassVar, Type
 from .base import *
 
 #### UNIFORM ####
@@ -252,10 +252,10 @@ class UniformDriftTMGenerator(TMGenerator):
         for _ in range(PARAMS.count):
             drift = RNG.random(size=arr.shape, dtype=PARAMS.dtype) * (PARAMS.delta_max - PARAMS.delta_min) + \
                 PARAMS.delta_min
+            np.multiply(drift, PARAMS.scale_factor, out=drift)
             tm = np.clip(arr + drift, a_min=0, a_max=None)
 
             np.fill_diagonal(tm, 0.0)
-            np.multiply(tm, PARAMS.scale_factor, out=tm)
             yield tm
 
 #### SAMPLED ####
@@ -265,16 +265,15 @@ class SampledTMGeneratorParams(TMGeneratorParams):
     delta_max: float = 1.0
     delta_min: float = 0.0
     sample_rate: float = 0.05
-    initial_tm: np.ndarray = field(default_factory=lambda: np.empty((1,)), metadata={'help': argparse.SUPPRESS})
+    # initial_tm: np.ndarray = field(default_factory=lambda: np.empty((1,)), metadata={'help': argparse.SUPPRESS})
+    initial_tm_params: Type[TMGeneratorParams] = field(
+        default_factory=lambda: None, metadata={'help': argparse.SUPPRESS})
     _type: ClassVar[str] = 'sampled'
 
     def __post_init__(self):
         assert self.delta_max > self.delta_min
-        assert self.dtype == self.initial_tm.dtype
-        shape = self.initial_tm.shape
-        assert len(shape) == 2 and shape[0] == shape[1]
-        assert np.allclose(np.diag(self.initial_tm), 0)
         assert 0 <= self.sample_rate and self.sample_rate <= 1
+        assert self.initial_tm_params.scale_factor == self.scale_factor
 
 
 class SampledTMGenerator(TMGenerator):
@@ -285,12 +284,20 @@ class SampledTMGenerator(TMGenerator):
     _TYPE = SampledTMGeneratorParams._type
     def __init__(self, params: SampledTMGeneratorParams):
         super().__init__(params)
+        _param, gen = get_param_class_from_name(params.initial_tm_params._type)
+        assert isinstance(params.initial_tm_params, _param)
+        self._initial_tm = next(iter(gen(params.initial_tm_params)))
+        assert self.params.dtype == self._initial_tm.dtype
+        shape = self._initial_tm.shape
+        assert len(shape) == 2 and shape[0] == shape[1]
+        assert np.allclose(np.diag(self._initial_tm), 0)
 
     def __iter__(self) -> Iterator[np.ndarray]:
         PARAMS: SampledTMGeneratorParams = self.params
-        number_of_samples = int(PARAMS.initial_tm.size * PARAMS.sample_rate)
+        INIT_TM = self._initial_tm
+        number_of_samples = int(INIT_TM.size * PARAMS.sample_rate)
         RNG = self.get_rng()
-        arr = PARAMS.initial_tm
+        arr = np.copy(INIT_TM)
         m, _ = arr.shape
         for _ in range(PARAMS.count):
             sample = np.zeros((m, m))
@@ -302,9 +309,9 @@ class SampledTMGenerator(TMGenerator):
                     for _ in range(number_of_samples)]
             for index, shift in zip(indices, shifts):
                 sample[index] = shift
-            drift = RNG.random(size=arr.shape, dtype=PARAMS.dtype) * (PARAMS.delta_max - PARAMS.delta_min) + \
-                PARAMS.delta_min
-            yield np.clip(arr + drift, a_min=0, a_max=1)
+            np.multiply(sample, PARAMS.scale_factor, out=sample)
+            arr = np.clip(arr + sample, a_min=0, a_max=None)
+            yield arr
 
 
 @dataclass(frozen=True)
@@ -341,7 +348,7 @@ class NCFlowTrafficMatrixGenerator(TMGenerator):
             new_mean = PARAMS.original_mean * PARAMS.rel_mean * RNG.choice([-1, 1])
             new_stddev = PARAMS.original_mean * PARAMS.rel_stddev
             sample = RNG.normal(new_mean, new_stddev, arr.shape)
-            yield np.clip(arr + sample, a_min=0, a_max=1)
+            yield np.clip(arr + sample, a_min=0, a_max=None)
 
 
 def get_param_class_from_name(name: str) -> Tuple[type[TMGeneratorParams], type[TMGenerator]]:
@@ -359,14 +366,32 @@ def get_param_class_from_name(name: str) -> Tuple[type[TMGeneratorParams], type[
     return params, generator
 
 def attach_TM_class_parser(parser: jsonargparse.ArgumentParser):
-    parser.add_argument('--tm-class', choices=[tp.type() for tp in TMGenerator.__subclasses__()], required=True)
+    parser.add_argument('--tm-class', choices=[tp.type() for tp in TMGenerator.__subclasses__()], required=True,
+                        help='Class of traffic matrix generator to use')
+    parser.add_argument('--initial-tm-class', choices=[tp.type() for tp in[
+            UniformDriftTMGenerator, ExponentialTMGenerator, BimodalTMGenerator,
+            FilebackedTMGenerator
+        ]], help='Class of initial traffic matrix generator to use to feed another generator',
+        required=False
+    )
+    parser.add_argument('--initial-tm-seed', type=int,
+        help='RNG seed for initial traffic matrix generator',
+        required=False
+    )
     for param in TMGeneratorParams.__subclasses__():
         parser.add_class_arguments(param, nested_key=param._type)
+    for param in [
+        UniformTMGeneratorParams, ExponentialTMGeneratorParams,
+        BimodalTMGeneratorParams, FilebackedTMGeneratorParams
+    ]:
+        parser.add_class_arguments(param, nested_key=f'initial_tm.{param._type}', required=False)
 
 def parse_and_get_TM(
     tm_seed: Optional[int], tm_count: int, scale_factor: float,
-    graph: nx.DiGraph, args: jsonargparse.Namespace
+    graph: nx.DiGraph, initial_tm_seed: Optional[int],
+    args: jsonargparse.Namespace
 ) -> TMGenerator:
+    # Check for actual class
     cls_name = args.tm_class
     tm_class_args = getattr(args, cls_name)
     tm_class_args.seed = tm_seed
@@ -376,8 +401,28 @@ def parse_and_get_TM(
         tm_class_args.n = graph.number_of_nodes()
     elif cls_name == ExponentialTMGenerator.type():
         tm_class_args.graph = graph
+    elif cls_name == SampledTMGenerator.type():
+        assert args.initial_tm_class is not None,\
+            f'You must provide an initial TM for {cls_name} matrix'
     else:
         raise ValueError
+    # Check for initial TM class
+    init_cls_name = args.initial_tm_class
+    if init_cls_name is not None:
+        init_tm_args = args.initial_tm
+        init_tm_class_args = getattr(init_tm_args, init_cls_name)
+        init_tm_class_args.seed = initial_tm_seed
+        init_tm_class_args.count = 1
+        init_tm_class_args.scale_factor = scale_factor
+        if init_cls_name == UniformTMGenerator.type():
+            init_tm_class_args.n = graph.number_of_nodes()
+        elif init_cls_name == ExponentialTMGenerator.type():
+            init_tm_class_args.graph = graph
+        else:
+            raise ValueError
+        init_param_cls, _ = get_param_class_from_name(init_cls_name)
+        init_param = init_param_cls.make_from_args(init_tm_class_args)
+        tm_class_args.initial_tm_params = init_param
     param_cls, tm_cls = get_param_class_from_name(cls_name)
     param = param_cls.make_from_args(tm_class_args)
     return tm_cls(param)

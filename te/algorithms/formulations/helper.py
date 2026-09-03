@@ -165,6 +165,7 @@ def parse_te_problem_description_args(parser: jsonargparse.ArgumentParser) -> Tu
 
     # Seeds
     tm_seed = args.tm_seed
+    initial_tm_seed = args.initial_tm_seed
     topo_seed = args.topo_seed
     print(as_info(f'RNG Seeds:\tTopo:{topo_seed}\tTM:{tm_seed}'))
 
@@ -176,6 +177,7 @@ def parse_te_problem_description_args(parser: jsonargparse.ArgumentParser) -> Tu
     tm_generator = parse_and_get_TM(
         tm_seed=tm_seed, tm_count=eval_params.sequence_length,
         scale_factor=eval_params.scale_factor, graph=graph,
+        initial_tm_seed=initial_tm_seed,
         args=args
     )
     print(as_info(f"Using TM Class `{tm_generator.type()}` With Parameters:\n{tm_generator.params}"))

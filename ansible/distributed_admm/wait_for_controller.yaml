@@ -29,7 +29,7 @@
 
 - name: Start-Wait-Stop TE Workers
   hosts: workers_group
-  remote_user: aghavidel
+  remote_user: "{{ lookup('env', 'SPHERE_USER') }}"
   gather_facts: false
   vars:
     upto: "{{num_hosts}}"
@@ -47,15 +47,3 @@
     - name: Stop Worker Services
       command: systemctl --user stop te_worker.service
       when: 'worker_id|int < upto|int'
-
-- name: Get Controller Plot
-  hosts: controller_group
-  remote_user: aghavidel
-  gather_facts: false
-  tasks:
-    - name: Get `res.png`
-      fetch:
-        src: /home/aghavidel/DistributedTE/res.png
-        dest: /home/aghavidel/res.png
-        flat: true
-  

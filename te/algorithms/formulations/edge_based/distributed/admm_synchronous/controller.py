@@ -6,7 +6,7 @@ from te.algorithms.base import *
 from te.traffic_models.base import traffic_to_demands
 from topologies.utils import get_graph_null_space_basis
 from utils.exceptions import SolutionInterrupted
-from utils.logging import as_info, as_fail, as_success, ShortTQDM
+from utils.logging import as_info, as_fail, as_success, as_warning, ShortTQDM
 from array_utils import set_global_precision
 from array_utils.cpu.types import *
 # TODO: Finish the `SharingWrapper` for the inner loop
@@ -59,8 +59,13 @@ class SynchADMMControllerNode(TELP[SynchADMMSolverParams], DistributedSolverNode
     
     def initialize(self):
         print(as_info("Waiting for workers to become reachable"))
-        while self.backend.is_alive and not self.are_all_workers_reachable():
+        counter = 0
+        while self.backend.is_alive and len(unreachables := self.are_all_workers_reachable()) > 0:
             time.sleep(1)
+            counter += 1
+            if counter >= 5:
+                print(as_warning(f"Unreachable Nodes: {unreachables}"))
+                counter = 0
         if not self.backend.is_alive:
             raise SolutionInterrupted
         print(as_success("All worker nodes are reachable"))
@@ -199,6 +204,11 @@ class SynchADMMControllerNode(TELP[SynchADMMSolverParams], DistributedSolverNode
         if self._mlu_solver is not None:
             self._mlu_solver.close()
 
+    def _outer_inf_bound(self) -> float:
+        if self._solver_params.ScaleWithCapacity:
+            return self._problem_description.eval_params.optimality_tolerance
+        return self.unscaled_outer_inf_bound
+
     def _solve_for_tm(self, tm: np.ndarray):
         MODEL_CONTROLLER = self._mlu_solver
         PARAMS = self._solver_params
@@ -233,15 +243,17 @@ class SynchADMMControllerNode(TELP[SynchADMMSolverParams], DistributedSolverNode
                     'Outer Inf.': f'{err:.4f}',
                     'Outer Step.': f'{self._outer_admm_wrapper.step_size:.2f}'
                 })
-                if err < self._problem_description.eval_params.optimality_tolerance:
+                if err < self._outer_inf_bound():
                     print(as_success("Crossed the convergance bound. Breaking early ..."))
                     progress_bar._pbar.close()
                     break
-            self._set_X_ek()
+            if not self._problem_description.eval_params.skip_checks:
+                self._set_X_ek()
         except ControllerMLUException as e:
             raise RuntimeError(as_fail(f'MLU solver failed: {e}'))
         except SolutionInterrupted:
-            self._set_X_ek()
+            if not self._problem_description.eval_params.skip_checks:
+                self._set_X_ek()
         except asyncio.exceptions.CancelledError:
             pass
 

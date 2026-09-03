@@ -2,12 +2,11 @@ import os
 import sys
 import argparse
 import te.constants
-from typing import Optional
 from utils.logging import as_fail
-from te.algorithms.formulations.edge_based.distributed.base import DistributedSolverNodeParams
+from te.algorithms.communication import DistributedSolverNodeParams
 from te.algorithms.formulations.edge_based.distributed.admm_synchronous.worker import SynchADMMWorkerNode
 from te.algorithms.formulations.edge_based.distributed.admm_synchronous.worker_backends.grpc_backend import (
-    gRPCWorkerBackend, gRPCWorkerBackendParams)
+    SynchADMMgRPCWorkerBackend, gRPCWorkerBackendParams)
 
 
 if __name__ == '__main__':
@@ -29,6 +28,10 @@ if __name__ == '__main__':
     else:
         worker_id = args.worker_id
 
+    if worker_id is None or worker_id < 0:
+        print(as_fail('Worker ID was not properly initialized!'), file=sys.stderr)
+        sys.exit(-1)
+
     if args.local:
         hostname = "localhost"
     else:
@@ -48,10 +51,6 @@ if __name__ == '__main__':
         else:
             args.port
 
-    if worker_id < 0:
-        print(as_fail('Worker ID was not properly initialized!'), file=sys.stderr)
-        sys.exit(-1)
-
     multicast = True if args.multicast else int(os.getenv('TE_MULTICAST', 0)) > 0
 
     assert os.getenv('SOLVER_TYPE') == 'edge-sync'
@@ -60,7 +59,7 @@ if __name__ == '__main__':
         rpc_params = gRPCWorkerBackendParams(
             PeerIndex=worker_id, Peers=tuple([(hostname, port)])
         )
-        rpc_cls = gRPCWorkerBackend
+        rpc_cls = SynchADMMgRPCWorkerBackend
     else:
         raise NotImplementedError
         # rpc_params = MulticastWorkerBackendParams(
