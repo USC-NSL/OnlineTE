@@ -1,33 +1,32 @@
-import jsonargparse
-import te.constants
-import multiprocessing
-import concurrent.futures
-from dataclasses import dataclass
-from typing import Tuple, List, Optional
-from utils.logging import as_info, as_warning, log_section_title
-from te.algorithms.base import *
-from te.algorithms.formulations.helper import *
-from te.algorithms.sub_algorithms.mlu_backends.aggregate import *
-from te.algorithms.formulations.edge_based.distributed.helper import *
-from . import add_synch_solver_params_parser, parse_synch_solver_params
-from .controller_backends.aggregate import *
-from .controller import SynchADMMControllerNode
-from .worker import SynchADMMWorkerNode
-
 """
-The parameters that define the synchronous solver are:
+A helper sript for spawning a distributed solver using our
+nested ADMM backbone. It parses and stores:
 - Algorithm Parameters
 - MLU solver backend parameters
 - Communication backend parameters
 """
 
+
+import jsonargparse
+import multiprocessing
+import concurrent.futures
+from dataclasses import dataclass
+from typing import List, Optional
+from utils.logging import as_info, as_warning, log_section_title
+from te.algorithms.base import *
+from te.algorithms.communication.base import *
+from te.algorithms.communication.helper import *
+from te.algorithms.formulations.helper import *
+from te.algorithms.sub_algorithms.mlu_backends.aggregate import *
+
+
 @dataclass
-class DistributedMLUSolverDescription:
+class OnlineTESolverDescription:
     """
-    Helper Dataclass for a distributed MLU solver.
-    This completely describes the distributed MLU solver, and once combined
+    Helper Dataclass for a solver on top of the OnlineTE backbone.
+    This completely describes the nested ADMM solver, and once combined
     with the problem description, can be used to spawn a full instance
-    of the solver and see how it works.
+    of a solver and see how it works.
     """
     AlgorithmParams: SolverParams
     MasterCLS: type[TELP]
@@ -40,68 +39,47 @@ class DistributedMLUSolverDescription:
     WorkerRPCParamList: List[RPCParams]
 
 
-def single_controller_topology_address_parser(parser: jsonargparse.ArgumentParser):
-    addr_group = parser.add_argument_group(name='Node Addresses')
-    addr_group.add_argument('--num-workers', type=int, required=True,
-                            help='Number of worker nodes')
-    addr_group.add_argument('--master-addr', type=Tuple[str, int],
-                            help='Controller node address')
-    addr_group.add_argument('--worker-addr', type=Tuple[Tuple[str, int]],
-                            help='List of worker node addresses')
-    addr_group.add_argument('--local', action='store_true',
-                            help='Assume everything must run locally')
-
-
-def parse_single_controller_topology_address_parser(
-    args: jsonargparse.Namespace
-) -> Tuple[Tuple[str, int], List[Tuple[str, int]]]:
-    n: int = args.num_workers
-    master_addr: Optional[Tuple[str, int]] = args.master_addr
-    worker_addr_list: Optional[List[Tuple[str, int]]] = args.worker_addr
-    if args.local:
-        master_addr = ("localhost", te.constants.DEFAULT_RPC_PORT)
-        worker_addr_list = [("localhost", te.constants.DEFAULT_RPC_PORT + 1 + i) for i in range(n)]
-    else:
-        if master_addr is None:
-            master_addr = ("controller", te.constants.DEFAULT_RPC_PORT)
-        if worker_addr_list is None or len(worker_addr_list) == 0:
-            worker_addr_list = [(f"n{i}", te.constants.DEFAULT_RPC_PORT) for i in range(n)]
-    return master_addr, worker_addr_list
-
-
-def distributed_synchronous_admm_parser() -> jsonargparse.ArgumentParser:
-    parser = jsonargparse.ArgumentParser('Distributed Synchronous ADMM Solver')
-    add_synch_solver_params_parser(parser)
+def online_te_parser(
+    name: str,
+    solver_param_cls: type[SolverParams]
+) -> jsonargparse.ArgumentParser:
+    parser = jsonargparse.ArgumentParser(name)
+    parser.add_class_arguments(solver_param_cls, 'SolverParams', help='Algorithm parameters')
     add_mlu_backend_parser(parser)
     single_controller_topology_address_parser(parser)
     add_communication_backend_params_parser(parser)
     return parser
 
 
-def parse_distributed_synchronous_admm(args: jsonargparse.Namespace) -> DistributedMLUSolverDescription:
-    solver_params = parse_synch_solver_params(args)
+def parse_online_te_config(
+    args: jsonargparse.Namespace,
+    solver_param_cls: type[SolverParams],
+    coordinator_cls: type[TELP],
+    worker_cls: type[DistributedSolverNodeBase]
+) -> OnlineTESolverDescription:
+    solver_params = solver_param_cls.make_from_args(args.SolverParams)
     mlu_backend_params, mlu_backend_cls = parse_mlu_backend_params(args)
     master_addr, worker_addr_list = parse_single_controller_topology_address_parser(args)
     comm_backend_description = parse_communication_backend_params(master_addr, worker_addr_list, args)
-    return DistributedMLUSolverDescription(
+    return OnlineTESolverDescription(
         AlgorithmParams=solver_params,
-        MasterCLS=SynchADMMControllerNode,
+        MasterCLS=coordinator_cls,
         MasterBackendCLS=comm_backend_description.ControllerBackendCLS,
         MasterRPCParams=comm_backend_description.ControllerBackendParams,
         MLUCLS=mlu_backend_cls,
         MLUParams=mlu_backend_params,
-        WorkerCLS=SynchADMMWorkerNode,
+        WorkerCLS=worker_cls,
         WorkerBackendCLS=comm_backend_description.WorkerBackendCLS,
         WorkerRPCParamList=comm_backend_description.WorkerBackendParams
     )
 
 
-def spawn_distributed_synchronous_solver(
+def spawn_online_te_solver(
     problem: TEProblemDescription, 
-    solver: DistributedMLUSolverDescription,
+    solver: OnlineTESolverDescription,
     is_local: bool = False
-) -> Optional[TEObjectiveTrace]:
-    def _spawn_distributed_synchronous_solver() -> Optional[TEObjectiveTrace]:
+) -> Optional[TETracer]:
+    def _spawn_online_te_solver() -> Optional[TETracer]:
         print(as_info(
             f'Using master node communication backend `{solver.MasterBackendCLS.backend_name()}` with parameters:\n'+
             solver.MasterRPCParams.str_all()
@@ -143,14 +121,14 @@ def spawn_distributed_synchronous_solver(
                         RPCParams_=worker_rpc_params
                     )
                 )
-            return _spawn_distributed_synchronous_solver()
+            return _spawn_online_te_solver()
     else:
-        return _spawn_distributed_synchronous_solver()
+        return _spawn_online_te_solver()
 
 
 __all__ = [
-    'distributed_synchronous_admm_parser',
-    'parse_distributed_synchronous_admm',
-    'DistributedMLUSolverDescription',
-    'spawn_distributed_synchronous_solver'
+    'online_te_parser',
+    'parse_online_te_config',
+    'OnlineTESolverDescription',
+    'spawn_online_te_solver'
 ]

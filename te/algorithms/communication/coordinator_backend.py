@@ -6,7 +6,7 @@ from array_utils.cpu.types import *
 from te.algorithms.base import SolverParams
 
 
-class CoordinatorBackendBase[P: SolverParams](CommunicationBackendBase):
+class CoordinatorBackendBase[P: SolverParams](CommunicationBackendBase[P]):
     @abstractmethod
     def initialize_worker_nodes(
         self,

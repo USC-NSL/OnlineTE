@@ -39,6 +39,11 @@ class GurobiPathBasedTE(TELP[GurobiPathBasedSolverParams]):
                 per_commodity_provider=get_scheme(),
                 edge_indexing=self._edge_indexing
             )
+        K, N, _ = self._path_object.shape
+        assert K == self.number_of_commodities,\
+            'Commodity count does not match! This is the wrong path file!'
+        assert N == self.number_of_edges,\
+            'Number of edges do not match! This is the wrong path file!'
     
     @property
     def alg_name(self) -> str:

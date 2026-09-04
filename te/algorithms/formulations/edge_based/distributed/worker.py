@@ -4,7 +4,6 @@ import networkx as nx
 from typing import Optional, Tuple
 from array_utils import set_global_precision
 from array_utils.cpu.types import *
-from . import SynchADMMSolverParams
 from te.algorithms.communication import *
 from topologies.utils import get_adjacency_null_space, get_graph_M_matrix, get_commodity_in_out_mask
 from te.algorithms.objective_evaluators import get_total_routed_flow
@@ -13,6 +12,7 @@ from te.algorithms.sub_algorithms.lasso import sparse_range_lasso
 from te.algorithms.sub_algorithms.feasible_assignment import get_feasible_flow_assignment
 from te.algorithms.sub_algorithms.cycle_remover import remove_all_cycles
 from te.algorithms.objective_evaluators import get_total_routed_flow
+from .solver_params import EdgeBasedOnlineTEParameters
 
 
 # TODO: Add options on the controller for using Dual/Dense solvers.
@@ -149,10 +149,10 @@ class DenseSolver:
 #         return np.mean(self._X_ek, axis=1)
 
 
-class SynchADMMWorkerNode(DistributedSolverNodeBase):
+class OnlineTEWorkerNode(DistributedSolverNodeBase):
     def __init__(self, params: DistributedSolverNodeParams):
         super().__init__(params)
-        self._solver_params: Optional[SynchADMMSolverParams] = None
+        self._solver_params: Optional[EdgeBasedOnlineTEParameters] = None
         self._ready: bool = False
 
         self._T: Optional[int] = None
@@ -169,9 +169,11 @@ class SynchADMMWorkerNode(DistributedSolverNodeBase):
         # self._dual_solver: Optional[DualSolver] = None
         # self._sparse_solver: Optional[SparseSolver] = None
         assert issubclass(
-            params.CommunicationBackendCLS, WorkerBackendBase), "NOT TRUE!!!"
+            params.CommunicationBackendCLS, WorkerBackendBase)
         self.backend: WorkerBackendBase =\
-            params.CommunicationBackendCLS(params.RPCParams_)
+            params.CommunicationBackendCLS[EdgeBasedOnlineTEParameters](
+                params.RPCParams_, EdgeBasedOnlineTEParameters
+            )
         self.backend.start()
 
     def initialize(self):
@@ -186,7 +188,7 @@ class SynchADMMWorkerNode(DistributedSolverNodeBase):
     def run(self):
         self.backend.wait()
 
-    def set_solver_parameters(self, new_params: SynchADMMSolverParams, num_workers: int):
+    def set_solver_parameters(self, new_params: EdgeBasedOnlineTEParameters, num_workers: int):
         self._solver_params = new_params
         self.number_of_workers = num_workers
         set_global_precision(precision=new_params.Precision)

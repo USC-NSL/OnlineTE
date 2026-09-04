@@ -23,8 +23,15 @@ from numba import njit, prange
 from typing import Optional, List, Tuple
 from array_utils.cpu.types import *
 
+from numba.core.errors import NumbaTypeSafetyWarning
 
-@njit(parallel=True)
+import warnings
+# TODO: This warning is raised in all of the sparse operations here
+#       See how we can resolve it.
+warnings.simplefilter('ignore', category=NumbaTypeSafetyWarning)
+
+
+@njit(parallel=True, cache=True)
 def get_initial_total_flow_nnz(
     rows: List[np.ndarray], beta: np.ndarray,
     shape: Tuple[int, int, int], D_k: np.ndarray,
@@ -86,7 +93,7 @@ def path_based_to_edge_based_nnz(
     return output
 
 
-@njit(parallel=True)
+@njit(parallel=True, cache=True)
 def path_based_to_edge_based_mean_nnz(
     Y_tk: np.ndarray, rows: List[np.ndarray],
     cols: List[np.ndarray], N: int, D_k: np.ndarray,
@@ -117,7 +124,7 @@ def path_based_to_edge_based_mean_nnz(
     return output / K
 
 
-@njit(parallel=True)
+@njit(parallel=True, cache=True)
 def path_based_projection_nnz(
     Y_tk: np.ndarray, rows: List[np.ndarray],
     cols: List[np.ndarray], N: int, D_k: np.ndarray,
@@ -150,7 +157,7 @@ def path_based_projection_nnz(
     return output
 
 
-@njit
+@njit(parallel=True, cache=True)
 def path_based_transpose_product_nnz(
     X_ek: np.ndarray, rows: List[np.ndarray],
     cols: List[np.ndarray], T: int, D_k: np.ndarray,
@@ -174,7 +181,7 @@ def path_based_transpose_product_nnz(
     return output.T
 
 
-@njit
+@njit(parallel=True, cache=True)
 def path_based_transpose_vector_product_nnz(
     X_e: np.ndarray, rows: List[np.ndarray],
     cols: List[np.ndarray], T: int, D_k: np.ndarray,
@@ -198,7 +205,7 @@ def path_based_transpose_vector_product_nnz(
     return output.T
 
 
-@njit
+@njit(parallel=True, cache=True)
 def path_based_eigen_upper_nnz(cols: List[np.ndarray], T: int):
     K = len(cols)
     output = np.zeros((K,), dtype=np.int32)

@@ -5,7 +5,8 @@ from array_utils.cpu.types import *
 from te.algorithms.base import SolverParams
 
 
-class WorkerBackendBase[P: SolverParams](CommunicationBackendBase):
+
+class WorkerBackendBase[P: SolverParams](CommunicationBackendBase[P]):
     # These workers never directly reach-out to any node, they are passive
     def are_all_peers_reachable(self):
         return True

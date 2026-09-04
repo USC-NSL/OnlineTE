@@ -12,9 +12,8 @@ import grpc
 import asyncio
 import numpy as np
 import networkx as nx
-from abc import abstractmethod
 from dataclasses import dataclass
-from typing import List, Optional, Any, Tuple
+from typing import List, Optional, Tuple
 from array_utils.cpu.types import *
 from array_utils.cpu.grpc_utils import *
 from te.algorithms.base import SolverParams
@@ -38,9 +37,12 @@ class AsynchronousgRPCCoordinatorBackendParams(RPCParams):
     _left_column_share = 0.2
 
 
-class AsynchronousgRPCCoordinatorBackend[P: SolverParams](CoordinatorBackendBase):
-    def __init__(self, rpc_params: AsynchronousgRPCCoordinatorBackendParams):
-        super().__init__(rpc_params)
+class AsynchronousgRPCCoordinatorBackend[P: SolverParams](CoordinatorBackendBase[P]):
+    def __init__(self,
+        rpc_params: AsynchronousgRPCCoordinatorBackendParams,
+        solver_params_cls: SolverParams
+    ):
+        super().__init__(rpc_params, solver_params_cls)
 
         # Defer channel and stub creation until the async peer check loop
         self._worker_channels: List[Optional[grpc.Channel]] = [None] * self.number_of_workers
@@ -58,6 +60,11 @@ class AsynchronousgRPCCoordinatorBackend[P: SolverParams](CoordinatorBackendBase
             max_lag=rpc_params.MaxLag,
             event_loop=self._event_loop
         )
+
+    def are_all_peers_reachable(self):
+        if len(self._rpc_params.Peers) <= 1:
+            return True
+        raise NotImplementedError
     
     def start(self):
         self._barrier.start_barrier()
@@ -108,13 +115,6 @@ class AsynchronousgRPCCoordinatorBackend[P: SolverParams](CoordinatorBackendBase
         if not self.is_alive:
             return None
         return self._event_loop.run_until_complete(self._are_all_workers_reachable())
-
-    @abstractmethod
-    def serialize_solver_params(self, solver_params: P) -> Any:
-        """
-        Serialize the solver parameters such that we can pack it into
-        a field in a `core_messages.SolverParameters` message.
-        """
 
     async def _initialize_worker_nodes(self, solver_params: P, graph: nx.DiGraph):
         WORKERS = self._worker_stubs

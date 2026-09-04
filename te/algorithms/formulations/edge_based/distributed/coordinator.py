@@ -11,16 +11,16 @@ from array_utils import set_global_precision
 from array_utils.cpu.types import *
 # TODO: Finish the `SharingWrapper` for the inner loop
 from te.algorithms.sub_algorithms.admm import ADMMWrapper
-from . import SynchADMMSolverParams
 from te.algorithms.communication import *
 from te.algorithms.sub_algorithms.mlu_backends.base import ControllerMLUSolver, ControllerMLUException
+from .solver_params import EdgeBasedOnlineTEParameters
 
 
-class SynchADMMControllerNode(TELP[SynchADMMSolverParams], DistributedSolverNodeBase):
+class OnlineTECoordinator(TELP[EdgeBasedOnlineTEParameters], DistributedSolverNodeBase):
     def __init__(
         self, 
         problem_description: TEProblemDescription,
-        solver_params: SynchADMMSolverParams,
+        solver_params: EdgeBasedOnlineTEParameters,
         node_params: DistributedSolverNodeParams, 
         mlu_cls: type[ControllerMLUSolver], 
         mlu_params: SolverParams
@@ -47,7 +47,9 @@ class SynchADMMControllerNode(TELP[SynchADMMSolverParams], DistributedSolverNode
         self._sharing_dual: Optional[CPUArray] = None
         # Communication backend
         self.backend: CoordinatorBackendBase = \
-            node_params.CommunicationBackendCLS(node_params.RPCParams_)
+            node_params.CommunicationBackendCLS[EdgeBasedOnlineTEParameters](
+                node_params.RPCParams_, EdgeBasedOnlineTEParameters
+            )
         # self.backend.register_signal_handler()
         self.backend.start()
         # These we call right now, as opposed to doing them under `initialize`
@@ -118,7 +120,7 @@ class SynchADMMControllerNode(TELP[SynchADMMSolverParams], DistributedSolverNode
             adaptive_tau=2, adaptive_mu=5, adaptive_T=2
         )
         # Initialize the sharing wrapper
-        self._sharing_dual = cpu_zeros((self.number_of_edges,))
+        self._sharing_dual = cpu_zeros((N,))
 
     def _get_Z_value(self) -> CPUArray:
         return self._mlu_solver.current_Z
@@ -163,7 +165,7 @@ class SynchADMMControllerNode(TELP[SynchADMMSolverParams], DistributedSolverNode
 
         K = self.number_of_commodities
         ETA = self._solver_params.Eta
-        RHO = self._solver_params.Rho
+        RHO = self._outer_admm_wrapper.step_size
         U_E = self._sharing_dual
         X_BAR_E = self._sharing_mean_1
         F_E = self._get_F()

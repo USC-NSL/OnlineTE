@@ -1,4 +1,5 @@
 import signal
+import importlib
 import contextlib
 import te.constants
 import networkx as nx
@@ -10,6 +11,10 @@ from utils.exceptions import SolutionInterrupted
 from utils.logging import as_warning
 from array_utils.cpu.types import CPUArray, cpu_array
 from topologies.utils import get_edge_indexing
+from google.protobuf.message import Message
+from google.protobuf.any_pb2 import Any
+from google.protobuf.json_format import MessageToDict
+from utils.logging import as_fail
 
 
 """
@@ -48,7 +53,7 @@ class RPCParams(SolverParams):
         return self.Peers[self.PeerIndex]
 
 
-class CommunicationBackendBase(ABC):
+class CommunicationBackendBase[P: SolverParams](ABC):
     """
     All backends inherit this. Implements simple properties for
     checking if the backend is doing anything and to delegate signal
@@ -65,12 +70,19 @@ class CommunicationBackendBase(ABC):
     signal handlers completely to the backends by calling `register_signal_handler`;
     Doing so means that whenever the solvers receive an interrupt, they can be sure
     that the communication backend has already received and processed it.
+
+    Types
+    -----
+    `P`: A subclass of `SolverType`. The acutal solver parameters used by the
+         solver class.
     """
 
     @abstractmethod
-    def __init__(self, rpc_params: RPCParams):
+    def __init__(self, rpc_params: RPCParams, solver_params_cls: type[P]):
         super().__init__()
         self._rpc_params = rpc_params
+        self._solver_params_cls = solver_params_cls
+        self.set_solver_param_message_type()
     
     @property
     def rpc_params(self) -> RPCParams:
@@ -106,6 +118,32 @@ class CommunicationBackendBase(ABC):
     @killed.setter
     def killed(self, kill: bool):
         self._killed = kill
+
+    @property
+    def solver_param_object_type(self) -> type[P]:
+        return self._solver_params_cls
+
+    def set_solver_param_message_type(self):
+        """
+        Resolves the concrete class bound to solver parameters message at runtime.
+        It is _expected_ that this wire type is protocol buffer implementation of
+        the same name under `protos.solver_params`.
+        """
+        param_object_type = self.solver_param_object_type
+        try:
+            self._solver_params_message_cls = getattr(
+                importlib.import_module('protos.solver_params.solver_params_pb2'),
+                param_object_type.__name__
+            )
+        except ImportError as e:
+            raise RuntimeError(f'No `solver_params` module exists under `protos`. '
+                               'Did you compile them?') from e
+        except AttributeError as e:
+            raise RuntimeError(f'Solver parameters {param_object_type.__name__} does '
+                               'not have a protobuff message in `protos`!') from e
+    @property
+    def solver_params_message_cls(self) -> type[Message]:
+        return self._solver_params_message_cls
 
     @classmethod
     @abstractmethod
@@ -162,6 +200,27 @@ class CommunicationBackendBase(ABC):
     #     """Delegate signal handling to the backend, otherwise, the controller/worker should do it"""
     #     signal.signal(signal.SIGINT, self.stop)
     #     signal.signal(signal.SIGTERM, self.die)
+
+    def serialize_solver_params(self, solver_params: P) -> Message:
+        """
+        Serialize the solver parameters such that we can pack it into
+        a field in a `core_messages.SolverParameters` message.
+        """
+        return self.solver_params_message_cls(**solver_params.child_fields)
+
+    def deserialize_solver_params(self, buf: Any) -> Optional[P]:
+        """
+        Given an `parameter` field from a `core_messages.SolverParameters`,
+        deserialize it into an instance of solver paramters given as `P`.
+        If the buffer cannot be unpacked, return None.
+        """
+        message_class = self.solver_params_message_cls
+        param_class = self.solver_param_object_type
+        if buf.Is(message_class.DESCRIPTOR):
+            new_params = message_class()
+            buf.Unpack(new_params)
+            return param_class(**MessageToDict(new_params))
+        print(as_fail(f"Failed to parse solver parameters from coordinator!"))
 
 
 @dataclass

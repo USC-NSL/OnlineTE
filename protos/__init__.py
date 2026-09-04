@@ -6,7 +6,8 @@ from typing import Tuple
 PROTO_PATH = os.path.dirname(os.path.realpath(__file__))
 
 COMPILE_PROTO = f'{sys.executable} -m grpc_tools.protoc -I {PROTO_PATH} ' \
-                '--python_out={pyout} --pyi_out={pyiout} --grpc_python_out={grpcout} {protobuf}'
+                '--python_out={pyout} --pyi_out={pyiout} '\
+                '--grpc_python_out={grpcout} {protobuf}'
 
 DEPENDENCIES = [
     'array',
@@ -15,7 +16,7 @@ DEPENDENCIES = [
 ]
 
 PROTOS = [
-    'edge_based',
+    'solver_params'
 ]
 
 def make_proto_dir(proto: str) -> Tuple[str, str]:
@@ -33,7 +34,9 @@ def make_proto_dir(proto: str) -> Tuple[str, str]:
 def compile_proto(proto: str, with_dependency: bool = False):
     dir_path, protobuf_path = make_proto_dir(proto)
     cmd = COMPILE_PROTO.format(
-        pyout=dir_path, grpcout=dir_path, pyiout=dir_path,
+        pyout=dir_path,
+        grpcout=dir_path,
+        pyiout=dir_path,
         protobuf=protobuf_path
     )
 

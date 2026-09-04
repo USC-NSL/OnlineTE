@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from joblib import Parallel, delayed
 from typing import Optional, Dict, Tuple, List, Callable, Iterator
 from itertools import islice, repeat, pairwise
-from te.traffic_models.base import commodity_od_iterator
+from te.traffic_models.base import commodity_id_to_od
 from array_utils.cpu.types import *
 from array_utils.cpu.wrapper import *
 from .utils import get_slice_starts_and_exclusive_ends, get_number_of_required_workers
@@ -200,7 +200,9 @@ def build_provider(
     T: int,
     graph: nx.DiGraph,
     per_commodity_provider: PerCommodityProvider,
-    edge_indexing: Dict[Tuple[int, int], int]
+    edge_indexing: Dict[Tuple[int, int], int],
+    commodity_id_start: Optional[int] = 0,
+    commodity_id_end: Optional[int] = None,
 ) -> PathProvider:
     """
     Build a provider based on the given per-commodity provider.
@@ -208,9 +210,13 @@ def build_provider(
     """
     M = graph.number_of_nodes()
     N = graph.number_of_edges()
-    K = M * (M - 1)
+    if commodity_id_end is None:
+        commodity_id_end = M * (M - 1)
+    K = commodity_id_end - commodity_id_start
     slices = get_slice_starts_and_exclusive_ends(K)
-    commodities = list(commodity_od_iterator(M))
+    commodities = [commodity_id_to_od(k, M) for k in range(
+        commodity_id_start, commodity_id_end
+    )]
     nprocs = get_number_of_required_workers(K)
 
     if nprocs == 1:

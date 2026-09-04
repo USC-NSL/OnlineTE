@@ -1,7 +1,6 @@
 import grpc
 import te.constants
-from abc import abstractmethod
-from typing import Optional, Any
+from typing import Optional
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
 from ..base import RPCParams
@@ -25,9 +24,12 @@ class gRPCWorkerBackendParams(RPCParams):
     _left_column_share = 0.2
 
 
-class gRPCWorkerBackend[P: SolverParams](WorkerBackendBase):
-    def __init__(self, rpc_params: gRPCWorkerBackendParams):
-        super().__init__(rpc_params)
+class gRPCWorkerBackend[P: SolverParams](WorkerBackendBase[P]):
+    def __init__(self,
+        rpc_params: gRPCWorkerBackendParams,
+        solver_params_cls: SolverParams
+    ):
+        super().__init__(rpc_params, solver_params_cls)
 
         self._server: Optional[grpc.Server] = None
         self._listener: Optional[OnlineTEWorkerNodeListener] = None
@@ -78,14 +80,6 @@ class gRPCWorkerBackend[P: SolverParams](WorkerBackendBase):
     def close(self):
         if not self.killed:
             self._server.stop(1)
-
-    @abstractmethod
-    def deserialize_solver_params(self, buf: Any) -> Optional[P]:
-        """
-        Given an unpacked field from a `core_messages.SolverParameters`,
-        deserialize it into an instance of solver paramters given as `P`.
-        If the buffer cannot be unpacked, return None.
-        """
 
 
 class OnlineTEWorkerNodeListener(OnlineTECoreServicer):
