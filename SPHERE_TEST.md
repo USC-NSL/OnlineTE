@@ -37,6 +37,9 @@ python -m uv pip install -r requirements.txt
 > **Note:** Please ignore any setup for IP multicasting. This was not evaluated in the paper (even though it is much better suited to our use-case)
 
 ## Setting Up Ansible
+
+> **Note:** Be sure to inspect and set the `ansible/sphere_env.env` correctly (in particular, it needs your username).
+
 Under `ansible`, we provide detailed instructions on how to set up remote nodes. In case Ansible reports in-accessible nodes and appears to be a problem with the testbed, please do not hesitate to reach out and we will help.
 
 Once the above is finished, you may now bring up worker nodes on the VMs from the controller directly.
