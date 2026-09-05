@@ -28,7 +28,13 @@ And you may also want to have a virtual environment for Python.
 ```bash
 python3 -m venv .distte-venv
 source .distte-venv/bin/activate
+git clone https://github.com/USC-NSL/OnlineTE.git
+cd OnlineTE
+python -m pip install uv
+python -m uv pip install -r requirements.txt
 ```
+
+> **Note:** Please ignore any setup for IP multicasting. This was not evaluated in the paper (even though it is much better suited to our use-case)
 
 ## Setting Up Ansible
 Under `ansible`, we provide detailed instructions on how to set up remote nodes. In case Ansible reports in-accessible nodes and appears to be a problem with the testbed, please do not hesitate to reach out and we will help.

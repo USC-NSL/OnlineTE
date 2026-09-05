@@ -20,3 +20,5 @@ Instructions on how to test `OnlineTE` can be found under `LOCAL_TEST.md`.
 We utilized [SPHERE](https://launch.sphere-testbed.net/) for our large scale tests. The testbed can quickly materialize networks of hundreds of VMs (although, at the time of writing, it has trouble implementing traffic shaping, hence delays are not reflected correctly).
 
 We will release our experiment model as a public SPHERE artifact. Instructions on how to evaluate on that model can be found in `SPHERE_TEST.md`.
+
+> If there are points of confusion, you may find some answers under `FAQ.md`, if not, please do not hesitate to reach out by opening an issue or emailing us!
