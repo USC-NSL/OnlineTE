@@ -11,7 +11,7 @@
   - name: Switch branch
     no_log: true
     ansible.builtin.git:
-      repo: https://{{access_token}}@github.com/USC-NSL/OnlineTE.git
+      repo: https://github.com/USC-NSL/OnlineTE.git
       force: true
       dest: "{{path_home}}"
       version: "{{branch}}"

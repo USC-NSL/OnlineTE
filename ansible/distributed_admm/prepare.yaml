@@ -37,7 +37,7 @@
   tasks:
   - name: Clone repo with force
     ansible.builtin.git:
-      repo: https://{{access_token}}@github.com/USC-NSL/OnlineTE.git
+      repo: https://github.com/USC-NSL/OnlineTE.git
       clone: true
       force: true
       dest: "{{path_home}}"

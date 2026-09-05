@@ -7,12 +7,8 @@ SPHERE_USER=aghavidel
 SPHERE_HOME=/home/aghavidel/DistributedTE
 VENV_HOME=/home/aghavidel/.distte_venv
 
-# Access token for the git repo.
-# Remember to fill this!
-GIT_ACCESS_TOKEN=
-
 # The GIT branch to use
-GIT_BRANCH=two-phase
+GIT_BRANCH=sigcomm-ae
 
 # The service file for the worker nodes
 SERVICE_FILE=ansible/distributed_admm/te_worker.service
