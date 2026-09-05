@@ -6,7 +6,7 @@ from te.algorithms.base import *
 from te.traffic_models.base import traffic_to_demands
 from topologies.utils import get_graph_null_space_basis
 from utils.exceptions import SolutionInterrupted
-from utils.logging import as_info, as_fail, as_success, as_warning, ShortTQDM
+from utils.logging import as_info, as_fail, as_success, as_warning, ShortTQDM, TQDMSpinner
 from array_utils import set_global_precision
 from array_utils.cpu.types import *
 # TODO: Finish the `SharingWrapper` for the inner loop
@@ -157,7 +157,7 @@ class OnlineTECoordinator(TELP[EdgeBasedOnlineTEParameters], DistributedSolverNo
     def _do_network_update(self, epoch: int):
         # TODO: Try to make the workers return aggregate flows as well
         # max_run, self._Y_bar_t = self.backend.do_network_update(epoch)
-        max_run, self._sharing_mean_1 = self.backend.do_network_update(epoch)
+        max_run, self._sharing_mean_1, _ = self.backend.do_network_update(epoch)
         return max_run * 1000
 
     # @record_cpu_runtime('Sharing-Mean')
@@ -218,7 +218,8 @@ class OnlineTECoordinator(TELP[EdgeBasedOnlineTEParameters], DistributedSolverNo
             self._update_controller_objective()
             MODEL_CONTROLLER.solve()
             self._update_r_e()
-            progress_bar = ShortTQDM(range(PARAMS.OuterLoopRounds))
+            progress_bar = ShortTQDM(range(PARAMS.OuterLoopRounds))\
+                if not self.first_solve else TQDMSpinner('Cold Start.')
             for epoch in progress_bar:
                 for i in reversed(range(PARAMS.InnerLoopRounds)):
                     self._do_network_update(epoch)

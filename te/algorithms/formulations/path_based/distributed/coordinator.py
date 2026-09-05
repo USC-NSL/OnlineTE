@@ -246,7 +246,7 @@ class OnlineTECoordinator(TELP[PathBasedOnlineTEParameters], DistributedSolverNo
                         })
                     case _: raise NotImplementedError
 
-                if gap < 0.005:
+                if gap < 0.05:
                     progress_bar._pbar.close()
                     if self.first_solve:
                         print(as_success("Cold start finished!"))

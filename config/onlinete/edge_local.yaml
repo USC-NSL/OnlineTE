@@ -1,0 +1,30 @@
+objective: MLU
+topo_name: Interoute
+tm_seed: 123
+topo_seed: 456
+initial_tm_seed: 789
+EvaluationParams:
+  feasibility_tolerance: 1e-5
+  optimality_tolerance: 5e-4
+  loop_tolerance: 1e-3
+  sequence_length: 5
+  scale_factor: 10
+  verbose: true
+  skip_checks: true
+  trace_reference: Interoute_trace_MLU.txt
+tm_class: sampled
+sampled:
+  sample_rate: 0.05
+initial_tm_class: uniform
+initial_tm.uniform:
+  min: 1e-2
+  max: 1
+solver: online_te
+online_te:
+  mlu_backend: pdlp
+  num_workers: 5
+  SolverParams:
+    InnerLoopRounds: 5
+    OuterLoopRounds: 200
+    SwitchIterations: 2
+    ScaleWithCapacity: true

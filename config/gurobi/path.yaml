@@ -1,0 +1,51 @@
+# MLU objective
+objective: MLU
+# Topolgoy name
+topo_name: Cogentco
+# Traffic matrix and topology seeds
+tm_seed: 123
+topo_seed: 456
+initial_tm_seed: 789
+EvaluationParams:
+  # Gurobi feasibility tolerance
+  feasibility_tolerance: 1e-5
+  # Gurobi optimality tolerance
+  optimality_tolerance: 1e-3
+  # <Ignored for path-based solver>
+  loop_tolerance: 1e-3
+  # Number of matrices to evaluate
+  sequence_length: 20
+  # Matrix scale factor to cause congestion
+  scale_factor: 10
+  # Print all output
+  verbose: true
+  # Write the objective trace for validation
+  trace_out: Cogentco_trace_MLU.txt
+# The `sampled` matrix is a traffic matrix where for each
+# iteration, a selected percent of demands arbitrarily change.
+# In this example, 5 percent of the demands are allowed to
+# arbitrarily change up to next iteration.
+tm_class: sampled
+sampled:
+  sample_rate: 0.05
+  delta_min: -1
+  delta_max: 1
+# We need an initial traffic matrx to begin from. Here, we
+# start from a uniform matrix.
+initial_tm_class: uniform
+initial_tm.uniform:
+  min: 1e-2
+  max: 1
+solver: gurobi
+gurobi:
+  SolverParams:
+    # Barrier is the only solver that can utilize multiple threads
+    # (there is also PDHG, but it is still experimental and in our
+    # experience, PDLP is better for our problems).
+    Method: BARRIER
+    # The paramters below _MUST_ match exactly with the path file
+    # and the number of paths required. Please take care when changing
+    # them, as we have very light checks to make sure if paths make
+    # sense given the current topology.
+    max_num_paths_per_commodity: 16
+    path_file: paths_Cogentco.pkl

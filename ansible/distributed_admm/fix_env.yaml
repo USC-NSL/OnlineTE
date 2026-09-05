@@ -1,0 +1,23 @@
+---
+# Spawn workers and a controller node for a distributed test
+- name: Set Multicast ENV
+  hosts: workers_group
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Set Runtime Environment Variables
+      ansible.builtin.lineinfile:
+        dest: "/etc/environment"
+        state: absent
+        regexp: '^TE_MULTICAST='
+      when: 'worker_id|int < upto|int'
+    - name: Set Runtime Environment Variables
+      ansible.builtin.lineinfile:
+        dest: "/etc/environment"
+        state: absent
+        regexp: '^SOLVER_TYPE='
+      when: 'worker_id|int < upto|int'
+    - name: Source ENV
+      shell: ". /etc/environment"
+      when: 'worker_id|int < upto|int'
+

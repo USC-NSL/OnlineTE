@@ -195,10 +195,10 @@ class OnlineTEWorkerNode(DistributedSolverNodeBase):
             )
 
     # TODO: Record the last epoch that we managed to handle ...
-    def do_inner_loop_pgd_update(self, epoch: int) -> Tuple[int, CPUArray]:
+    def do_inner_loop_pgd_update(self, epoch: int) -> Tuple[int, CPUArray, Optional[float]]:
         start = time.perf_counter_ns()
         means = self._solver.update(self._sharing_bias_cached)
-        return (time.perf_counter_ns() - start) // 1000, means
+        return (time.perf_counter_ns() - start) // 1000, means, None
 
     def update_cached_values(self, sharing_bias: CPUArray):
         self._sharing_bias_cached = sharing_bias
