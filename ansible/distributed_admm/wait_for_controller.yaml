@@ -12,7 +12,7 @@
       ansible.builtin.assert:
         that:
           - multicast is match('^(0|1)$')
-          - solver_type is match('^(path-sync|edge-sync)$')
+          - solver_type is match('^(path|edge)$')
     - name: Set Runtime Environment Variables
       ansible.builtin.lineinfile:
         dest: "/etc/environment"

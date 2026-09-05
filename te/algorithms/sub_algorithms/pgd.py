@@ -11,6 +11,7 @@ from te.algorithms.sub_algorithms.simplex_projection import project_onto_probabi
 from te.path_providers.sparse_ops import path_based_projection_nnz, path_based_transpose_vector_product_nnz
 
 
+# TODO: We no longer need the input/output mask. Remove it ....
 def do_memory_efficient_pgd(
     lambda_block: CPUArray, x_block: CPUArray, nnt: CPUArray,
     bias: CPUArray, x_block_0: CPUArray,
@@ -73,6 +74,34 @@ def do_path_based_pgd(
                 num_paths, demand_block, capacities
             )
         y_block = project_onto_probability_simplex(y_block - step_sizes * grad_block, beta_block)
+    return y_block
+
+
+def do_path_based_nesterov_pgd(
+    y_block: CPUArray, y_block_old: CPUArray,
+    alpha_rows: NumbaList, alpha_cols: NumbaList, sharing_bias: CPUArray,
+    beta_block: CPUArray, demand_block: CPUArray, num_edges: int, 
+    num_paths: int, step_sizes: Union[float, np.ndarray], n_iter: int,
+    capacities: Optional[CPUArray] = None
+) -> CPUArray:
+    t = 1
+    z_block = np.copy(y_block)
+    for _ in range(n_iter):
+        grad_block = \
+            path_based_projection_nnz(
+                z_block - y_block_old, alpha_rows, alpha_cols,
+                num_edges, demand_block, capacities
+            ) + \
+            path_based_transpose_vector_product_nnz(
+                sharing_bias, alpha_rows, alpha_cols,
+                num_paths, demand_block, capacities
+            )
+        candidate = project_onto_probability_simplex(z_block - step_sizes * grad_block, beta_block)
+        t_acc = cpu_cast_float(0.5 * (1.0 + np.sqrt(1.0 + 4.0 * t * t)))
+        z_block = candidate + cpu_cast_float((t - 1.0)/t_acc) * (candidate - y_block)
+        y_block = candidate
+        t = t_acc
+
     return y_block
 
 

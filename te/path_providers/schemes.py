@@ -8,16 +8,16 @@ class PathSchemes(str, enum.Enum):
     EDGE_DISJOINT = "EDGE-DISJOINT"
 
 
-def default_weight(u: int, v: int, attributes: Dict) -> float:
+def inverse_cap_weight(u: int, v: int, attributes: Dict) -> float:
     """
-    Default shortest path weights is the inverse of edge capacity.
+    Shortest path weights as the inverse of edge capacity.
     """
     return 1 / attributes['capacity']
 
 
 def shortest_path_per_commodity_provider(
     graph: nx.DiGraph, source: int, destination: int,
-    weight: Optional[Union[str, Callable[[int, int, Dict], float]]] = default_weight
+    weight: Optional[Union[str, Callable[[int, int, Dict], float]]] = None
 ) -> Iterator[List[int]]:
     """
     Simple shortest path iterator based on Yen's algorithm.

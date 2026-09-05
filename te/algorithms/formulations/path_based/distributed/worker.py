@@ -7,7 +7,7 @@ from array_utils import set_global_precision
 from array_utils.cpu.types import *
 from array_utils.cpu.wrapper import cpu_fill
 from te.algorithms.communication import *
-from te.algorithms.sub_algorithms.pgd import do_path_based_pgd, do_path_based_maxflow_pgd
+from te.algorithms.sub_algorithms.pgd import do_path_based_pgd, do_path_based_maxflow_pgd, do_path_based_nesterov_pgd
 from te.path_providers import *
 from te.path_providers.sparse_ops import *
 from utils.logging import as_warning
@@ -24,7 +24,8 @@ class DenseSolver:
         pgd_step: float, pgd_iters: int,
         eta: float,
         adjust_step_size: bool,
-        capacities: Optional[CPUArray] = None
+        capacities: CPUArray,
+        scale_with_capacity: bool
     ):
         self._demands: CPUArray = demands
         K, N, T = alpha_shape
@@ -32,14 +33,18 @@ class DenseSolver:
         self._alpha_rows = alpha_rows
         self._alpha_cols = alpha_cols
         self._beta = beta
-        self._pgd_steps = pgd_step if not adjust_step_size else \
-            cpu_array(pgd_step / path_based_power_method(
-                alpha_rows, alpha_cols, alpha_shape, capacities
-            ))
-        print(self._pgd_steps)
+        self._adjust_step_size = adjust_step_size
         self._pgd_iters = pgd_iters
         self._eta = eta
+        self._scale_with_capacity = scale_with_capacity
         self._capacities = capacities
+
+        self._pgd_step_0 = pgd_step
+        self._pgd_steps = pgd_step if not adjust_step_size else \
+            cpu_array(pgd_step / path_based_power_method(
+                alpha_rows, alpha_cols, alpha_shape,
+                demands, self.conditional_capacity
+            ))
 
         self._K = K
         self._N = N
@@ -49,32 +54,56 @@ class DenseSolver:
         self._Y_tk_old = cpu_array(self._Y_tk)
     
     def _initialize_splits(self):
-        initial_values = 1 / self._beta
-        self._Y_tk = cpu_array(np.repeat(initial_values[None, :], axis=0, repeats=self._T))
-        mask = np.arange(self._T)[:, None] >= self._beta
-        self._Y_tk[mask] = 0
+        self._Y_tk = get_path_split_with_capacity(
+            self._Y_tk,self._alpha_rows,
+            self._alpha_cols, self._capacities
+        )
+
+    @property
+    def conditional_capacity(self) -> Optional[CPUArray]:
+        return self._capacities if self._scale_with_capacity else None
 
     @property
     def X_ek(self) -> CPUArray:
         return path_based_to_edge_based_nnz(
             self._Y_tk,self._alpha_rows, self._alpha_cols,
-            self._N, self._demands, self._capacities
+            self._N, self._demands,
+            self.conditional_capacity
         )
 
     @property
     def X_bar(self) -> CPUArray:
         return path_based_to_edge_based_mean_nnz(
             self._Y_tk, self._alpha_rows, self._alpha_cols,
-            self._N, self._demands, self._capacities
+            self._N, self._demands,
+            self.conditional_capacity
         )
 
     def set_demands(self, demands: CPUArray):
         self._demands = demands
-        # No need to update splits!
+        self._pgd_steps = self._pgd_step_0 if not self._adjust_step_size else \
+            cpu_array(self._pgd_step_0 / path_based_power_method(
+                self._alpha_rows, self._alpha_cols, self._alpha_shape,
+                demands, self.conditional_capacity
+            ))
     
     def update(self, sharing_bias: CPUArray) -> CPUArray:
         new_Y_old = cpu_array(self._Y_tk)
-        self._Y_tk = do_path_based_pgd(
+        # self._Y_tk = do_path_based_pgd(
+        #     y_block=self._Y_tk,
+        #     y_block_old=self._Y_tk_old,
+        #     alpha_rows=self._alpha_rows,
+        #     alpha_cols=self._alpha_cols,
+        #     sharing_bias=sharing_bias,
+        #     beta_block=self._beta,
+        #     demand_block=self._demands,
+        #     num_edges=self._N,
+        #     num_paths=self._T,
+        #     step_sizes=self._pgd_steps,
+        #     n_iter=self._pgd_iters,
+        #     capacities=self.conditional_capacity
+        # )
+        self._Y_tk = do_path_based_nesterov_pgd(
             y_block=self._Y_tk,
             y_block_old=self._Y_tk_old,
             alpha_rows=self._alpha_rows,
@@ -86,12 +115,12 @@ class DenseSolver:
             num_paths=self._T,
             step_sizes=self._pgd_steps,
             n_iter=self._pgd_iters,
-            capacities=self._capacities
+            capacities=self.conditional_capacity
         )
         self._Y_tk_old = new_Y_old
         return path_based_to_edge_based_mean_nnz(
             self._Y_tk, self._alpha_rows, self._alpha_cols,
-            self._N, self._demands, self._capacities
+            self._N, self._demands, self.conditional_capacity
         )
 
 
@@ -205,7 +234,8 @@ class OnlineTEWorkerNode(DistributedSolverNodeBase):
             pgd_iters=self._solver_params.SwitchIterations,
             eta=self._solver_params.Eta,
             adjust_step_size=self._solver_params.AdjustGamma,
-            capacities=self._capacities if self._solver_params.ScaleWithCapacity else None
+            capacities=self._capacities,
+            scale_with_capacity=self._solver_params.ScaleWithCapacity
         )
 
     def do_inner_loop_pgd_update(self, epoch: int) -> Tuple[int, CPUArray]:

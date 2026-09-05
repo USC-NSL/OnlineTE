@@ -2,7 +2,7 @@ import asyncio
 from typing import List, Optional, Any, Set, Dict, Tuple, Callable, Awaitable
 from array_utils.cpu.types import *
 from array_utils.cpu.grpc_utils import *
-from utils.logging import as_fail
+from utils.logging import as_fail, as_warning
 
 
 class PartialBarrier[GatherRequest, GatherResponse, StoreType, ScatterRequest]:
@@ -56,11 +56,13 @@ class PartialBarrier[GatherRequest, GatherResponse, StoreType, ScatterRequest]:
     - `ScatterRequest` is the type of value that we scatter to all arrived nodes.
     """
     def __init__(self,
-        number_of_endpoints: int, min_arrival: int, max_lag: int,
+        number_of_endpoints: int,
+        min_arrival: Optional[int],
+        max_lag: int,
         event_loop: asyncio.AbstractEventLoop
     ):
         self._number_of_endpoints = number_of_endpoints
-        self._min_arrival = min_arrival
+        self._min_arrival = min_arrival if min_arrival is not None else number_of_endpoints
         self._max_lag = max_lag
         self._event_loop = event_loop
 
@@ -91,6 +93,10 @@ class PartialBarrier[GatherRequest, GatherResponse, StoreType, ScatterRequest]:
 
     def start_barrier(self):
         self._active = True
+        if self._min_arrival == self._number_of_endpoints:
+            print(as_warning(f'Partial Barrier will operate synchronosuly'))
+        else:
+            print(as_warning(f'Partial Barrier operates asynchronously'))
 
     def break_barrier(self):
         self._active = False

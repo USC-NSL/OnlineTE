@@ -30,7 +30,7 @@ from google.protobuf.empty_pb2 import Empty
 class AsynchronousgRPCCoordinatorBackendParams(RPCParams):
     Timeout: float = 5
     """Timeout for all asynchronous `wait` calls"""
-    BarrierSize: int = 1
+    BarrierSize: Optional[int] = None
     """Partial barrier size"""
     MaxLag: int = 1
     """Partial barrier maximum lag"""

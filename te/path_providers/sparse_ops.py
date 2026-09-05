@@ -219,17 +219,40 @@ def path_based_eigen_upper_nnz(cols: List[np.ndarray], T: int):
     return output
 
 
-def path_based_power_method(rows: List[np.ndarray], cols: List[np.ndarray], shape: Tuple[int, int, int],
-                            C_e: Optional[np.ndarray] = None, n_iters: int = 20) -> np.ndarray:
+def path_based_power_method(
+    rows: List[np.ndarray], cols: List[np.ndarray], shape: Tuple[int, int, int],
+    demands: np.ndarray, C_e: Optional[np.ndarray] = None, n_iters: int = 20
+) -> np.ndarray:
     K, N, T = shape
-    d = cpu_zeros((K,)) + 1
     # TODO: Don't be lazy ... this should start from a random vector
     v = cpu_zeros((T, K)) + 1
     for _ in range(n_iters):
-        res = path_based_projection_nnz(v, rows, cols, N, d, C_e)
+        res = path_based_projection_nnz(v, rows, cols, N, demands, C_e)
         v = res / cpu_array(np.linalg.norm(v, axis=0))[None, :]
-    res = path_based_projection_nnz(v, rows, cols, N, d, C_e)
+    res = path_based_projection_nnz(v, rows, cols, N, demands, C_e)
     return cpu_array(np.sum(np.multiply(res, v), axis=0) / np.sum(np.multiply(v, v), axis=0))
+
+
+@njit(parallel=True, cache=True)
+def get_path_split_with_capacity(
+    Y_tk: np.ndarray, rows: List[np.ndarray],
+    cols: List[np.ndarray], C_e: np.ndarray
+):
+    T, K = Y_tk.shape
+    capacities = np.zeros((T, K), dtype=Y_tk.dtype)
+    for k in prange(K):
+        col = cols[k]
+        row = rows[k]
+        nnz = len(col)
+        for i in range(nnz):
+            e = row[i]
+            t = col[i]
+            c = C_e[e]
+            if capacities[t, k] == 0 or capacities[t, k] > c:
+                capacities[t, k] = c
+    total_cap = capacities.sum(axis=0)
+    Y_tk = capacities / total_cap
+    return Y_tk
 
 
 def warm_start_jit():
@@ -257,6 +280,7 @@ def warm_start_jit():
     path_based_projection_nnz(Y_tk, rows, cols, N, D_k, C_e)
     path_based_transpose_product_nnz(X_ek, rows, cols, T, D_k, C_e)
     path_based_transpose_vector_product_nnz(X_ek[:, 0], rows, cols, T, D_k, C_e)
+    get_path_split_with_capacity(Y_tk, rows, cols, C_e)
 
 
 """
@@ -342,3 +366,17 @@ def path_based_projection_dense(Y_tk: CPUArray, alpha: BooleanCPUArray, D_k: CPU
     Where `X_ek` is the edge based evaluation of the current path set.
     """
     return np.einsum('kji,jk,k->ik', alpha, path_based_to_edge_based_dense(Y_tk, alpha, D_k), D_k)
+
+
+__all__ = [
+    'get_initial_total_flow_nnz',
+    'path_based_to_edge_based_nnz',
+    'path_based_to_edge_based_mean_nnz',
+    'path_based_projection_nnz',
+    'path_based_transpose_product_nnz',
+    'path_based_transpose_vector_product_nnz',
+    'path_based_eigen_upper_nnz',
+    'path_based_power_method',
+    'get_path_split_with_capacity',
+    'warm_start_jit'
+]

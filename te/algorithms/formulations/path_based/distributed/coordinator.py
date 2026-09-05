@@ -5,7 +5,7 @@ from typing import Optional
 from te.algorithms.base import *
 from te.traffic_models.base import traffic_to_demands
 from utils.exceptions import SolutionInterrupted
-from utils.logging import as_info, as_fail, as_success, as_warning, ShortTQDM
+from utils.logging import as_info, as_fail, as_success, as_warning, ShortTQDM, TQDMSpinner
 from array_utils import set_global_precision
 from array_utils.cpu.types import *
 # TODO: Finish the `SharingWrapper` for the inner loop
@@ -79,7 +79,7 @@ class OnlineTECoordinator(TELP[PathBasedOnlineTEParameters], DistributedSolverNo
 
     @property
     def alg_name(self) -> str:
-        return 'Path Based Distributed Synchronous ADMM'
+        return 'Path Based OnlineTE'
 
     @property
     def current_objective(self) -> float:
@@ -105,7 +105,7 @@ class OnlineTECoordinator(TELP[PathBasedOnlineTEParameters], DistributedSolverNo
         # Initialize the consensus wrapper
         self._outer_admm_wrapper = ADMMWrapper(
             N, self._solver_params.Rho,
-            adaptive_tau=2, adaptive_mu=5, adaptive_T=2
+            # adaptive_tau=2, adaptive_mu=5, adaptive_T=2
         )
         # Initialize the sharing wrapper
         self._sharing_dual = cpu_zeros((N,))
@@ -173,8 +173,6 @@ class OnlineTECoordinator(TELP[PathBasedOnlineTEParameters], DistributedSolverNo
             sharing_mean_2=self._sharing_mean_2,
             sharing_dual=self._sharing_dual
         )
-        # TODO: How safe is this?
-        # return norm_in_consensus(self._P_bar_t, self._Y_bar_t, 5e-4)
         return False
     
     # @record_cpu_runtime('Update-X-EK-SUM')
@@ -196,7 +194,7 @@ class OnlineTECoordinator(TELP[PathBasedOnlineTEParameters], DistributedSolverNo
 
     def _outer_inf_bound(self) -> float:
         if self._solver_params.ScaleWithCapacity:
-            return self._problem_description.eval_params.optimality_tolerance
+            return self.optimality_tolerance
         return self.unscaled_outer_inf_bound
 
     def _solve_for_tm(self, tm: np.ndarray):
@@ -207,7 +205,8 @@ class OnlineTECoordinator(TELP[PathBasedOnlineTEParameters], DistributedSolverNo
             self._update_controller_objective()
             MODEL_CONTROLLER.solve()
             self._update_r_e()
-            progress_bar = ShortTQDM(range(PARAMS.OuterLoopRounds))
+            progress_bar = ShortTQDM(range(PARAMS.OuterLoopRounds))\
+                if not self.first_solve else TQDMSpinner('Cold Start.')
             for epoch in progress_bar:
                 for i in reversed(range(PARAMS.InnerLoopRounds)):
                     self._do_network_update(epoch)
@@ -223,17 +222,21 @@ class OnlineTECoordinator(TELP[PathBasedOnlineTEParameters], DistributedSolverNo
                 else:
                     max_util = float(np.max(self.number_of_commodities * self._sharing_mean_1 / self._capacities))
                 # Inner loop infeasibility is usually very small, no need to bother with it!
-                err = self._outer_admm_wrapper.infeasibility
+                gap = 2*self._outer_admm_wrapper.infeasibility / self._outer_inf_bound()
                 progress_bar.set_postfix({
                     'Cont. Util.': f'{self._mlu_solver.current_u:.4f}',
                     'Net. Util.': f'{max_util:.4f}',
-                    'Outer Inf.': f'{err:.4f}',
+                    'Obj. Gap': f'{gap:.4f}',
                     'Outer Step.': f'{self._outer_admm_wrapper.step_size:.2f}'
                 })
-                if err < self._outer_inf_bound():
-                    print(as_success("Crossed the convergance bound. Breaking early ..."))
+                if gap < 0.005:
                     progress_bar._pbar.close()
+                    if self.first_solve:
+                        print(as_success("Cold start finished!"))
+                    else:
+                        print(as_success("Crossed the convergance bound. Breaking early ..."))
                     break
+                progress_bar.update()
             if not self._problem_description.eval_params.skip_checks:
                 self._set_X_ek()
         except ControllerMLUException as e:

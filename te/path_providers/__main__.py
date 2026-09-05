@@ -19,7 +19,10 @@ if __name__ == '__main__':
     scheme = get_scheme(args.scheme)
     output_path = args.output_path
     if output_path is None:
-        output_path = f'paths_{args.topo_name}.pkl'
+        if args.topo_seed is not None:
+            output_path = f'paths_{args.topo_name}_{args.topo_seed}.pkl'
+        else:
+            output_path = f'paths_{args.topo_name}.pkl'
 
     provider = build_provider(
         T = args.max_path,

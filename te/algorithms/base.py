@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 import enum
 import time
+import json
 import numpy as np
 import networkx as nx
 import te.constants
@@ -60,6 +62,12 @@ class TEEvaluationParams(SolverParams):
         TM scale factor.
     sequence_length: int = 1
         Number of TMs in sequence to evaluate.
+    trace_out: Optional[str] = None
+        Path to save the `TETracer` object once done.
+    trace_reference: Optional[str] = None
+        Path to an existing `TETracer` object to validate the
+        solution against.
+        Currently, it only checks the final objective.
     
     Notes
     -----
@@ -79,6 +87,8 @@ class TEEvaluationParams(SolverParams):
     skip_checks: bool = False
     scale_factor: float = 1.0
     sequence_length: int = 1
+    trace_out: Optional[str] = None
+    trace_reference: Optional[str] = None
 
     def __post_init__(self):
         assert self.optimality_tolerance < 1 and self.optimality_tolerance > 0
@@ -86,6 +96,8 @@ class TEEvaluationParams(SolverParams):
         if self.loop_tolerance < 2 * self.feasibility_tolerance:
             print(as_warning(f'`loop_tolerance` is too tight relative to `feasibility_tolerance`, numerical noise'
                              'may be reported as loops!'))
+        if self.trace_reference is not None:
+            assert os.path.exists(self.trace_reference)
     
     def __call__(self, **kwargs):
         copy = dataclasses.replace(self)
@@ -158,8 +170,10 @@ class TETracer:
     return a string key and a result. The key is used to keep the output in the
     tracer.
     """
-    def __init__(self):
+    def __init__(self, data: Optional[Dict] = None):
         self._traces: Dict[str, List] = defaultdict(list)
+        if data is not None:
+            self._traces.update(data)
         self._callbacks: Dict[
             SolverCallbackType,
             List[
@@ -188,6 +202,19 @@ class TETracer:
 
     def add_result(self, key: str, output: Any):
         self._traces[key].append(output)
+
+    def save(self, path: str):
+        with open(path, 'w') as f:
+            f.write(json.dumps(self._traces, indent=4))
+
+    @classmethod
+    def load(cls, path: str) -> TETracer:
+        with open(path, 'r') as f:
+            return cls(json.loads(f.read()))
+
+    def get_objective_gap(self, obj: float, index: int) -> float:
+        ref = self._traces['objective_trace'][index][0]
+        return abs((obj - ref) / ref) * 100
 
 
 @dataclass
@@ -254,7 +281,11 @@ class TELP[P: SolverParams](ABC):
         `b -> a` at the same time.
         We _trust_ that individual paths are loop-free for path-based
         solvers, and thus, skip loop checking for this reason.
-        """        
+        """
+        self._first_solve = True
+        ref_trace = self._problem_description.eval_params.trace_reference
+        self._reference_trace: Optional[TETracer] = \
+            None if ref_trace is None else TETracer.load(ref_trace)
 
     @property
     def objective(self) -> TEObjective:
@@ -289,8 +320,16 @@ class TELP[P: SolverParams](ABC):
         return self._tracer
 
     @property
+    def optimality_tolerance(self) -> float:
+        return self._problem_description.eval_params.optimality_tolerance
+
+    @property
     def unscaled_outer_inf_bound(self) -> float:
-        return self._problem_description.eval_params.optimality_tolerance * self._c_norm
+        return self._c_norm**2 / np.sqrt(self.number_of_edges)
+
+    @property
+    def first_solve(self) -> bool:
+        return self._first_solve
 
     def report_problem_size(self):
         print(as_info(f"Graph Size: {self.number_of_nodes} nodes |"
@@ -390,6 +429,7 @@ class TELP[P: SolverParams](ABC):
         print(as_info(f"Solved in {str_round(runtime, 3)} seconds. Objective Value: {str_round(self.current_objective, 4)}"))
         if not self._problem_description.eval_params.skip_checks:
             self._check_results.append(self.check())
+        self._first_solve = False
         self._tracer.execute_callbacks(self, SolverCallbackType.PostTMSolve)
 
     def solve(self):
@@ -402,8 +442,15 @@ class TELP[P: SolverParams](ABC):
             )))
             self._current_TM = tm
             self.solve_for_tm(tm)
+            if self._reference_trace is not None:
+                gap = self._reference_trace.get_objective_gap(
+                    self.current_objective, i
+                )
+                print(as_info(f'Objective gap to reference: {gap:.2f}%'))
         self._tracer.add_result("total_solve_time", time.perf_counter() - t_start)
         self._tracer.execute_callbacks(self, SolverCallbackType.PostSolve)
+        if self._problem_description.eval_params.trace_out is not None:
+            self._tracer.save(self._problem_description.eval_params.trace_out)
 
     def check(self) -> TECheckResult:
         """Performs sanity checks on the **current** solution."""

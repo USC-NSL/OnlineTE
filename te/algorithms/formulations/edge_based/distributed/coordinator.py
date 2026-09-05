@@ -85,7 +85,7 @@ class OnlineTECoordinator(TELP[EdgeBasedOnlineTEParameters], DistributedSolverNo
 
     @property
     def alg_name(self) -> str:
-        return 'Distributed Synchronous ADMM'
+        return 'Edge Based OnlineTE'
     
     @property
     def current_objective(self) -> float:
@@ -185,8 +185,6 @@ class OnlineTECoordinator(TELP[EdgeBasedOnlineTEParameters], DistributedSolverNo
             sharing_mean_2=self._sharing_mean_2,
             sharing_dual=self._sharing_dual
         )
-        # TODO: How safe is this?
-        # return norm_in_consensus(self._P_bar_t, self._Y_bar_t, 5e-4)
         return False
     
     # @record_cpu_runtime('Update-X-EK-SUM')
@@ -245,7 +243,7 @@ class OnlineTECoordinator(TELP[EdgeBasedOnlineTEParameters], DistributedSolverNo
                     'Outer Inf.': f'{err:.4f}',
                     'Outer Step.': f'{self._outer_admm_wrapper.step_size:.2f}'
                 })
-                if err < self._outer_inf_bound():
+                if 2*err < self._outer_inf_bound():
                     print(as_success("Crossed the convergance bound. Breaking early ..."))
                     progress_bar._pbar.close()
                     break

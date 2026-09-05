@@ -4,6 +4,7 @@ import numpy as np
 import jsonargparse
 import networkx as nx
 from io import BufferedReader
+from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Tuple, Optional, Iterator, Callable, List, ClassVar, Type
 from .base import *
@@ -310,7 +311,7 @@ class SampledTMGenerator(TMGenerator):
             for index, shift in zip(indices, shifts):
                 sample[index] = shift
             np.multiply(sample, PARAMS.scale_factor, out=sample)
-            arr = np.clip(arr + sample, a_min=0, a_max=None)
+            arr = np.clip(arr + sample, a_min=1e-3, a_max=None)
             yield arr
 
 
@@ -351,6 +352,62 @@ class NCFlowTrafficMatrixGenerator(TMGenerator):
             yield np.clip(arr + sample, a_min=0, a_max=None)
 
 
+@dataclass(frozen=True)
+class GravityTMGeneratorParams(TMGeneratorParams):
+    graph: nx.DiGraph = field(default=nx.DiGraph(), metadata={'help': argparse.SUPPRESS})
+    _type: ClassVar[str] = 'gravity'
+
+
+class GravityTrafficMatrixGenerator(TMGenerator):
+    """
+    Converter based on what was used for the Gravity model.
+    This code is take from NCFlow.
+
+    Reference
+    ---------
+    https://github.com/netcontract/ncflow/blob/master/lib/traffic_matrix.py#L194
+    """
+    _TYPE = GravityTMGeneratorParams._type
+    def __init__(self,  params: GravityTMGeneratorParams):
+        super().__init__(params)
+
+    def __iter__(self) -> Iterator[np.ndarray]:
+        PARAMS: GravityTMGeneratorParams = self.params 
+        RNG = self.get_rng()
+        G = PARAMS.graph
+        num_nodes = G.number_of_nodes()
+        tm = np.zeros((num_nodes, num_nodes), dtype=PARAMS.dtype)
+
+        sccs = nx.strongly_connected_components(G)
+        for scc in sccs:
+            in_cap_sum, out_cap_sum = defaultdict(float), defaultdict(float)
+            for u in scc:
+                for v in G.predecessors(u):
+                    in_cap_sum[u] += G[v][u]['capacity']
+                for v in G.successors(u):
+                    out_cap_sum[u] += G[u][v]['capacity']
+            in_cap_sum, out_cap_sum = dict(in_cap_sum), dict(out_cap_sum)
+
+            in_total_cap = sum(in_cap_sum.values())
+            out_total_cap = sum(out_cap_sum.values())
+
+            for u in scc:
+                norm_u = out_cap_sum[u] / out_total_cap
+                for v in scc:
+                    if u == v:
+                        continue
+                    frac = norm_u * in_cap_sum[v] / \
+                        (in_total_cap - in_cap_sum[u])
+                    if self.random:
+                        tm[u, v] = max(
+                            RNG.normal(frac, frac / 4), 0.0)
+                    else:
+                        tm[u, v] = frac
+
+            np.multiply(tm, PARAMS.scale_factor, out=tm)
+            yield tm
+
+
 def get_param_class_from_name(name: str) -> Tuple[type[TMGeneratorParams], type[TMGenerator]]:
     params = None
     generator = None
@@ -382,7 +439,8 @@ def attach_TM_class_parser(parser: jsonargparse.ArgumentParser):
         parser.add_class_arguments(param, nested_key=param._type)
     for param in [
         UniformTMGeneratorParams, ExponentialTMGeneratorParams,
-        BimodalTMGeneratorParams, FilebackedTMGeneratorParams
+        BimodalTMGeneratorParams, FilebackedTMGeneratorParams,
+        GravityTMGeneratorParams
     ]:
         parser.add_class_arguments(param, nested_key=f'initial_tm.{param._type}', required=False)
 
@@ -397,9 +455,11 @@ def parse_and_get_TM(
     tm_class_args.seed = tm_seed
     tm_class_args.count = tm_count
     tm_class_args.scale_factor = scale_factor
-    if cls_name == UniformTMGenerator.type():
+    if cls_name == UniformTMGenerator.type() or \
+        cls_name == BimodalTMGenerator.type():
         tm_class_args.n = graph.number_of_nodes()
-    elif cls_name == ExponentialTMGenerator.type():
+    elif cls_name == ExponentialTMGenerator.type() or \
+        cls_name == GravityTrafficMatrixGenerator.type():
         tm_class_args.graph = graph
     elif cls_name == SampledTMGenerator.type():
         assert args.initial_tm_class is not None,\
@@ -414,9 +474,11 @@ def parse_and_get_TM(
         init_tm_class_args.seed = initial_tm_seed
         init_tm_class_args.count = 1
         init_tm_class_args.scale_factor = scale_factor
-        if init_cls_name == UniformTMGenerator.type():
+        if init_cls_name == UniformTMGenerator.type() or \
+            init_cls_name == BimodalTMGenerator.type():
             init_tm_class_args.n = graph.number_of_nodes()
-        elif init_cls_name == ExponentialTMGenerator.type():
+        elif init_cls_name == ExponentialTMGenerator.type() or \
+            init_cls_name == GravityTrafficMatrixGenerator.type():
             init_tm_class_args.graph = graph
         else:
             raise ValueError
