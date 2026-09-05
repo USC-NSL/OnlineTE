@@ -6,8 +6,6 @@ from .pdlp_mlu import PDLPMLUParams, PDLPMLU, add_pdlp_mlu_solver_params_parser,
 
 
 def add_mlu_backend_parser(parser: jsonargparse.ArgumentParser):
-    # NOTE: The `_Rho` and `_Alpha` fields of the backends are always set by the solver itself
-    #       in general, a field that begins with an underscore shouldn't be assigned to directly by the user
     parser.add_argument('--mlu_backend', choices=['gurobi', 'pdlp'], default='pdlp')
     add_gurobi_mlu_solver_params_parser(parser)
     add_pdlp_mlu_solver_params_parser(parser)
@@ -43,8 +41,10 @@ def parse_mlu_backend_params(args: jsonargparse.Namespace) -> Tuple[SolverParams
 
 
 __all__ = [
-    'GurobiMLUParams', 'PDLPMLUParams',
-    'GurobiMLU', 'PDLPMLU',
+    'GurobiMLUParams',
+    'PDLPMLUParams',
+    'GurobiMLU',
+    'PDLPMLU',
     'ControllerMLUSolver',
     'add_mlu_backend_parser', 'parse_mlu_backend_params'
 ]

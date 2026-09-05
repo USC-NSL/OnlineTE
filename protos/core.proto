@@ -1,0 +1,109 @@
+syntax = "proto3";
+import "google/protobuf/empty.proto";
+import "google/protobuf/any.proto";
+import "array.proto";
+import "graph.proto";
+
+
+// The core of OnlineTE solvers. Defines the base RPCs for _ALL_ solvers.
+// Different solvers add extensions to these dependending on their specific
+// needs.
+service OnlineTECore {
+    // In our current format, all worker nodes must know the topology and link
+    // capacities prior. This is mostly an optimization as otherwise, the controller
+    // needs to explicitly calculate required initial state for each switch and
+    // multicast it across the network. This isn't difficult but is time consuming
+    // and becomes annoying when running long tests. The coordinator(s) thus reveal
+    // the topology to the switch nodes so that they can recalculate initial state
+    // independently.
+    rpc SetTopology(Topology) returns (google.protobuf.Empty) {}
+    // The switch-only inner-loop update, where switches update each-other regarding
+    // what the current Sharing solution looks like. In our current implementation,
+    // the coordinator is used as a rendezvous point, but in practice, a dataplane
+    // broadcast will be much better.
+    rpc DoNetworkUpdate(NetworkUpdateRequest) returns (NetworkUpdateResponse) {}
+    // The coordinator-side broadcast to all switches. This is used for the outer
+    // loop broadcast (where we inform switches of the dual variables for the
+    // capacity constraint), and (ab)used for the inner loop update where the
+    // capacity dual variable isn't changed but the dual variable for sharing is
+    // changed by the switches.
+    rpc UpdateWorkerNode(UpdateMessage) returns (google.protobuf.Empty) {}
+    // When a new traffic matrix is revealed by the controller, the switches
+    // can be informed by this RPC. This is a debugging RPC as in practice,
+    // switches independently dictate demands. In our tests, we use this RPC
+    // as by knowing demands prior, we can evaluate if OnlineTE actually converged
+    // to the correct value or not.
+    rpc SetDemands(SerializedNumpyArrayMessage) returns (SerializedNumpyArrayMessage) {}
+    // Requests a large array chunk by chunk from the switches. This is almost
+    // always the edge-based assignment of the switches.
+    // This too is a debugging RPC. We use it to pull the full final state of the
+    // switches into the coordinator to check if everything makes sense. In practice,
+    // such an RPC should never be used.
+    rpc RequestChunk(google.protobuf.Empty) returns (stream Chunk) {}
+    // Requests the aggregate flow over all links from a switch. This is requested
+    // for the outer loop of the coordinator(s) and is used to penalize lack of
+    // consensus between what the coordinator(s) want and what the switches have
+    // actually installed.
+    rpc RequestAggregate(google.protobuf.Empty) returns (SerializedNumpyArrayMessage) {}
+    // Query the state of a remove worker node. This is used to determine when the
+    // workers are ready and also functions as a keep-alive.
+    rpc QueryState(google.protobuf.Empty) returns (State) {}
+    // Reveal solver parameters to the worker ndoes. These change from solver to solver
+    // and hence are changed for each one independently.
+    rpc SetSolverParameters(SolverParameters) returns (google.protobuf.Empty) {}
+    // To prevent leaks, this RPC kills each node and releases all resources.
+    rpc Close(google.protobuf.Empty) returns (google.protobuf.Empty) {}
+}
+
+
+// The coordinator side update message to the switches.
+message UpdateMessage {
+    // The coordinator only needs to reveal the `sharing_bias`,
+    // which is defined as the expression `X_bar - P_bar + u` as
+    // it appears in the appendix of the paper. This is a vector
+    // with one entry per link.
+    SerializedNumpyArrayMessage sharing_bias = 1;
+    // Field for checking transactions IDs in case a message got
+    // lost. This is with our unreliable backends (particularly,
+    // the IP Multicast backend) in mind.
+    int32 xid = 2;
+}
+
+// The coordinator request for a network update on the switches.
+message NetworkUpdateRequest {
+    // The current epoch ID (mostly for housekeeping)
+    int32 epoch = 1;
+    // Transaction ID
+    int32 xid = 2;
+}
+
+// Response from switches upon completing the an inner loop iteration.
+message NetworkUpdateResponse {
+    // ID of the switch worker process
+    int32 worker_id = 1;
+    // How long the update took in nano-seconds
+    int32 runtime_ns = 2;
+    // The local value of `P` (the local sharing average) as it appears
+    // in the paper appendix. We gather these from the network and use
+    // them to calculated `P_bar`, the sharing mean.
+    SerializedNumpyArrayMessage means = 3;
+    // Transaction ID
+    int32 xid = 4;
+    // Total demand satisfied until now
+    optional float demand = 5;
+}
+
+// Trivial state keep-alive message
+message State {
+    // If `true`, the worker node is ready to receive coordinator RPCs.
+    bool ready = 1;
+}
+
+message SolverParameters {
+    // Placeholder for algorithm parameters
+    google.protobuf.Any parameters = 1;
+    // Number of switches involved in this computation
+    int32 num_workers = 2;
+    // The objective value type (e.g. MLU/Max-Flow/...)
+    int32 objective = 3;
+}

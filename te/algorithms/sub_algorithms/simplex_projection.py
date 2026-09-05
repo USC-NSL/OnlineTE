@@ -1,6 +1,6 @@
 import numpy as np
 from typing import Optional
-from te.algorithms.array_utils.cpu_utils import cpu_cast_float
+from array_utils.cpu.types import cpu_cast_float
 
 
 def column_wise_project_onto_probability_simplex(x: np.ndarray, upto: Optional[int] = None) -> np.ndarray:
@@ -91,10 +91,8 @@ def projection_simplex_sort(v, z=1):
 
 if __name__ == '__main__':
     import time
-    from te.algorithms.array_utils import set_global_precision, SINGLE_PRECISION
-    from te.algorithms.array_utils.cpu_utils import set_cpu_float_precision
-    set_global_precision(SINGLE_PRECISION)
-    set_cpu_float_precision()
+    from array_utils.cpu import *
+    set_cpu_float_precision(SINGLE_PRECISION)
     N, M = 16, 5000
     x = np.random.random(size=(N, M))
     upto = np.random.randint(low=1, high=N, size=(M,))

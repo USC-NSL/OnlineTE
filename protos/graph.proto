@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+// As part of the worker initialization, we may want to reveal
+// the topology to it which is always a `networkx.DiGraph` object.
+// This is a minimal message definition for that.
+
+message Edge {
+  int32 source = 1;
+  int32 target = 2;
+  map<string, float> attributes = 3;
+}
+
+message Topology {
+  repeated int32 node_ids = 1;
+  repeated Edge edges = 2;
+}

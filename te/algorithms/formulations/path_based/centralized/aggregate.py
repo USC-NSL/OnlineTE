@@ -1,13 +1,14 @@
 from typing import Tuple, Dict
-from te.algorithms.base import SolverParams, TrafficEngineeringLP
-from . import GurobiPathBasedSolverParams, PDLPPathBasedSolverParams
+from te.algorithms.base import SolverParams, TELP
+# from . import GurobiPathBasedSolverParams, PDLPPathBasedSolverParams
+from . import GurobiPathBasedSolverParams
 from .gurobi import GurobiPathBasedTE, centralized_gurobi_solver_params_parser, parse_centralized_gurobi_solver_params
-from .pdlp import PDLPPathBasedTE, centralized_pdlp_solver_params_parser, parse_centralized_pdlp_solver_params
+# from .pdlp import PDLPPathBasedTE, centralized_pdlp_solver_params_parser, parse_centralized_pdlp_solver_params
 
 
-AVAILABLE_SOLVERS: Dict[str, Tuple[type[TrafficEngineeringLP], type[SolverParams]]] = {
+AVAILABLE_SOLVERS: Dict[str, Tuple[type[TELP], type[SolverParams]]] = {
     'gurobi': (GurobiPathBasedTE, GurobiPathBasedSolverParams),
-    'pdlp': (PDLPPathBasedTE, PDLPPathBasedSolverParams),
+    # 'pdlp': (PDLPPathBasedTE, PDLPPathBasedSolverParams),
     # 'gurobi-dual': (DualGurobiTE, GurobiSolverParams)
 }
 """
@@ -21,6 +22,6 @@ Avaialble solvers are:
 __all__ = [
     'AVAILABLE_SOLVERS',
     'GurobiPathBasedTE', 'GurobiPathBasedSolverParams', 'centralized_gurobi_solver_params_parser', 'parse_centralized_gurobi_solver_params',
-    'PDLPPathBasedTE', 'PDLPPathBasedSolverParams', 'centralized_pdlp_solver_params_parser', 'parse_centralized_pdlp_solver_params',
+    # 'PDLPPathBasedTE', 'PDLPPathBasedSolverParams', 'centralized_pdlp_solver_params_parser', 'parse_centralized_pdlp_solver_params',
     # 'DualGurobiTE', 'centralized_dual_gurobi_solver_params_parser', 'parse_centralized_dual_gurobi_solver_params'
 ]

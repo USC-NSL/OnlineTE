@@ -22,4 +22,4 @@ LAUNCH_FILE=ansible/distributed_admm/launch_worker.sh
 TE_MULTICAST=0
 
 # Indicates the particular remote worker to spawn
-SOLVER_TYPE="edge-sync"
+SOLVER_TYPE="edge"

@@ -1,27 +1,21 @@
 import numpy as np
-import scipy.sparse
 from dataclasses import dataclass
 from typing import Optional
 from ortools.pdlp import solve_log_pb2
 from ortools.pdlp import solvers_pb2
 from ortools.pdlp.python import pdlp
 from te.algorithms.base import TEObjective
-from te.algorithms.utils import as_info
-from te.algorithms.array_utils.cpu_utils import CPUArray, cpu_array, cpu_cast_float
-from te.algorithms.formulations.edge_based.centralized import PDLPParams
+from utils.logging import as_info
+from array_utils.cpu.types import *
+from utils.pdlp_utils import PDLPSolverParams
 from te.algorithms.formulations.edge_based.centralized.pdlp import ConstraintVector
 from te.algorithms.statistics.helpers import record_cpu_runtime
 from .base import ControllerMLUSolver, ControllerMLUException
 
 
-@dataclass
-class PDLPMLUParams(PDLPParams):
-    # TODO: We no longer need these! Get rid of them.
-    # _Rho: Optional[float] = None
-    # _Alpha: Optional[float] = None
-
-    def __post_init__(self):
-        self._left_column_share = 0.5
+@dataclass(frozen=True)
+class PDLPMLUParams(PDLPSolverParams):
+    pass
 
 """
 Just like Gurobi, PDLP expects double-precision arrays ...
@@ -29,13 +23,22 @@ Just like Gurobi, PDLP expects double-precision arrays ...
 
 
 class PDLPMLU(ControllerMLUSolver):
-    def __init__(self, num_edges: int, capacities: CPUArray, solver_params: PDLPMLUParams, num_domains: int = 1,
-                 objective: TEObjective = TEObjective.MLU):
+    def __init__(self,
+        num_edges: int,
+        capacities: CPUArray,
+        solver_params: PDLPMLUParams,
+        feasibility_tolerance: float,
+        optimality_tolerance: float,
+        objective: TEObjective = TEObjective.MLU,
+        num_domains: int = 1
+    ):
         self._num_edges: int = num_edges
         self._capacities: np.ndarray = np.array(capacities, dtype=np.float64)
         self._solver_params = solver_params
         self._num_domains = num_domains
         self._objective = objective
+        self._feasibility_tolerance = feasibility_tolerance
+        self._optimality_tolerance = optimality_tolerance
 
         self._current_F: np.ndarray = None
         self._solved: bool = False
@@ -85,7 +88,9 @@ class PDLPMLU(ControllerMLUSolver):
 
     def _get_variable_upper_bound_vector(self) -> np.ndarray:
         out = np.full((self._NUM_VARIABLES,), np.inf)
-        # out[-1] = 1.0
+        if not self.is_mlu:
+            # Fix MLU to 1 for Max-Flow
+            out[-1] = 1.0
         return out
 
     def _get_capacity_constraint(self) -> ConstraintVector:
@@ -97,27 +102,24 @@ class PDLPMLU(ControllerMLUSolver):
             for d in range(D):
                 constraints.coeffs[e, e + d*N] = 1.0
             constraints.coeffs[e, -1] = -self.capacities[e]
-            # constraints.coeffs[e, -1] = -1
         constraints.lowers.fill(-np.inf)
         return constraints
     
     def _get_objective_matrix_diagonal(self) -> np.ndarray:
-        # d = np.full((self._NUM_VARIABLES,), fill_value=self._solver_params._Rho)
         d = np.full((self._NUM_VARIABLES,), fill_value=self.rho)
         d[-1] = 0
-        # d[-1] = self._solver_params._Alpha * self.num_domains
         return d
     
     def _get_objective_vector(self) -> np.ndarray:
         out = np.zeros((self._NUM_VARIABLES,))
-        # out[:-1] = -self._current_F * self._solver_params._Rho
         out[:-1] = -self._current_F * self.rho
         if self.is_mlu:
-            # out[-1] = self._solver_params._Alpha * self.num_domains
             out[-1] = self.alpha * self.num_domains
         return out
 
-    def update_F_m(self, new_F: CPUArray):
+    def update_F_m(self, new_F: CPUArray, rho: Optional[float] = None):
+        if rho is not None:
+            self.rho = rho
         self._current_F = np.array(new_F, dtype=np.float64).flatten()
         self._solved = False
         self._lp.set_objective_matrix_diagonal(self._get_objective_matrix_diagonal())
@@ -130,15 +132,21 @@ class PDLPMLU(ControllerMLUSolver):
         SOLVER_PARAMS: PDLPMLUParams = self._solver_params
         PDHG_PARAMS = solvers_pb2.PrimalDualHybridGradientParams()
 
-        optimality_criteria = PDHG_PARAMS.termination_criteria.simple_optimality_criteria
-        optimality_criteria.eps_optimal_relative = SOLVER_PARAMS.ConvTol
+        PDHG_PARAMS.termination_criteria\
+            .simple_optimality_criteria\
+            .eps_optimal_relative = self._optimality_tolerance
+        PDHG_PARAMS.termination_criteria\
+            .eps_primal_infeasible = self._feasibility_tolerance
+        PDHG_PARAMS.termination_criteria\
+            .eps_dual_infeasible = self._feasibility_tolerance
         PDHG_PARAMS.termination_criteria.time_sec_limit = np.inf
-        PDHG_PARAMS.num_threads = SOLVER_PARAMS.Threads
+        PDHG_PARAMS.num_threads = 1
         PDHG_PARAMS.presolve_options.use_glop = SOLVER_PARAMS.Presolve
         PDHG_PARAMS.verbosity_level = 0
 
         self._lp = LP
-        print(as_info(f"PDLP objective convergence tolerance: {SOLVER_PARAMS.ConvTol}"))
+        print(as_info(f"PDLP objective convergence tolerance: {self._optimality_tolerance}"))
+        print(as_info(f"PDLP constraint feasibility tolerance: {self._feasibility_tolerance}"))
         self._pdlp_params = PDHG_PARAMS
     
     def _add_constraints(self):

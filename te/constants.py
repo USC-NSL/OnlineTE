@@ -1,4 +1,6 @@
+import multiprocessing
 from gurobipy import GRB
+
 
 TM_DIR = "traffic_models/traffic_matrices"
 
@@ -89,4 +91,39 @@ Default UDP port used to bind for IP multicasting.
 SHOW_PROGRESS_BAR = True
 """
 Print `tqdm` progress bars
+"""
+
+"""
+Values for vector consensus tests.
+"""
+
+SEVERE_CONSENSUS_VIOLATION_REL_TOL = 5e-2
+"""
+If any element within two vectors are this far apart relateively,
+then they are not in consensus at all.
+"""
+
+
+NUM_PROCS = multiprocessing.cpu_count()
+"""Number of available cores"""
+
+MAX_NUMBER_OF_SINGLE_HOST_WORKERS = min(24, max(NUM_PROCS - 4, 1))
+"""
+Maximum number of processes that will be spawned to do any parallel task
+on a single host.
+We avoid going up to exactly the CPU count, since that will bring a lot of
+contention and cause problems.
+We leave 4 cores alone at all times for other things.
+"""
+
+MAX_NUMBER_OF_COMMODITIES_PER_CORE = 5000
+"""
+For operations done on a single host that can be parallelized over commodities,
+this is the maximum number of commodities that we will handle with one core.
+This number will be ignored in case the compute is limited and we are oversubscribed.
+"""
+
+GRPC_ARRAY_STREAM_MAX_LEN = 2**20
+"""
+Maximum length of an array to be transfered at once over a gRPC stream.
 """

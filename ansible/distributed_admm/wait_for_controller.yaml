@@ -5,25 +5,23 @@
   gather_facts: false
   become: true
   vars:
-    runtime_env:
-      - key: TE_MULTICAST
-        value: "{{multicast}}"
-      - key: SOLVER_TYPE
-        value: "{{solver_type}}"
+    multicast: "{{ lookup('env', 'TE_MULTICAST')}}"
+    solver_type: "{{ lookup('env', 'SOLVER_TYPE')}}"
   tasks:
     - name: Check Runtime Environment Variable Values
       ansible.builtin.assert:
         that:
           - multicast is match('^(0|1)$')
-          - solver_type is match('^(path-sync|edge-sync)$')
-      with_items: "{{ runtime_env }}"
+          - solver_type is match('^(path|edge)$')
     - name: Set Runtime Environment Variables
       ansible.builtin.lineinfile:
         dest: "/etc/environment"
         state: present
-        regexp: "^{{ item.key }}="
-        line: "{{ item.key }}={{ item.value }}"
-      with_items: "{{ runtime_env }}"
+        regexp: "^{{ item.regexp }}="
+        line: "{{ item.line }}"
+      with_items:
+        - { regexp: '^TE_MULTICAST=', line: 'TE_MULTICAST={{multicast}}' }
+        - { regexp: '^SOLVER_TYPE=', line: 'SOLVER_TYPE={{solver_type}}' }
       when: 'worker_id|int < upto|int'
     - name: Source ENV
       shell: ". /etc/environment"
@@ -31,7 +29,7 @@
 
 - name: Start-Wait-Stop TE Workers
   hosts: workers_group
-  remote_user: aghavidel
+  remote_user: "{{ lookup('env', 'SPHERE_USER') }}"
   gather_facts: false
   vars:
     upto: "{{num_hosts}}"
@@ -49,15 +47,3 @@
     - name: Stop Worker Services
       command: systemctl --user stop te_worker.service
       when: 'worker_id|int < upto|int'
-
-- name: Get Controller Plot
-  hosts: controller_group
-  remote_user: aghavidel
-  gather_facts: false
-  tasks:
-    - name: Get `res.png`
-      fetch:
-        src: /home/aghavidel/DistributedTE/res.png
-        dest: /home/aghavidel/res.png
-        flat: true
-  

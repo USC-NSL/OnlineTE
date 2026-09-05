@@ -1,38 +1,23 @@
+from __future__ import annotations
+
 import os
 import enum
-import pickle
-import inspect
-import argparse
+import time
+import json
 import numpy as np
 import networkx as nx
 import te.constants
 import dataclasses
-import jsonargparse
-import matplotlib.pyplot as plt
-from itertools import count
-from typing import List, Optional, Tuple, Dict, Union, Any, Set
+from collections import defaultdict
+from typing import List, Optional, Tuple, Dict, Callable, Any
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from te.algorithms import SOLUTION_DIR
-from utils.logging import LINE_SEPARATOR_LENGTH, as_success, as_fail, as_warning, as_info
-from te.traffic_models.base import TrafficMatrixBase, TrafficMatrixConverterBase, TrafficMatrixConverterParamsBase, Commodity
-
-
-TE_SOLUTION_POSTFIX = '.tesol'
-SOLUTION_ELEMENTS_POSTFIX = '.elems'
-JSON_SOLUTION_POSTFIX = '.json'
-SIMPLEX_BASIS_POSTFIX = '.bas'
-
-
-def with_postfix(name: str, postfix: str) -> str:
-    if not name.endswith(postfix):
-        return name + postfix
-    return name
-
-as_te_solution_name = lambda name: with_postfix(name, TE_SOLUTION_POSTFIX)
-as_solution_elements_name = lambda name: with_postfix(name, SOLUTION_ELEMENTS_POSTFIX)
-as_json_solution_name = lambda name: with_postfix(name, JSON_SOLUTION_POSTFIX)
-as_simplex_basis_name = lambda name: with_postfix(name, SIMPLEX_BASIS_POSTFIX)
+from utils.logging import as_fail, as_warning, as_info, log_subsection_title, str_round
+from utils.table_dataclass import TableDataclass
+from topologies.utils import get_edge_indexing
+from te.traffic_models.base import *
+from te.algorithms.objective_evaluators import *
+from te.algorithms.sub_algorithms.constraint_sanity_checks import *
 
 
 class TEObjective(str, enum.Enum):
@@ -42,469 +27,198 @@ class TEObjective(str, enum.Enum):
     MAX_CONCURRENT_FLOW = "Max-Concurrent-Flow"
 
 
-class SolverParams(ABC):
-    """
-    ABC for any set of solver/evaluation parameters that we want to bundle
-    together and make known to the user.
-    By default, it supports a pretty-print such that a table is shown for
-    a given object when stringified.
-
-    Every inheritence of this class, adds an extra `depth` to it.
-    Depth 0 is always the parameters introduced by the latest inheritence, and
-    inner depths go into the fields inherited by the parents.
-
-    For examples:
-    ```
-    @dataclass
-    class A(SolverParams):
-        field1: str
-    
-    @dataclass
-    class B(SolverParams):
-        field2: str
-    
-    B_obj = B('a', 'b')
-    print(B_obj.child_fields)               # returns `{'field2': 'a'}
-    print(B_obj.get_fields_up_to_level(1))  # returns `{'field2': 'a', 'field1': 'b'}
-    ```
-
-    TODO: Force this to always check if we are implementing a `dataclass`.
-    """
-    PRINT_FORMAT = "| {:^{left_padding}} | {:^{right_padding}} |"
-
-    @property
-    def left_column_share(self) -> float:
-        return self._left_column_share
-    @left_column_share.setter
-    def left_column_share(self, value: float):
-        assert (value > 0) and (value < 1)
-        self._left_column_share = value
-    @property
-    def left_column_padding(self) -> int:
-        return int(self.left_column_share * (LINE_SEPARATOR_LENGTH - 5))
-    @property
-    def right_column_padding(self) -> int:
-        return LINE_SEPARATOR_LENGTH - 7 - self.left_column_padding
-    @property
-    def line_padding(self) -> int:
-        return LINE_SEPARATOR_LENGTH - 2
-    @property
-    def line(self) -> str:
-        return "+" + "-"*self.line_padding + "+"
-
-    @classmethod
-    def field_names(cls) -> List[str]:
-        if cls.__base__ == ABC:
-            return []
-        return [item.name for item in dataclasses.fields(cls)]
-    
-    @property
-    def child_fields(self) -> Dict[str, Any]:
-        return self.get_fields_up_to_level(0)
-    
-    def get_fields_up_to_level(self, level: int):
-        ancestor_class = self.__class__
-        if level < 0:
-            it = count()
-        else:
-            it = range(level+1)
-        for i in it:
-            ancestor_class = ancestor_class.__base__
-            if ancestor_class == ABC:
-                ancestor_fields = []
-                break
-            else:
-                assert issubclass(ancestor_class, SolverParams)
-            if i == level:
-                ancestor_fields = ancestor_class.field_names()
-        child_dict = self.__dict__.copy()
-        for key in ancestor_fields:
-            child_dict.pop(key)
-        keys = list(child_dict.keys())
-        for key in keys:
-            if key.startswith('_'):
-                child_dict.pop(key, None)
-        return child_dict
-    
-    @classmethod
-    def _list_or_tuple_to_str(cls, items: Union[List, Tuple]) -> Union[str, List[str]]:
-        if len(items) == 0:
-            if isinstance(items, list):
-                return '[]'
-            else:
-                return '()'
-        example = items[0]
-        if isinstance(example, (int, float, bool, str)):
-            # Multiple things on a single line ...
-            return ', '.join([str(item) for item in items])
-        elif isinstance(example, tuple):
-            # Sequence of tuples ...
-            return [f'({", ".join([str(e) for e in item])})' for item in items]
-        else:
-            raise ValueError(f'Sequence element type unexpected: {example}')
-    
-    @classmethod
-    def _param_to_str(cls, value) -> Union[str, List[str]]:
-        if isinstance(value, int):
-            return str(value)
-        elif isinstance(value, float):
-            return f'{value:.2e}'
-        elif isinstance(value, bool):
-            return str(value)
-        elif isinstance(value, str):
-            return value
-        elif isinstance(value, (tuple, list)):
-            return cls._list_or_tuple_to_str(value)
-        elif value is None:
-            return "None"
-        elif dataclasses.is_dataclass(value):
-            return f"<{value.__class__.__name__}>"
-        elif inspect.isclass(value):
-            return f"[{value.__class__.__name__}]"
-        elif isinstance(value, enum.Enum):
-            return str(value)
-        raise ValueError(f'Unexpected instance: {type(value)}')
-    
-    def _field_to_string(self, key: str, value: Any):
-        # print(f"Looking at key: {key} with value {value} and type {type(value)}")
-        value_str = self._param_to_str(value)
-        if isinstance(value_str, str):
-            return self.PRINT_FORMAT.format(
-                key, value_str,
-                left_padding=self.left_column_padding,
-                right_padding=self.right_column_padding
-            )
-        elif isinstance(value_str, list):
-            result = '\n'.join(
-                [self.PRINT_FORMAT.format(
-                    key, value_str[0],
-                    left_padding=self.left_column_padding,
-                    right_padding=self.right_column_padding)] + 
-                [self.PRINT_FORMAT.format(
-                    '.', value_line,
-                    left_padding=self.left_column_padding,
-                    right_padding=self.right_column_padding
-                ) for value_line in value_str[1:]]
-            )
-            return result
-
-    def __str__(self) -> str:
-        return self.stringify_up_to_level(0)
-    
-    def stringify_up_to_level(self, level: int) -> str:
-        return '\n'.join(
-            [self.line] +
-            [self._field_to_string(key, value)
-                for key, value in self.get_fields_up_to_level(level).items()] +
-            [self.line]
-        )
-    
-    def str_all(self) -> str:
-        return self.stringify_up_to_level(-1)
-    
-    @classmethod
-    def make_from_args(cls, namespace: Union[argparse.Namespace, jsonargparse.Namespace]):
-        params = dict()
-        for name in cls.field_names():
-            if name in namespace:
-                params[name] = namespace[name]
-        return cls(**params)
+@dataclass(frozen=True)
+class SolverParams(TableDataclass):
+    """Generic container for solver parameters"""
+    pass
 
 
 @dataclass(frozen=True)
-class SolutionElementBase(ABC):
-    """Generic contrainer for solution elements"""
-    name: str      # Variable(s) name
-    value: Any     # Variable(s) value
-
-    @classmethod
-    @abstractmethod
-    def type(self) -> str:
-        """Type of this variable"""
-    
-    @property
-    @abstractmethod
-    def str_value(self) -> str:
-        """Variable value to a string"""
-
-    @classmethod
-    @abstractmethod
-    def parse(cls, string: str):
-        """Parse a string into an instance of this class"""
-    
-    def __str__(self) -> str:
-        return f'{self.name}@{self.type()}:\n{self.str_value}'
-
-
-@dataclass
-class TrafficEngineeringLPEvaluationParams(SolverParams):
+class TEEvaluationParams(SolverParams):
     """
     All generic evaluation parameters go into this class.
 
     Attributes
     ---------
-    TopologyName: str
-        Name of the topology that we are solving on.
-        The name is just for logging.
-    Seed: Optional[int] = None
-        Any RNG will be initialized to this seed to make the
-        evaluations reproducible.
-    TMPath: str
-        Path to the TM to use for tests.
-    Objective: TEObjective
-        The particular TE objective we want to solve for.
-        Defaults to MLU.
-    ScaleFactor: float
-        When a problem can become infeasible because of capacity
-        constraints, this value can be used to inflate capacity
-        values by a set amount to prevent that.
-        By default, a value of `10.0` is used, but needs to be
-        adjusted for each topology.
-    FloatResolution: float
+    float_resolution: float
         A pair of floating point numbers that are less than this 
         value apart are treated as the same. May also be used as
         an `epsilon` tolerance when numerical problems may arise
         (e.g. when a divide by zero is likely).
-    FeasibilityTolerance: float
-        Absolute contraint violation tolerance. Will override any
-        other values if needed (including the one from Gurobi).
-    FeasibilityRatio: float
-        Relative objective _AND_ constraint violation. 
-    PrintReports: bool = `False`
-        Essentially a `verbose` flag. Prints the detailed report of
-        what we are doing and detailed description of constraint or
-        objective violations.
-    ShowPLT: bool = `False`
-        Pop up a window for `PLT` plots in the end.
-    SavePLT: bool = `True`
-        Save any `PLT` plots generated.
-    SaveSol: bool = `False`
-        Save the final solution by calling the `save_sol` method
-        of the problem.
-        (Note that the output can be very large).
-    TraceOutputPath: Optional[str] = `'res.txt'`
-        A simple text file, containing the objective value trace, if the
-        problem class actually implemented and provided it.
-    PLTOutputPath: Optional[str] = `'res.png'`
-        Path to the output file for all `PLT` plots.
-    CheckConservation: bool = False
-        Check flow conservation on transit nodes. Many of our algorithms
-        give flow conservation _regardless_, so we usually don't even need
-        to check it.
+    feasibility_tolerance: float
+        Absolute contraint violation tolerance.
+    optimality_tolerance: float
+        Relative objective gap on the final solution.
+    loop_tolerance: float
+        An absolute tolerance value that is used when checking for
+        loops in order to decide if traffic is flowing in some
+        direction.
+        Set **Notes**.
+    verbose: bool = False
+        Print any constraint violation in full detail.
+    skip_checks: bool = False
+        Skip all per-TM checks.
+    scale_factor: float = 1.0
+        TM scale factor.
+    sequence_length: int = 1
+        Number of TMs in sequence to evaluate.
+    trace_out: Optional[str] = None
+        Path to save the `TETracer` object once done.
+    trace_reference: Optional[str] = None
+        Path to an existing `TETracer` object to validate the
+        solution against.
+        Currently, it only checks the final objective.
     
-    Note
-    ----
-    For now, exactly one of `FeasibilityTolerance` or `FeasibilityRatio` must
-    be given.
+    Notes
+    -----
+    With a perfect solver, we could just afford to let `loop_tolerance`
+    be `feasibility_tolerance`. In practice, that doesn't work well as
+    even solvers like Gurobi don't hit their feasibility tolerance 
+    _exactly_ in the end and solver like Barrier can be flagged as producing
+    loops due to numerical noise. The key is to make sure that `feasibility_tolerance`
+    is tighter than `loop_tolerance` so that it becomes very improbable that
+    we violate `loop_tolerance` in the end.
     """
-    TopologyName: str
-    Seed: Optional[int] = None
-    TMPath: Optional[str] = None
-    Objective: TEObjective = TEObjective.MLU
-    ScaleFactor: float = 10.0
-    FloatResolution: float = te.constants.FLOAT_RES
-    FeasibilityTolerance: Optional[float] = None
-    FeasibilityRatio: Optional[float] = None
-    PrintReports: bool = False
-    ShowPLT: bool = False
-    SavePLT: bool = True
-    SaveSol: bool = False
-    TraceOutputPath: Optional[str] = 'res.json'
-    PLTOutputPath: Optional[str] = 'res.png'
-    CheckConservation: bool = False
+    float_resolution: float = te.constants.FLOAT_RES
+    feasibility_tolerance: float = 1e-4
+    optimality_tolerance: float = 1e-2
+    loop_tolerance: float = 1e-3
+    verbose: bool = False
+    skip_checks: bool = False
+    scale_factor: float = 1.0
+    sequence_length: int = 1
+    trace_out: Optional[str] = None
+    trace_reference: Optional[str] = None
 
     def __post_init__(self):
-        # UPDATE: We will prevent both tolerances being given, it makes reasoning about things difficult ...
-        assert (self.FeasibilityRatio is None) ^ (self.FeasibilityTolerance is None), "Exactly one of `FeasibilityTolerance` or `FeasibilityRatio` MUST be given"
-        self.left_column_share = 0.5
+        assert self.optimality_tolerance < 1 and self.optimality_tolerance > 0
+        assert self.loop_tolerance > self.feasibility_tolerance
+        if self.loop_tolerance < 2 * self.feasibility_tolerance:
+            print(as_warning(f'`loop_tolerance` is too tight relative to `feasibility_tolerance`, numerical noise'
+                             'may be reported as loops!'))
+        if self.trace_reference is not None:
+            assert os.path.exists(self.trace_reference)
     
     def __call__(self, **kwargs):
         copy = dataclasses.replace(self)
         for k, v in kwargs.items:
             setattr(copy, k, v)
-    
-    @property
-    def is_mlu(self) -> bool:
-        return self.Objective == TEObjective.MLU
 
 
 @dataclass
-class TrafficEngineeringLPWarmStartParams(SolverParams):
-    """
-    A dataclass for keeping data about TM converters for warm-starting.
-
-    Attributes
-    ----------
-    ConverterSeed: int
-        The RNG seed that _may_ be used by the TM converter
-    WarmIters: int
-        Number of warm-start iterations. A warm-start iteration includes a
-        converstion of the current TM and solving the problem again
-    ConverterParams: type[TrafficMatrixConverterParamsBase]
-        Parameters to pass to the TM converter
-    """
-    ConverterSeed: int
-    ConverterParams: type[TrafficMatrixConverterParamsBase]
-    WarmIters: int
-
-    def __post_init__(self):
-        self.left_column_share = 0.5
-
-
-@dataclass
-class TrafficEngineeringLPSolutionParams(SolverParams):
-    """
-    A dataclass for keeping data about solutions.
-
-    Attributes
-    ----------
-    Name: str
-        The name _prefix_ of the solution file.
-    Path: Optional[str]
-        The output path for the solution.
-    """
-    Name: str
-    Path: Optional[str]
-
-    def __post_init__(self):
-        self.left_column_share = 0.5
-
-
-@dataclass
-class TrafficEngineeringLPCheckResult:
+class TECheckResult:
     """
     A simple class for reporting the quality of a TE solution after it was
     checked for violations.
 
     Attributes
     ----------
-    unsat_ratio: float
-        Ratio of unsatisfied demands.
-    congested_ratio: float
-        Ratio of links that are congested.
-    unsat_commodities: Set[int]
-        A set of commodity indices that are unsatisfied.
-    congested_links: Set[int]
-        Set of link (edge) indices that are congested.
-    loop_free: bool
-        The final solution was certified to be loop-free.
-    total_satisfcation: Optional[float]
-        Total demand satisfaction.
-    density: Optional[float]
-        Final solution density.
+    loop_witness: Optional[Tuple[int, int, int]]
+        A commodity that has a loop. If we have one of these, then
+        we messed up!
+    congestions: List[Tuple[int, int, int, float, float]]
+        A list of 5-tuples, containing edge index, edge source and
+        edge destination, followed by the amount of routed flow over
+        it and capacity.
+    leaks: List[Tuple[int, int, int, float]]
+        A list of 4-tuples, containing commodity index, source and
+        destination followed by the leaking demand value from the
+        destination.
+    satisfaction: Optional[Tuple[int, int, int, float, float]]
+        A list of 5-tuples, containing commodity index, source and
+        destination followed by the routed demand and declared demand
+        value.
+    total_routed_flow: float
+        Total routed flow in this solution.
+    density: float
+        Number of non-zero entries in the edge-based assignment.
     """
-    unsat_ratio: float
-    congested_ratio: float
-    unsat_commodities: Set[int]
-    congested_links: Set[int]
-    loop_free: bool
-    total_satisfcation: Optional[float] = None
-    density: Optional[float] = None
-
-    def __str__(self) -> str:
-        out = []
-        if len(self.unsat_commodities) == 0:
-            out.append(as_success("ALL DEMANDS WERE SATISFIED"))
-        else:
-            out.append(as_fail("{:.1f}% OF DEMANDS WERE NOT SATISFIED".format(self.unsat_ratio*100)))
-        if len(self.congested_links) == 0:
-            out.append(as_success("ALL LINK CAPCITIES WERE HONORED"))
-        else:
-            out.append(as_fail("{:.1f}% OF LINKS ARE CONGESTED".format(self.congested_ratio*100)))
-        if not self.loop_free:
-            out.append(as_fail("Solution contains loops(s)!"))
-        else:
-            out.append(as_success("No loops were found."))
-        if self.total_satisfcation is not None:
-            out.append(as_info("TOTAL SATISFACTION: {:.1f}%".format(self.total_satisfcation*100)))
-        if self.density is not None:
-            if self.density > 0.5:
-                out.append(as_warning("DENSITY: {:.1f}%".format(self.density*100)))
-            else:
-                out.append(as_success("DENSITY: {:.1f}%".format(self.density*100)))
-        return '\n'.join(out)
+    loop_witness: Optional[Tuple[int, int, int]]
+    congestions: List[Tuple[int, int, int, float, float]]
+    leaks: List[Tuple[int, int, int, float]]
+    satisfaction: Optional[Tuple[int, int, int, float, float]]
+    # total_routed_flow: float
+    density: float
 
 
-class TrafficEngineeringLPObjectiveTrace:
-    def __init__(self, names: List[str]):
-        self._names = names
-        self._trace: List[Tuple[float]] = []
-        self._n_dict = {name: i for i, name in enumerate(names)}
+class SolverCallbackType(str, enum.Enum):
+    PreMake = "Pre-Make"
+    "Called at the top of the body of `make_lp`"
+    PostMake = "Post-Make"
+    "Called at the end of the body of `make_lp`"
+    PreSolve = "Pre-Solve"
+    "Called at the head of the body of `solve`"
+    PostSolve = "Post-Solve"
+    "Called at the end of the body of `solve`"
+    PreTMSolve = "Pre-TM-Solve"
+    "Called at the head of the body of `solve_for_tm`"
+    PostTMSolve = "Post-TM-Solve"
+    "Called at the end of the body of `solve_for_tm`"
+    PreIteration = "Pre-Iteration"
+    "Called at the beginning of a single algorithm iteration"
+    PostIteration = "Post-Iteration"
+    "Called at the end of a single algorithm iteration"
+
+
+class TETracer:
+    """
+    A container for collecting relevant data when running a TE algorithm.
+    This will receive different callbacks that are configured to be called at
+    different points of the solver runtime.
+
+    Callbacks are arbitrary functions that receive the complete solver state and
+    return a string key and a result. The key is used to keep the output in the
+    tracer.
+    """
+    def __init__(self, data: Optional[Dict] = None):
+        self._traces: Dict[str, List] = defaultdict(list)
+        if data is not None:
+            self._traces.update(data)
+        self._callbacks: Dict[
+            SolverCallbackType,
+            List[
+                Callable[
+                    [TELP],
+                    Optional[Tuple[str, Any]]
+                ]
+            ]
+        ] = {
+            tpe: [] for tpe in SolverCallbackType
+        }
     
     @property
-    def names(self) -> List[str]:
-        return self._names
-    @property
-    def trace(self) -> List[Tuple[float]]:
-        return self._trace
+    def traces(self) -> Dict:
+        return self._traces
 
-    def append(self, *args, **kwargs):
-        ls = [None for _ in range(len(self.names))]
-        for i, arg in enumerate(args):
-            ls[i] = arg
-        for k, v in kwargs.items():
-            i = self._n_dict[k]
-            assert ls[i] is None
-            ls[i] = v
-        self._trace.append(tuple(ls))
+    def add_callback(self, tpe: SolverCallbackType, cb: Callable):
+        self._callbacks[tpe].append(cb)
     
-    def unravel(self) -> List[List[float]]:
-        return list(zip(*self.trace))
-    
-    def plot(self, **kwargs):
-        for i, trace in enumerate(list(zip(*self.trace))):
-            if self._names[i].startswith('_'):
-                print(as_info(f'Will not plot debug trace: {self._names[i]}'))
-            else:
-                plt.plot(trace, **kwargs)
-        plt.legend(self.names)
+    def execute_callbacks(self, te: TELP, tpe: SolverCallbackType):
+        for cb in self._callbacks[tpe]:
+            result = cb(te)
+            if result is not None:
+                key, output = result
+                self._traces[key].append(output)
 
+    def add_result(self, key: str, output: Any):
+        self._traces[key].append(output)
 
-class TrafficEngineeringLPSolution(ABC):
-    @abstractmethod
-    def __init__(self, params: Optional[TrafficEngineeringLPSolutionParams] = None):
-        super().__init__()
-        self._params = params
+    def save(self, path: str):
+        with open(path, 'w') as f:
+            f.write(json.dumps(self._traces, indent=4))
 
-    @property
-    def params(self) -> TrafficEngineeringLPSolutionParams:
-        return self._params
-
-    def dump(self, name: Optional[str] = None, path: Optional[str] = None):
-        name = name if name is not None else self._params.Name
-        # TODO: This does not seem right!
-        # path = path if path is not None else os.path.join(SOLUTION_DIR, name)
-        path = path if path is not None else self._params.Path
-        with open(path, 'wb') as f:
-            pickle.dump(self, f)
-    
     @classmethod
-    def load(cls, name: str, path: str = None):
-        path = path if path is not None else os.path.join(SOLUTION_DIR, name)
-        with open(path, 'rb') as f:
-            return pickle.load(f)
-    
-    @abstractmethod
-    def regenerate(self) -> Tuple[nx.DiGraph, TrafficMatrixBase]:
-        """
-        Regenerate the graph and traffic matrix associated with this solution
-        """
-    
-    @abstractmethod
-    def add_solution_element(self, element, name: str):
-        """Add a solution element to this TE solution instance"""
-    
-    @abstractmethod
-    def get_solution_element_by_name(self, name: str) -> SolutionElementBase:
-        """Get a solution element by name"""
-    
-    @abstractmethod
-    def dump_elements(self):
-        """Dump solution elements one-by-one"""
+    def load(cls, path: str) -> TETracer:
+        with open(path, 'r') as f:
+            return cls(json.loads(f.read()))
+
+    def get_objective_gap(self, obj: float, index: int) -> float:
+        ref = self._traces['objective_trace'][index][0]
+        return abs((obj - ref) / ref) * 100
 
 
 @dataclass
-class TrafficEngineeringProblemDescription:
+class TEProblemDescription:
     """
     A full description of a TE problem and its required outputs.
     This can be passed to any TE solver to get the full description of the 
@@ -512,48 +226,130 @@ class TrafficEngineeringProblemDescription:
 
     Attributes
     ----------
-    EvalParams: TrafficEngineeringLPEvaluationParams
+    objective: TEObjective
+        The TE objective to solve for.
+    eval_params: TEEvaluationParams
         Evaluation parameters, instructing the LP class about how optimal
         the solution need be and how much infeasibility are we willing to
         tolerate.
-    Graph: nx.DiGraph
+    graph: nx.DiGraph
         The topology as a directed graph. Each edge must have a `capacity`
         attribute as a floating point number.'
-    TM: TrafficMatrixBase
-        The traffic matrix.
-    Converter: Optional[TrafficMatrixConverterBase] = None
-        The traffic matrix converter that can change the current traffic
-        matrix into a new one to see if we can handle incremental problems.
-    WarmStartParams: Optional[TrafficEngineeringLPWarmStartParams] = None
-        Warm start parameters (e.g. how many TM conversion rounds must
-        be done).
-    Solution: Optional[TrafficEngineeringLPSolution] = None
-        The TE solution object used to add and save solution elements.
+    tm_generator: TMGenerator
+        The traffic matrix generator.
     """
-    EvalParams: TrafficEngineeringLPEvaluationParams
-    Graph: nx.DiGraph
-    TM: TrafficMatrixBase
-    Converter: Optional[TrafficMatrixConverterBase] = None
-    WarmStartParams: Optional[TrafficEngineeringLPWarmStartParams] = None
-    Solution: Optional[TrafficEngineeringLPSolution] = None
-
-    @property
-    def is_mlu(self) -> bool:
-        return self.EvalParams.is_mlu
+    objective: TEObjective
+    eval_params: TEEvaluationParams
+    graph: nx.DiGraph
+    tm_generator: TMGenerator
 
 
-class TrafficEngineeringLP(ABC):
+class TELP[P: SolverParams](ABC):
+    """
+    Base class for all TE solvers.
+    This receives a problem description and a set of solver
+    parameters, then iteratively solves for every TM in the
+    generator.
+    """
+
     @abstractmethod
-    def __init__(self, problem_description: TrafficEngineeringProblemDescription, 
-                 solver_params: SolverParams, **kwargs):
+    def __init__(self, problem_description: TEProblemDescription, 
+                 solver_params: P, **kwargs):
         super().__init__(**kwargs)
         self._problem_description = problem_description
         self._solver_params = solver_params
+        self._graph = problem_description.graph
+        self._tm_generator = problem_description.tm_generator
+        self._check_results: List[TECheckResult] = []
+        self._tracer = TETracer()
+        self._current_TM: Optional[np.ndarray] = None
+        self._X_ek: Optional[np.ndarray] = None
+        self._edge_indexing: Dict[Tuple[int, int], int] = \
+            get_edge_indexing(self.graph)
+        self._capacities = np.array([
+            c_e for _, _, c_e in self.graph.edges(data='capacity')
+        ])
+        self._c_norm = np.linalg.norm(self._capacities) / len(self._capacities)
+        self._skip_loop_check: bool = False
+        """
+        In the path-based setting, we may want to skip our loop check.
+        This is because paths overlayed on top of each-other may appear
+        to have loops, for example take a rhombus network with a short
+        digaonal. Paths `s -> a -> b -> t` and `s -> b -> a -> t` are
+        both valid and loop-free, but if used at the same time will be
+        flagged as looped since it appears that we use `a -> b` and 
+        `b -> a` at the same time.
+        We _trust_ that individual paths are loop-free for path-based
+        solvers, and thus, skip loop checking for this reason.
+        """
+        self._first_solve = True
+        ref_trace = self._problem_description.eval_params.trace_reference
+        self._reference_trace: Optional[TETracer] = \
+            None if ref_trace is None else TETracer.load(ref_trace)
 
     @property
-    def problem_description(self) -> TrafficEngineeringProblemDescription:
+    def objective(self) -> TEObjective:
+        return self._problem_description.objective
+
+    @property
+    def number_of_edges(self) -> int:
+        return self._graph.number_of_edges()
+
+    @property
+    def number_of_nodes(self) -> int:
+        return self._graph.number_of_nodes()
+
+    @property
+    def number_of_commodities(self) -> int:
+        m = self.number_of_nodes
+        return m * (m - 1)
+
+    @property
+    def problem_description(self) -> TEProblemDescription:
         """TE problem description object"""
         return self._problem_description
+
+    @property
+    def graph(self) -> nx.DiGraph:
+        """The graph of the network"""
+        return self._graph
+
+    @property
+    def tracer(self) -> TETracer:
+        """Return the runtime tracer object"""
+        return self._tracer
+
+    @property
+    def optimality_tolerance(self) -> float:
+        return self._problem_description.eval_params.optimality_tolerance
+
+    @property
+    def unscaled_outer_inf_bound(self) -> float:
+        return self._c_norm**2 / np.sqrt(self.number_of_edges)
+
+    @property
+    def first_solve(self) -> bool:
+        return self._first_solve
+
+    def report_problem_size(self):
+        print(as_info(f"Graph Size: {self.number_of_nodes} nodes |"
+                      f" {self.number_of_edges} edges"))
+        print(as_info(f"Number of commodities: {self.number_of_commodities}"))
+        print(as_info(f"Capacity:\n\tmin: {str_round(np.min(self._capacities), 2)}"
+                      f"\tmed: {str_round(np.median(self._capacities), 2)}"
+                      f"\tmax: {str_round(np.max(self._capacities), 2)}"))
+
+    @property
+    def solver_params(self) -> P:
+        """Solver parameters"""
+        return self._solver_params
+
+    @property
+    def check_results(self) -> List[TECheckResult]:
+        """
+        List of check results for each solved TM so far.
+        """
+        return self._check_results
 
     @property
     @abstractmethod
@@ -561,65 +357,26 @@ class TrafficEngineeringLP(ABC):
         """Name of this algorithm"""
 
     @property
-    @abstractmethod
-    def graph(self) -> nx.DiGraph:
-        """The graph of the network"""
+    def current_assignment(self) -> np.ndarray:
+        """Return **current** edge-based assignments."""
+        assert self._X_ek is not None
+        return self._X_ek
+
+    @property
+    def current_traffic_matrix(self) -> np.ndarray:
+        return self._current_TM
+
+    @property
+    def current_commodities(self) -> List[Commodity]:
+        return traffic_to_commodity(self._current_TM)
 
     @property
     @abstractmethod
-    def traffic(self) -> TrafficMatrixBase:
-        """The traffic matrix input"""
+    def current_objective(self) -> float:
+        """Return **current** objective."""
 
-    @property
-    @abstractmethod
-    def commodity_list(self) -> List[Commodity]:
-        """List of input commodities"""
-
-    @property
-    def solver_params(self) -> SolverParams:
-        """Solver parameters"""
-        return self._solver_params
-
-    @property
-    @abstractmethod
-    def objective_value(self) -> float:
-        """Final objective value after optimization"""
-
-    @property
-    @abstractmethod
-    def objective_trace(self) -> Optional[TrafficEngineeringLPObjectiveTrace]:
-        """List of objective values during algorithm iterations"""
-
-    @property
-    def objective_gap_trace(self) -> Optional[List[float]]:
-        """List of primal-dual objective gap during iterations"""
-        return None
-    
-    @property
-    @abstractmethod
-    def assignments(self) -> np.ndarray:
-        """Return current assignments based on the solution"""
-    
-    @property
-    def check_result(self) -> TrafficEngineeringLPCheckResult:
-        """
-        Checking the LP result usually takes time. So every time `check` has been called, the
-        result is cached in this property.
-        Invoking this method on an unsolved LP will raise a ValueError
-        """
-        if not hasattr(self, '_check_result') or self._check_result is None:
-            raise ValueError
-        return self._check_result
-    
-    @check_result.setter
-    def check_result(self, _res: TrafficEngineeringLPCheckResult):
-        self._check_result = _res
-
-    @abstractmethod
-    def initialize_to(self, solution: TrafficEngineeringLPSolution):
-        """
-        Initialize the model to a particular solution
-        """
+    def add_callback(self, tpe: SolverCallbackType, cb: Callable[[TELP], Tuple[str, Any]]):
+        self._tracer.add_callback(tpe, cb)
     
     @abstractmethod
     def _make_variables(self, *args, **kwargs):
@@ -634,64 +391,117 @@ class TrafficEngineeringLP(ABC):
         """Add the objective function to the problem model"""
 
     @abstractmethod
-    def make_lp(self, *args, **kwargs):
-        """Create the LP and the Gurobi model object"""
+    def _update_constraits(self, tm: np.ndarray):
+        """Update constraints given a new traffic matrix"""
+
+    @abstractmethod
+    def _update_objective(self, tm: np.ndarray):
+        """Update the objective given a new traffic matrix"""
+
+    def make_lp(self):
+        self._tracer.execute_callbacks(self, SolverCallbackType.PreMake)
+        self.report_problem_size()
+        t_start = time.perf_counter()
+        self._make_variables()
+        self._add_constraints()
+        self._add_objective()
+        self._tracer.add_result("model_build_time", time.perf_counter() - t_start)
+        self._tracer.execute_callbacks(self, SolverCallbackType.PostMake)
 
     @abstractmethod
     def close(self):
         """Free and cleanup environment"""
 
     @abstractmethod
-    def reset(self, with_params: False):
-        """
-        Reset solver as if no iterations were done.
-        Optionally, may also reset parameters to their default values.
-        """
-
-    @abstractmethod
-    def solve(self, params: SolverParams = None) -> float:
-        """
-        Solve the problem. May also accept an extra set of parameters,
-        which will clear and override any existing ones using `reset`.
-
-        return the runtime of the model, or `-1` if it failed.
-        """
-
-    @abstractmethod
-    def check(self):
-        """
-        Performs sanity checks on the current solution and cache the summary of the checks.
-        This result should be stored in the `check_result` property.
-        """
-
-    @abstractmethod
-    def get_solution_commodity_list(self) -> List[Tuple[Commodity, Commodity]]:
-        """
-        Get commodity allocations of the final solution
-        """
+    def _solve_for_tm(self, tm: np.ndarray):
+        """Solve for a given TM."""
     
-    @abstractmethod
-    def update_traffic_matrix(self, tm: TrafficMatrixBase):
-        """
-        Update the current traffic matrix and re-initialize the model
-        """
-    
-    @abstractmethod
-    def add_solution_elements(self, solution: TrafficEngineeringLPSolution):
-        """
-        Add solution elements to a given TE solution instance
-        """
+    def solve_for_tm(self, tm: np.ndarray):
+        """Solve for a given TM."""
+        self._tracer.execute_callbacks(self, SolverCallbackType.PreTMSolve)
+        self._update_constraits(tm)
+        self._update_objective(tm)
+        print(as_info(f"Total demand: {str_round(np.sum(tm), 1)}"))
+        t_start = time.perf_counter()
+        self._solve_for_tm(tm)
+        runtime = time.perf_counter() - t_start
+        self._tracer.add_result("objective_trace", (self.current_objective, runtime))
+        print(as_info(f"Solved in {str_round(runtime, 3)} seconds. Objective Value: {str_round(self.current_objective, 4)}"))
+        if not self._problem_description.eval_params.skip_checks:
+            self._check_results.append(self.check())
+        self._first_solve = False
+        self._tracer.execute_callbacks(self, SolverCallbackType.PostTMSolve)
 
-    def add_and_dump_lp_solutions(self, solution: TrafficEngineeringLPSolution):
-        self.add_solution_elements(solution)
-        solution.dump_elements()
-        solution.dump()
+    def solve(self):
+        """Solve for each matrix in sequence."""
+        self._tracer.execute_callbacks(self, SolverCallbackType.PreSolve)
+        t_start = time.perf_counter()
+        for i, tm in enumerate(self._tm_generator):
+            print(as_info(log_subsection_title(
+                f"TM {i+1}/{self._problem_description.eval_params.sequence_length}"
+            )))
+            self._current_TM = tm
+            self.solve_for_tm(tm)
+            if self._reference_trace is not None:
+                gap = self._reference_trace.get_objective_gap(
+                    self.current_objective, i
+                )
+                print(as_info(f'Objective gap to reference: {gap:.2f}%'))
+        self._tracer.add_result("total_solve_time", time.perf_counter() - t_start)
+        self._tracer.execute_callbacks(self, SolverCallbackType.PostSolve)
+        if self._problem_description.eval_params.trace_out is not None:
+            self._tracer.save(self._problem_description.eval_params.trace_out)
+
+    def check(self) -> TECheckResult:
+        """Performs sanity checks on the **current** solution."""
+        assignments = self.current_assignment
+        graph = self.graph
+        commodity_list = self.current_commodities
+        eval_params = self.problem_description.eval_params
+        feasibility_tolerance = eval_params.feasibility_tolerance
+        loop_tolerance = eval_params.loop_tolerance
+        indexing = self._edge_indexing
+        if not self._skip_loop_check:
+            witness = check_loop_free_assignment(
+                assignments, graph, loop_tolerance
+            )
+        else:
+            witness = None
+        if witness is not None:
+            print(as_fail(f"Solution contains a loop for commodity {witness[0]}!"))
+        leaks = check_flow_leaks(
+            assignments, graph, commodity_list,
+            feasibility_tolerance, indexing
+        )
+        congestions = check_capacity_constraint(
+            assignments, graph, feasibility_tolerance
+        )
+        if self._problem_description.objective == TEObjective.MLU:
+            # satisfaction, total_routed_flow = check_flow_satisfaction(
+            satisfaction = check_flow_satisfaction(
+                assignments, graph, commodity_list,
+                feasibility_tolerance, indexing
+            )
+        else:
+            satisfaction = None
+            # _, total_routed_flow = check_flow_satisfaction(
+            #     assignments, graph, commodity_list,
+            #     feasibility_tolerance, indexing
+            # )
+        return TECheckResult(
+            loop_witness=witness,
+            congestions=congestions,
+            leaks=leaks,
+            satisfaction=satisfaction,
+            # total_routed_flow=total_routed_flow,
+            density=np.count_nonzero(
+                np.clip(assignments, a_min=0, a_max=None)
+            ) / assignments.size
+        )
 
 
 __all__ = [
-    'SolverParams', 'TrafficEngineeringLPEvaluationParams', 'TEObjective',
-    'TrafficEngineeringLPWarmStartParams', 'TrafficEngineeringLPSolutionParams',
-    'TrafficEngineeringLPCheckResult', 'TrafficEngineeringLPSolution',
-    'TrafficEngineeringProblemDescription', 'TrafficEngineeringLP',
-    'TrafficEngineeringLPObjectiveTrace'
+    'SolverParams', 'TEEvaluationParams', 'TEObjective',
+    'TECheckResult', 'TEProblemDescription', 'TELP',
+    'TETracer', 'SolverCallbackType'
 ]

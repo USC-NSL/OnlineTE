@@ -1,8 +1,8 @@
 import enum
 import math
 import numpy as np
-from typing import Optional, Tuple
-from te.algorithms.array_utils.cpu_utils import CPUArray, cpu_array, cpu_zeros
+from typing import Optional, Dict
+from array_utils.cpu.types import *
 
 
 class ADMMMode(str, enum.Enum):
@@ -95,6 +95,10 @@ class ADMMWrapper:
         self._adaptive_T = adaptive_T
         # The current step iteration count
         self._iterate: int = 0
+
+        self._pinf_dict: Dict[int, float] = dict()
+        self._dinf_dict: Dict[int, float] = dict()
+        self._adapt_tokens = 0
     
     def initialize(self, X_start: CPUArray, Z_start: Optional[CPUArray] = None):
         """Initialize the algorithm and its dual variable iterates"""
@@ -221,7 +225,7 @@ class ADMMWrapper:
             return self._add_C(- self._mul_A(self._X, True) + self._mul_B(self._Z_old, True) - self._mul_B(self._Z, False) - self._dual_var, True)
         return self._add_C(- self._mul_A(self._X, True) + self._mul_B(self._Z_nesterov, True) - self._mul_B(self._Z, False) - self._dual_var_nesterov, True)
 
-    def update_dual_var(self, finalize: bool = False):
+    def update_dual_var(self, finalize: bool = False) -> Optional[float]:
         """
         Update the dual variable.
         Optionally, `finalize = True` will finalize the current ADMM round
@@ -229,7 +233,7 @@ class ADMMWrapper:
         """
         self.record_dual_update(-self._dual_var_bias())
         if finalize:
-            self.finalize_round()
+            return self.finalize_round()
     
     def record_dual_update(self, next_dual_var: CPUArray):
         """Record the dual variable update step output"""
@@ -237,24 +241,40 @@ class ADMMWrapper:
             self._dual_var_old = cpu_array(self._dual_var)
         self._dual_var = next_dual_var
     
-    def _adapt_step_size(self):
+    def _how_adapt(self) -> int:
         p_inf = self.primal_infeasibility()
         d_inf = self.dual_infeasibility()
         MU = self._adaptive_mu
-        TAU = self._adaptive_tau
         if p_inf > MU * d_inf:
-            self._rho *= TAU
-            self._dual_var /= TAU
-            print("Step UP!")
+            return 1
         elif d_inf > MU * p_inf:
-            self._rho /= TAU
-            self._dual_var *= TAU
-            print("Step DOWN!")
-    
-    def _can_adapt_step_size(self) -> bool:
-        return self._is_adaptive and (self._iterate % self._adaptive_T == 0)
-    
-    def finalize_round(self):
+            return -1
+        return 0
+
+    def _adapt_step_size(self) -> Optional[float]:
+        if not self._is_adaptive:
+            return
+        
+        adapt = self._how_adapt()
+        if self._how_adapt() != 0:
+            self._adapt_tokens += 1
+        else:
+            self._adapt_tokens = max(self._adapt_tokens-1, 0)
+            return
+
+        if (self._adapt_tokens >= self._adaptive_T):
+            self._adapt_tokens = 0
+            TAU = self._adaptive_tau
+            if adapt > 0:
+                self._rho *= TAU
+                self._dual_var /= TAU
+                return self._rho
+            elif adapt < 0:
+                self._rho /= TAU
+                self._dual_var *= TAU
+                return self._rho
+
+    def finalize_round(self) -> Optional[float]:
         """
         Finalize the ADMM round.
         Only effects the case where acelerated ADMM is used.
@@ -264,9 +284,7 @@ class ADMMWrapper:
             self._Z_nesterov = self._Z + self.nesterov_coeff * (self._Z - self._Z_old)
             self._dual_var_nesterov = self._dual_var + self.nesterov_coeff * (self._dual_var - self._dual_var_old)
         self._iterate += 1
-        # TODO: Cache infeasibilities if we have to keep track of them ...
-        if self._can_adapt_step_size():
-            self._adapt_step_size()
+        return self._adapt_step_size()
     
     def _get_primal_residual(self) -> CPUArray:
         return -self._add_C(- self._mul_A(self._X, False) - self._mul_B(self._Z, False), False)
@@ -281,19 +299,26 @@ class ADMMWrapper:
         return self._rho * self._A.T @ self._B @ (self._Z - self._Z_old)
     
     def primal_infeasibility(self) -> float:
-        r = self._get_primal_residual()
-        return float(np.linalg.norm(r) / math.sqrt(len(r)))
+        inf = self._pinf_dict.get(self._iterate)
+        if inf is None:
+            r = self._get_primal_residual()
+            inf = float(np.linalg.norm(r) / math.sqrt(len(r)))
+            self._pinf_dict[self._iterate] = inf
+        return inf
+
     def dual_infeasibility(self) -> float:
-        s = self._get_dual_residual()
-        return float(np.linalg.norm(s) / math.sqrt(len(s)))
+        inf = self._dinf_dict.get(self._iterate)
+        if inf is None:
+            s = self._get_dual_residual()
+            inf = float(np.linalg.norm(s) / math.sqrt(len(s)))
+            self._dinf_dict[self._iterate] = inf
+        return inf
     
     @property
     def infeasibility(self) -> float:
         p_inf = self.primal_infeasibility()
         d_inf = self.dual_infeasibility()
-        # print(f"======= P: {str(round(p_inf, 4))} \t D: {str(round(d_inf, 4))} \t R: {str(round(p_inf/d_inf, 4))}")
         return p_inf + d_inf
-        # return self.primal_infeasibility() + self.dual_infeasibility()
 
 
 class SharingWrapper:
@@ -529,6 +554,4 @@ class SharingWrapper:
     def infeasibility(self) -> float:
         p_inf = self.primal_infeasibility()
         d_inf = self.dual_infeasibility()
-        # print(f"======= P: {str(round(p_inf, 4))} \t D: {str(round(d_inf, 4))}")
         return p_inf + d_inf
-        # return self.primal_infeasibility() + self.dual_infeasibility()

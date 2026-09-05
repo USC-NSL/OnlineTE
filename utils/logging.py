@@ -1,6 +1,7 @@
 import tqdm
 import numpy as np
 import te.constants
+from itertools import count
 from typing import List, Iterable, Optional, Dict
 
 
@@ -96,11 +97,38 @@ class ShortTQDM:
     
     def write(self, message: str):
         self._pbar.write(message)
+
+    def update(self):
+        pass
     
 
 class ShortTQDMEnumerate(ShortTQDM):
-    def __init__(self, object: List):
-        self._len = len(object)
+    def __init__(self, object: List, length: Optional[int] = None):
+        self._len = len(object) if length is None else length
         self._object = enumerate(object)
         if te.constants.SHOW_PROGRESS_BAR:
             self._pbar = tqdm.tqdm(object, bar_format=self.pbar_format(), total=self._len)
+
+
+class TQDMSpinner:
+    @classmethod
+    def pbar_format(cls) -> str:
+        return '{desc} {n_fmt} iters [{elapsed}, {rate_fmt}] {postfix}'
+
+    def __init__(self, desc: str):
+        self._desc = desc
+        self._counter = count()
+        self._pbar = tqdm.tqdm(self._counter, bar_format=self.pbar_format(), total=None)
+        self._pbar.set_description(desc)
+
+    def set_postfix(self, data: Dict):
+        self._pbar.set_postfix(data)
+
+    def update(self):
+        self._pbar.update(1)
+
+    def __iter__(self):
+        return self
+    
+    def __next__(self):
+        return next(self._counter)

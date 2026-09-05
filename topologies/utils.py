@@ -10,18 +10,12 @@ except ModuleNotFoundError:
     cp.get_array_module = lambda x: np
 import networkx as nx
 from scipy.linalg import null_space
-from typing import Dict, Tuple, Union, List, Optional
-from topologies import (
-    TOPOLOGIES_PATH, TOPOLOGY_ZOO_DIR_NAME, TOPOLOGY_REPO_DIR_NAME,
-    TOPOLOGY_ZOO_INDEX_FILE_NAME
-)
-from te.traffic_models.base import TrafficMatrixBase, Commodity
-from te.traffic_models.models import UniformTrafficMatrix, UniformTrafficMatrixParams
+from typing import Dict, Tuple, List, Optional
+from topologies import TOPOLOGIES_PATH, TOPOLOGY_ZOO_DIR_NAME, TOPOLOGY_ZOO_INDEX_FILE_NAME
+from te.traffic_models.base import commodity_od_iterator, commodity_id_to_od
 from utils.logging import as_warning
-from networkx.readwrite import json_graph
 
 
-TOPOLOGY_REPO_PATH = os.path.join(TOPOLOGIES_PATH, TOPOLOGY_REPO_DIR_NAME)
 TOPOLGOY_ZOO_PATH = os.path.join(TOPOLOGIES_PATH, TOPOLOGY_ZOO_DIR_NAME)
 TOPOLOGY_ZOO_INDEX_PATH = os.path.join(TOPOLOGIES_PATH, TOPOLOGY_ZOO_INDEX_FILE_NAME)
 
@@ -37,15 +31,8 @@ IMPORTANT NOTE:
 """
 
 
-is_artificial = lambda name: name.lower().startswith('artificial-')
-get_artificial_size = lambda name: int(name.lower().split('artificial-')[-1])
-
-
-def load_zoo_topology(name: str, seed: Optional[int] = None) -> nx.DiGraph:
+def load_zoo_topology(name: str) -> nx.DiGraph:
     """Load the topology zoo model as an instance of `nx.DiGraph`"""
-
-    if is_artificial(name):
-        return get_artificial_topology(get_artificial_size(name), seed=seed)
 
     # First, check for a GraphML file
     graphml_path = os.path.join(TOPOLGOY_ZOO_PATH, f"{name}.graphml")
@@ -58,7 +45,7 @@ def load_zoo_topology(name: str, seed: Optional[int] = None) -> nx.DiGraph:
             g: nx.Graph = nx.read_gml(gml_path, label='id', destringizer=int)
         else:
             # We don't have this topology :/ ...
-            raise ValueError(f"No GML/GraphML file associated with topology {name} exists!")
+            raise FileNotFoundError(f"No GML/GraphML file associated with topology {name} exists!")
 
     # Remove self loops (some topologies do have them, like `Interroute`)
     self_loops = list(nx.selfloop_edges(g))
@@ -79,85 +66,6 @@ def load_zoo_topology(name: str, seed: Optional[int] = None) -> nx.DiGraph:
         print(as_warning(f"Removing {g.number_of_edges() - new_g.number_of_edges()} parallel edges"))
 
     return new_g.to_directed()
-
-
-def load_repo_topology(name: str) -> Optional[nx.DiGraph]:
-    fname = os.path.join(TOPOLOGY_REPO_PATH, f'{name}.json')
-    if not os.path.exists(fname):
-        print(as_warning(f'Could not find {fname} in the topology repository. Falling back to Topology Zoo ...'))
-        return None
-    with open(fname) as f:
-        data = json.load(f)
-    # return json_graph.node_link_graph(data, edges='links')
-    return json_graph.node_link_graph(data, link='links')
-
-
-def load_topology(name: str, seed: Optional[int] = None) -> Tuple[nx.DiGraph, bool]:
-    topo = load_repo_topology(name)
-    if topo is None:
-        return load_zoo_topology(name, seed), False
-    return topo, True
-
-
-def _get_graph_list_to_join(n_nodes: int, num: int = 1, seed: Optional[int] = None) -> List[nx.DiGraph]:
-    """
-    This tries to find `num` zoo topologies such that their total number of nodes is
-    at least `n_nodes`.
-    To do this, we first attempt to find a graph of size `n_nodes / num`. If found, we
-    subtract its size from `n_nodes` and repeat with `num = 1`. This is done to encourage
-    variety in size of chosen graphs (we would prefer a small graph and a big one, instead
-    of many small ones ...).
-    If such a graph is not found, we increase `num` by 1 and repeat.
-    """
-    if num == 10 or n_nodes == num or n_nodes == 0:
-        # Give up on the 10th iteration ....
-        return []
-    upper_bound_tol = int(np.sqrt(n_nodes))
-    g = get_zoo_topology_at_least_as_large_as(n=n_nodes//num, m=(n_nodes + upper_bound_tol)//num)
-    if g:
-        return [g] + _get_graph_list_to_join(max(n_nodes, (n_nodes + upper_bound_tol)//num) - g.number_of_nodes(), seed=seed)
-    else:
-        return _get_graph_list_to_join(n_nodes, num=num+1, seed=seed)
-
-
-def _compose_undirected_graphs(graphs: List[nx.Graph]) -> Tuple[nx.Graph, List[int]]:
-    sizes = [0]
-    for g in graphs:
-        sizes.append(g.number_of_nodes() + sizes[-1])
-    sizes.pop(-1)
-    composite = nx.Graph()
-    for i, g in enumerate(graphs):
-        size_until_now = sizes[i]
-        composite.add_nodes_from(range(size_until_now, size_until_now + g.number_of_nodes()))
-        edges = [(s+size_until_now, d+size_until_now) for s, d in g.edges(data=False)]
-        composite.add_edges_from(edges)
-    return composite, sizes
-
-
-def get_artificial_topology(n_nodes: int, seed: Optional[int] = None) -> nx.DiGraph:
-    """
-    Creates a network by randomly picking some networks from the zoo and
-    Frakensteining them together.
-    The result will contain _at least_ `n_nodes` nodes. There are no
-    guarantees about the number of edges though.
-
-    To join `n` graphs together, we choose `sqrt(n_nodes)/n` nodes
-    from each graph, and then randomly connect them to eachother
-    in a ring.
-    """
-
-    graph_list = _get_graph_list_to_join(n_nodes, seed=seed)
-    if len(graph_list) == 1:
-        return graph_list[0]
-    undirs = [g.to_undirected() for g in graph_list]
-    composite_graph, sizes = _compose_undirected_graphs(undirs)
-    n_connections = int(np.sqrt(n_nodes) / len(undirs))
-    rng = np.random.default_rng(seed=seed)
-    chosen_nodes = [sizes[i] + rng.choice(g.number_of_nodes(), size=n_connections) for i, g in enumerate(undirs)]
-    for i in range(len(undirs)):
-        for s, d in zip(chosen_nodes[i], chosen_nodes[(i+1) % len(undirs)]):
-            composite_graph.add_edge(s, d)
-    return composite_graph.to_directed()
 
 
 def get_edge_indexing(graph: nx.DiGraph) -> Dict[Tuple[int, int], int]:
@@ -298,56 +206,34 @@ def get_zoo_topology_at_least_as_large_as(n: int, m: int = -1, seed: Optional[in
     return load_zoo_topology(chosen)
 
 
-def set_edge_capacity_to(graph: nx.DiGraph, capacity: float, edge: Union[Tuple[int, int], List[Tuple[int, int]]] = None):
-    """Set capacity of edge(s) to a particular value"""
+# def get_capacity_lower_bound(graph: nx.DiGraph, traffic: np.ndarray) -> float:
+#     """
+#     This returns the `lower bound` for capacity needed for the problem to not be
+#     `trivially` infeasible.
+#     By `trivially` infeasible, we mean that the sum of demands that any node
+#     sends and receives, must be less than the total capacity of all edges
+#     that are connected to it.
+#     This sets a low bar for the capacity to be assigned to the problem.
 
-    if edge is None:
-        nx.set_edge_attributes(graph, capacity, 'capacity')
-    elif isinstance(edge, tuple):
-        nx.set_edge_attributes(graph, {edge: capacity}, 'capacity')
-    elif isinstance(edge, list):
-        nx.set_edge_attributes(graph, {e: capacity for e in edge}, 'capacity')
-    else:
-        raise ValueError
+#     Note: This assumes all edges have the same capacity ...
+#     """
 
+#     cap = 0
+#     degrees_in = graph.in_degree()
+#     degrees_out = graph.out_degree()
+#     flow_outs = np.sum(traffic, axis=1)
+#     flow_ins = np.sum(traffic, axis=0)
 
-def set_edge_capacity_randomly(graph: nx.DiGraph, low: float, high: float, seed: int = None):
-    """Set capacity on each edge by randomly picking from [low, high)"""
-
-    assert low < high
-    rng = np.random.default_rng(seed)
-    for edge in graph.edges:
-        nx.set_edge_attributes(graph, {edge: (high - low) * rng.random() + low})
-
-
-def get_capacity_lower_bound(graph: nx.DiGraph, traffic: TrafficMatrixBase) -> float:
-    """
-    This returns the `lower bound` for capacity needed for the problem to not be
-    `trivially` infeasible.
-    By `trivially` infeasible, we mean that the sum of demands that any node
-    sends and receives, must be less than the total capacity of all edges
-    that are connected to it.
-    This sets a low bar for the capacity to be assigned to the problem.
-
-    Note: This assumes all edges have the same capacity ...
-    """
-
-    cap = 0
-    degrees_in = graph.in_degree()
-    degrees_out = graph.out_degree()
-    flow_outs = np.sum(traffic.tm, axis=1)
-    flow_ins = np.sum(traffic.tm, axis=0)
-
-    assert len(flow_outs) == len(flow_ins)
-    for i, send_recv in enumerate(zip(flow_outs, flow_ins)):
-        sending, receiving = send_recv
-        cap = max(
-            cap, 
-            sending / degrees_out[i],
-            receiving / degrees_in[i]
-        )
+#     assert len(flow_outs) == len(flow_ins)
+#     for i, send_recv in enumerate(zip(flow_outs, flow_ins)):
+#         sending, receiving = send_recv
+#         cap = max(
+#             cap, 
+#             sending / degrees_out[i],
+#             receiving / degrees_in[i]
+#         )
     
-    return float(cap)
+#     return float(cap)
 
 
 def make_graph_from_dict(graph_n: int, graph_dict: Dict[Tuple[int, int], float]) -> nx.DiGraph:
@@ -368,51 +254,59 @@ def make_graph_from_dict(graph_n: int, graph_dict: Dict[Tuple[int, int], float])
     return nx.Graph(dict_of_dicts).to_directed()
 
 
-def load_zoo_topology_with_capacity_heuristic(name: str, tm: TrafficMatrixBase, scale_factor: float = 10) -> Tuple[float, nx.DiGraph]:
+def set_random_capacities(graph: nx.DiGraph, topo_seed: Optional[int] = None):
     """
-    Load a topology from the zoo and assign a single capacity value to each edge.
-    The capacity is chosen heuristically. Its value is set to be `scale_factor * c`,
-    where `c` is the return value of `get_capacity_lower_bound`.
+    Randomly sets capacities on all links by choosing randomly from
+    the interval:
+
+        [delta_min * m, delta_max * m]
+    
+    Where `delta_min` and `delta_max` are minimum and maximum node
+    degrees and `m` is the number of nodes.
+
+    Note
+    ----
+    This _always_ makes sure that edges connected to the same nodes
+    have the same capacity.
     """
-    
-    graph = load_zoo_topology(name)
-    c_min = get_capacity_lower_bound(graph, tm)
-    c = c_min * scale_factor
-    set_edge_capacity_to(graph, c)
-    
-    return c, graph
+    degs = list([d for _, d in graph.in_degree()])
+    M = graph.number_of_nodes()
+    N = graph.number_of_edges()
+    l = min(degs)
+    u = max(degs)
+    rng = np.random.default_rng(topo_seed)
+    assert N % 2 == 0
+    caps = (rng.random(size=(N // 2,)) * (u - l) + l) * M
+    edges = set()
+    for edge in graph.edges(data=False):
+        if edge not in edges:
+            u, v = edge
+            graph[u][v]['capacity'] = caps[len(edges) // 2]
+            graph[v][u]['capacity'] = caps[len(edges) // 2]
+            edges.add((u, v))
+            edges.add((v, u))
 
 
-def get_uniform_tm_problem_with_capacity_heuristic(
-        topo_name: str, tm_seed: int, scale_factor: float = 10
-    ) -> Tuple[float, nx.DiGraph, TrafficMatrixBase]:
+def get_graph_M_matrix(
+    graph: nx.DiGraph,
+    capacities: Optional[np.ndarray] = None
+) -> np.ndarray:
     """
-    Given a topology name, create the input for a TE problem.
-    Returns an heuristically assigned capacity value, a graph and a uniform traffic matrix.
+    Returns the node-edge incidence matrix (also called simply the topology
+    adjacency matrix sometimes).
+    For a graph with `m` nodes and `n` edges, this matrix is `m x n` and for
+    each node `v` and edge `e`, we have that:
+
+    - `M[v, e] = +1` iff edge `e` _leaves_ `v`
+    - `M[v, w] = -1` iff edge `e` _enters_ `v`
+    
+    All other entries are zero.
+
+    Note
+    ----
+    Sometimes, we scale the problem by capacity (especially when using ADMM).
+    In such a case, each column is **multiplied** by capacity.
     """
-    
-    graph = load_zoo_topology(topo_name)
-    tm_params = UniformTrafficMatrixParams(n = len(graph.nodes), min = 0.0, max = 1.0)
-    tm = UniformTrafficMatrix(seed=tm_seed, params=tm_params)
-    c_min = get_capacity_lower_bound(graph, tm)
-    c = c_min * scale_factor
-    set_edge_capacity_to(graph, c)
-    
-    return c, graph, tm
-
-
-def get_uniform_tm_problem(topo_name: str, tm_seed: int, scale_factor: float = 10) -> Tuple[Optional[float], nx.DiGraph, TrafficMatrixBase]:
-    # First, attempt to load the topology from the repo. (which will have capacities noted on links)
-    graph = load_repo_topology(topo_name)
-    if graph is None:
-        return get_uniform_tm_problem_with_capacity_heuristic(topo_name, tm_seed, scale_factor)
-    tm_params = UniformTrafficMatrixParams(n = len(graph.nodes), min = 0.0, max = 1.0)
-    tm = UniformTrafficMatrix(seed=tm_seed, params=tm_params)
-    tm.rescale(scale_factor)
-    return None, graph, tm
-
-
-def get_graph_M_matrix(graph: nx.DiGraph) -> np.ndarray:
     assert isinstance(graph, nx.DiGraph)
 
     m = len(graph.nodes())
@@ -422,7 +316,9 @@ def get_graph_M_matrix(graph: nx.DiGraph) -> np.ndarray:
     for i, (s, d) in enumerate(graph.edges(data=False)):
         M[s, i] = +1
         M[d, i] = -1
-    
+
+    if capacities is not None:
+        return M * capacities
     return M
 
 
@@ -430,6 +326,14 @@ def get_adjacency_null_space(M_matrix: np.ndarray) -> np.ndarray:
     assert len(M_matrix.shape) == 2
 
     return null_space(M_matrix)
+
+
+def get_graph_null_space_basis(graph: nx.DiGraph, edge_weights: Optional[np.ndarray]) -> np.ndarray:
+    if edge_weights is not None:
+        assert edge_weights.ndim == 1
+        assert len(edge_weights) == graph.number_of_edges()
+    
+    return get_adjacency_null_space(get_graph_M_matrix(graph, edge_weights))
 
 
 def get_sparse_null_space(M_matrix: np.ndarray) -> np.ndarray:
@@ -443,8 +347,12 @@ def get_sparse_null_space(M_matrix: np.ndarray) -> np.ndarray:
     return np_basis / np.linalg.norm(np_basis, axis=0)
 
 
-def get_commodity_in_out_mask(graph: nx.DiGraph, commodities: List[Commodity], 
-                              edge_indexing: Optional[Dict[Tuple[int, int], int]] = None) -> np.ndarray:
+def get_commodity_in_out_mask(
+    graph: nx.DiGraph,
+    edge_indexing: Dict[Tuple[int, int], int],
+    commodity_id_start: int = 0,
+    commodity_id_end_exclusive: Optional[int] = None
+) -> np.ndarray:
     """
     Returns a Boolean valued mask of size `n x k` where entry `ek` is `True`
     for eny edge leaving the destination of commodity `k` or flowing into the
@@ -453,47 +361,39 @@ def get_commodity_in_out_mask(graph: nx.DiGraph, commodities: List[Commodity],
     acceptable solution, since otherwise it means that the final assignment
     may have created loops between the source and the destination.
     """
-    if edge_indexing is None:
-        edge_indexing = get_edge_indexing(graph)
-    mask = np.zeros(dtype=bool, shape=(graph.number_of_edges(), len(commodities)))
-    for k, commodity in enumerate(commodities):
-        for edge in graph.out_edges(nbunch=commodity.destination, data=False):
-            mask[edge_indexing[edge], k] = True
-        for edge in graph.in_edges(nbunch=commodity.source, data=False):
-            mask[edge_indexing[edge], k] = True
+    M = graph.number_of_nodes()
+    if commodity_id_end_exclusive is None:
+        commodity_id_end_exclusive = M*(M-1)
+    mask = np.zeros(
+        dtype=bool,
+        shape=(
+            graph.number_of_edges(),
+            commodity_id_end_exclusive - commodity_id_start
+        )
+    )
+    for k in range(commodity_id_start, commodity_id_end_exclusive):
+        source, destination = commodity_id_to_od(k, M)
+        for edge in graph.out_edges(nbunch=destination, data=False):
+            mask[edge_indexing[edge], k - commodity_id_start] = True
+        for edge in graph.in_edges(nbunch=source, data=False):
+            mask[edge_indexing[edge], k - commodity_id_start] = True
     return mask
 
 
 def get_sparse_commodity_satisfaction_mask(
-    graph: nx.DiGraph, commodities: List[Commodity], 
-    edge_indexing: Optional[Dict[Tuple[int, int], int]] = None
+    graph: nx.DiGraph,
+    edge_indexing: Dict[Tuple[int, int], int]
 ) -> Tuple[sparse.csc_matrix, sparse.csc_matrix]:
-    if edge_indexing is None:
-        edge_indexing = get_edge_indexing(graph)
-    mask_source_out = sparse.lil_matrix((graph.number_of_edges(), len(commodities)), dtype=bool)
-    mask_source_in = sparse.lil_matrix((graph.number_of_edges(), len(commodities)), dtype=bool)
-    for k, commodity in enumerate(commodities):
-        for edge in graph.out_edges(nbunch=commodity.source, data=False):
+    M = graph.number_of_nodes()
+    mask_source_out = sparse.lil_matrix((graph.number_of_edges(), M*(M-1)), dtype=bool)
+    mask_source_in = sparse.lil_matrix((graph.number_of_edges(), M*(M-1)), dtype=bool)
+    for k, od_pair in enumerate(commodity_od_iterator(M)):
+        source, _ = od_pair
+        for edge in graph.out_edges(nbunch=source, data=False):
             mask_source_out[edge_indexing[edge], k] = True
-        for edge in graph.in_edges(nbunch=commodity.source, data=False):
+        for edge in graph.in_edges(nbunch=source, data=False):
             mask_source_in[edge_indexing[edge], k] = True
     return mask_source_out.tocsc(), mask_source_in.tocsc()
-
-# def get_feasible_flow_assignment_gpu(graph: nx.DiGraph, commodities: List[Commodity]):
-#     N = len(graph.edges())
-#     K = len(commodities)
-#     X_KE = cp.zeros(shape=(N, K))
-#     EDGE_INDEXING = get_edge_indexing(graph)
-    
-#     for k, commodity in enumerate(commodities):
-#         SOURCE = commodity.source
-#         DESTINATION = commodity.destination
-#         DEMAND = commodity.demand
-#         path = nx.shortest_path(graph, SOURCE, DESTINATION)
-#         for i in range(len(path) - 1):
-#             edge = (path[i], path[i+1])
-#             X_KE[EDGE_INDEXING[edge], k] = DEMAND
-#     return X_KE
 
 
 if __name__ == '__main__':

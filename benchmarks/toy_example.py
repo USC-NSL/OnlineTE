@@ -32,9 +32,9 @@ def get_tm() -> CustomTrafficMatrix:
     )
 
 
-def get_problem_description() -> TrafficEngineeringProblemDescription:
-    return TrafficEngineeringProblemDescription(
-        EvalParams=TrafficEngineeringLPEvaluationParams(
+def get_problem_description() -> TEProblemDescription:
+    return TEProblemDescription(
+        EvalParams=TEEvaluationParams(
             TopologyName='toy-1',
             Seed=0,
             Objective=TEObjective.MLU,
@@ -46,7 +46,7 @@ def get_problem_description() -> TrafficEngineeringProblemDescription:
     )
 
 
-def draw_final_assignment(problem: TrafficEngineeringProblemDescription, trace: TrafficEngineeringLPObjectiveTrace):
+def draw_final_assignment(problem: TEProblemDescription, trace: TEObjectiveTrace):
     final_util = trace.trace[-1][0]
     final_assignment = trace.trace[-1][-1]['X']
     graph = set_graph_weights_to_zero(problem.Graph)

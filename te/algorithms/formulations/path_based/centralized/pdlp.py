@@ -77,8 +77,8 @@ class ConstraintVector:
 #     return out_rows, out_cols, out_data
 
 
-class PDLPPathBasedTE(TrafficEngineeringLP):
-    def __init__(self, problem_description: TrafficEngineeringProblemDescription, solver_params: PDLPPathBasedSolverParams) -> None:
+class PDLPPathBasedTE(TELP):
+    def __init__(self, problem_description: TEProblemDescription, solver_params: PDLPPathBasedSolverParams) -> None:
         super().__init__(problem_description, solver_params)
         self._graph = problem_description.Graph
         self._traffic = problem_description.TM
@@ -392,7 +392,7 @@ class PDLPPathBasedTE(TrafficEngineeringLP):
             self._X_ek, self._graph, self._commodity_list,
             eval_params
         )
-        self.check_result = TrafficEngineeringLPCheckResult(
+        self.check_result = TECheckResult(
             unsat_ratio=unsat_ratio,
             congested_ratio=congested_ratio,
             unsat_commodities=unsat_commodities,
@@ -429,7 +429,7 @@ class PDLPPathBasedTE(TrafficEngineeringLP):
     def update_traffic_matrix(self, tm: TrafficMatrixBase):
         raise NotImplementedError
     
-    def add_solution_elements(self, solution: TrafficEngineeringLPSolution):
+    def add_solution_elements(self, solution: TESolution):
         raise NotImplementedError
 
 

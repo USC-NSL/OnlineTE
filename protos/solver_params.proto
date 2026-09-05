@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+
+message PathBasedOnlineTEParameters {
+    optional int32 OuterLoopRounds = 1;
+    optional int32 InnerLoopRounds = 2;
+    optional float Rho = 3;
+    optional float Eta = 4;
+    optional float Gamma = 5;
+    optional int32 SwitchIterations = 6;
+    optional string Precision = 7;
+    optional bool ScaleWithCapacity = 8;
+    optional int32 NumberOfPathsPerCommodity = 9;
+    optional string PathFile = 10;
+    optional bool AdjustGamma = 11;
+}
+
+
+message EdgeBasedOnlineTEParameters {
+    optional int32 OuterLoopRounds = 1;
+    optional int32 InnerLoopRounds = 2;
+    optional float Rho = 3;
+    optional float Eta = 4;
+    optional float Gamma = 5;
+    optional float Beta = 6;
+    optional int32 SwitchIterations = 7;
+    optional string Precision = 8;
+    optional bool ScaleWithCapacity = 9;
+}

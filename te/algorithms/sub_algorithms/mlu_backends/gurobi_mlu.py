@@ -4,31 +4,36 @@ from dataclasses import dataclass
 from typing import Optional, Tuple, List
 from gurobipy import GRB
 from te.algorithms.base import TEObjective
-from te.algorithms.array_utils.cpu_utils import CPUArray, cpu_array, cpu_cast_float
-from te.algorithms.utils import as_info, as_warning
+from array_utils.cpu.types import *
+from utils.logging import as_info
 from .base import ControllerMLUSolver, ControllerMLUException
 from te.algorithms.statistics.helpers import record_cpu_runtime
-from te.algorithms.formulations.edge_based.centralized import make_model, optimize_or_scream
-from te.algorithms.formulations.edge_based.centralized import GurobiSolverParams
+from utils.gurobi_utils import *
 
 
-@dataclass
+# TODO: Get rid of these!
+@dataclass(frozen=True)
 class GurobiMLUParams(GurobiSolverParams):
-    _Rho: Optional[float] = None
-    _Alpha: Optional[float] = None
-
-    def __post_init__(self):
-        self._left_column_share = 0.5
+    pass
 
 
 class GurobiMLU(ControllerMLUSolver):
-    def __init__(self, num_edges: int, capacities: CPUArray, solver_params: GurobiMLUParams, num_domains: int = 1, 
-                 objective: TEObjective = TEObjective.MLU):
+    def __init__(self,
+        num_edges: int,
+        capacities: CPUArray,
+        solver_params: GurobiMLUParams,
+        feasibility_tolerance: float,
+        optimality_tolerance: float,
+        num_domains: int = 1, 
+        objective: TEObjective = TEObjective.MLU
+    ):
         self._num_edges: int = num_edges
         self._capacities: CPUArray = capacities
         self._solver_params = solver_params
         self._num_domains = num_domains
         self._objective = objective
+        self._feasibility_tolerance = feasibility_tolerance
+        self._optimality_tolerance = optimality_tolerance
 
         self._env: gurobipy.Env = None
         self._double_precision_capacities: np.ndarray = np.array(capacities, dtype=np.float64)
@@ -36,7 +41,6 @@ class GurobiMLU(ControllerMLUSolver):
         self._objective_controller: Optional[gurobipy.QuadExpr] = None
         self._Z_e: Optional[gurobipy.tupledict] = None
         self._utility: Optional[gurobipy.Var] = None
-        self._utility_bound_constraints: Tuple[gurobipy.Constr, gurobipy.Constr] = None
         """Gives the dual variables `v_neg` and `v_pos`"""
         self._capacity_constraints: List[gurobipy.Constr] = None
         """Gives the dual variables `tau_e`, a vector of length `n`"""
@@ -87,13 +91,19 @@ class GurobiMLU(ControllerMLUSolver):
         self._env = ENV
 
         PARAMS = self._solver_params
-        MODEL_CONTROLLER: gurobipy.Model = \
-            make_model('EdgeBasedDistributedTE_Controller', params=PARAMS, env=ENV)
+        MODEL_CONTROLLER: gurobipy.Model = make_model(
+            name='EdgeBasedDistributedTE_Controller',
+            params=PARAMS,
+            feasibility_tolerance=self._feasibility_tolerance,
+            optimality_tolerance=self._optimality_tolerance,
+            env=ENV
+        )
         
         self._Z_e = MODEL_CONTROLLER.addVars(NUM_EDGES * NUM_DOMAISN, lb=float('-inf'), vtype=GRB.CONTINUOUS, name='Z_E')
-        self._utility = MODEL_CONTROLLER.addVar(lb=0.0, ub=1.0, vtype=GRB.CONTINUOUS, name='U')
+        self._utility = MODEL_CONTROLLER.addVar(lb=0.0, vtype=GRB.CONTINUOUS, name='U')
 
-        print(as_info(f"Gurobi objective convergence tolerance: {PARAMS.ConvTol}"))
+        print(as_info(f"Gurobi objective convergence tolerance: {self._optimality_tolerance}"))
+        print(as_info(f"Gurobi constraint feasibility tolerance: {self._feasibility_tolerance}"))
         self._model_controller = MODEL_CONTROLLER
 
     def _add_constraints(self):
@@ -105,11 +115,6 @@ class GurobiMLU(ControllerMLUSolver):
         MODEL_CONTROLLER = self._model_controller
         NUM_EDGES = self.num_edges
         NUM_DOMAINS = self.num_domains
-
-        # Utilization bound constraints
-        u_low = MODEL_CONTROLLER.addConstr(UTILITY >= 0)
-        u_high = MODEL_CONTROLLER.addConstr(-UTILITY >= -1)
-        self._utility_bound_constraints = (u_low, u_high)
 
         capacity_constraints: List[gurobipy.Constr] = []
         for e in range(NUM_EDGES):
@@ -133,9 +138,9 @@ class GurobiMLU(ControllerMLUSolver):
         UTILITY = self._utility
         Z_E = self._Z_e
         F_M_E = self._current_F
-        RHO = self._solver_params._Rho
+        RHO = self.rho
         MODEL_CONTROLLER = self._model_controller
-        ALPHA = self._solver_params._Alpha
+        ALPHA = self.alpha
         
         OBJECTIVE_CONTROLLER = gurobipy.QuadExpr()
         OBJECTIVE_CONTROLLER.addTerms(ALPHA, UTILITY)

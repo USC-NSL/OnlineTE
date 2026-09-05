@@ -1,7 +1,7 @@
 ---
 # Playbook for updating code only
 - name: Pull changes
-  hosts: controller_group:workers_group
+  hosts: workers_group
   serial: 100
   gather_facts: false
   remote_user: "{{ lookup('env', 'SPHERE_USER') }}"
@@ -19,7 +19,7 @@
   tasks:
   - name: Clone repo with force
     ansible.builtin.git:
-      repo: https://{{access_token}}@github.com/USC-NSL/DistributedTE.git
+      repo: https://{{access_token}}@github.com/USC-NSL/OnlineTE.git
       clone: true
       force: true
       dest: "{{path_home}}"
