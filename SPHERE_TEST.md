@@ -19,6 +19,17 @@ To access it:
 > **Note:** You can check the state of the artifact model under your reservation/materialization tab. You may also want to manually login and attach the
 > XDC to the associated materialization via the command line.
 
+Finally, note that these nodes are very slim. You have to install a few things first:
+```bash
+sudo apt-get update
+sudo apt-get install git python3-venv
+```
+And you may also want to have a virtual environment for Python.
+```bash
+python3 -m venv .distte-venv
+source .distte-venv/bin/activate
+```
+
 ## Setting Up Ansible
 Under `ansible`, we provide detailed instructions on how to set up remote nodes. In case Ansible reports in-accessible nodes and appears to be a problem with the testbed, please do not hesitate to reach out and we will help.
 
