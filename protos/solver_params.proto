@@ -13,7 +13,6 @@ message PathBasedOnlineTEParameters {
     optional int32 NumberOfPathsPerCommodity = 9;
     optional string PathFile = 10;
     optional bool AdjustGamma = 11;
-    optional int32 NumWorkers = 12;
 }
 
 
@@ -27,5 +26,4 @@ message EdgeBasedOnlineTEParameters {
     optional int32 SwitchIterations = 7;
     optional string Precision = 8;
     optional bool ScaleWithCapacity = 9;
-    optional int32 NumWorkers = 10;
 }

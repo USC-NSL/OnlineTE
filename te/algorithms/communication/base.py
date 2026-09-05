@@ -6,7 +6,7 @@ import networkx as nx
 from typing import Tuple, Optional, Dict
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
-from te.algorithms.base import SolverParams
+from te.algorithms.base import SolverParams, TEObjective
 from utils.exceptions import SolutionInterrupted
 from utils.logging import as_warning
 from array_utils.cpu.types import CPUArray, cpu_array
@@ -378,6 +378,17 @@ class DistributedSolverNodeBase(ABC):
 class PrettyAddressList(SolverParams):
     Addresses: Tuple[Tuple[str, int]]
     _left_column_share = 0.2
+
+
+OBJECTIVE_TO_ID = {
+    TEObjective.MLU: 1,
+    TEObjective.MAX_FLOW: 2
+}
+
+ID_TO_OBJECTIVE = {
+    1: TEObjective.MLU,
+    2: TEObjective.MAX_FLOW
+}
 
 
 __all__ = [

@@ -29,8 +29,8 @@ class PDLPMLU(ControllerMLUSolver):
         solver_params: PDLPMLUParams,
         feasibility_tolerance: float,
         optimality_tolerance: float,
-        num_domains: int = 1,
-        objective: TEObjective = TEObjective.MLU
+        objective: TEObjective = TEObjective.MLU,
+        num_domains: int = 1
     ):
         self._num_edges: int = num_edges
         self._capacities: np.ndarray = np.array(capacities, dtype=np.float64)
@@ -88,7 +88,9 @@ class PDLPMLU(ControllerMLUSolver):
 
     def _get_variable_upper_bound_vector(self) -> np.ndarray:
         out = np.full((self._NUM_VARIABLES,), np.inf)
-        # out[-1] = 1.0
+        if not self.is_mlu:
+            # Fix MLU to 1 for Max-Flow
+            out[-1] = 1.0
         return out
 
     def _get_capacity_constraint(self) -> ConstraintVector:
@@ -100,21 +102,18 @@ class PDLPMLU(ControllerMLUSolver):
             for d in range(D):
                 constraints.coeffs[e, e + d*N] = 1.0
             constraints.coeffs[e, -1] = -self.capacities[e]
-            # constraints.coeffs[e, -1] = -1
         constraints.lowers.fill(-np.inf)
         return constraints
     
     def _get_objective_matrix_diagonal(self) -> np.ndarray:
         d = np.full((self._NUM_VARIABLES,), fill_value=self.rho)
         d[-1] = 0
-        # d[-1] = self._solver_params._Alpha * self.num_domains
         return d
     
     def _get_objective_vector(self) -> np.ndarray:
         out = np.zeros((self._NUM_VARIABLES,))
         out[:-1] = -self._current_F * self.rho
         if self.is_mlu:
-            # out[-1] = self._solver_params._Alpha * self.num_domains
             out[-1] = self.alpha * self.num_domains
         return out
 

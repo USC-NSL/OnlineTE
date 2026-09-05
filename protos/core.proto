@@ -89,6 +89,8 @@ message NetworkUpdateResponse {
     SerializedNumpyArrayMessage means = 3;
     // Transaction ID
     int32 xid = 4;
+    // Total demand satisfied until now
+    optional float demand = 5;
 }
 
 // Trivial state keep-alive message
@@ -98,6 +100,10 @@ message State {
 }
 
 message SolverParameters {
+    // Placeholder for algorithm parameters
     google.protobuf.Any parameters = 1;
+    // Number of switches involved in this computation
     int32 num_workers = 2;
+    // The objective value type (e.g. MLU/Max-Flow/...)
+    int32 objective = 3;
 }

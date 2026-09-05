@@ -3,7 +3,7 @@ import te.constants
 from typing import Optional
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
-from ..base import RPCParams
+from ..base import RPCParams, ID_TO_OBJECTIVE
 from ..worker_backend import WorkerBackendBase
 from te.algorithms.base import SolverParams
 from array_utils.cpu.grpc_utils import *
@@ -101,9 +101,10 @@ class OnlineTEWorkerNodeListener(OnlineTECoreServicer):
         return array_to_serialized_message(X_bar)
     
     def DoNetworkUpdate(self, request: core_messages.NetworkUpdateRequest, context):
-        runtime, means = self._backend.do_inner_loop_update(request.epoch)
+        runtime, means, total_flow = self._backend.do_inner_loop_update(request.epoch)
         return core_messages.NetworkUpdateResponse(
-            runtime_ns=runtime, means=array_to_serialized_message(means)
+            runtime_ns=runtime, means=array_to_serialized_message(means),
+            demand=total_flow
         )
     
     def UpdateWorkerNode(self, request: core_messages.UpdateMessage, context):
@@ -123,13 +124,14 @@ class OnlineTEWorkerNodeListener(OnlineTECoreServicer):
     
     def SetSolverParameters(self, request: core_messages.SolverParameters, context):
         num_workers = request.num_workers
+        objective = ID_TO_OBJECTIVE[request.objective]
         new_params = self._backend.deserialize_solver_params(request.parameters)
         if new_params is None:
             # Deserialization failed! Let the sender know!
             context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
             context.set_details("Solver parametrs do not match what was expected")
         else:
-            self._backend.set_solver_parameters(new_params, num_workers)
+            self._backend.set_solver_parameters(new_params, num_workers, objective)
         return Empty()
     
     def Close(self, request, context):

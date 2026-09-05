@@ -5,6 +5,7 @@ from typing import Optional, Tuple, Union
 from array_utils import set_global_precision
 from array_utils.cpu.types import *
 from te.algorithms.communication import *
+from te.algorithms.base import TEObjective
 from topologies.utils import get_adjacency_null_space, get_graph_M_matrix, get_commodity_in_out_mask
 from te.algorithms.sub_algorithms.pgd import do_memory_efficient_pgd
 from te.algorithms.sub_algorithms.lasso import sparse_range_lasso
@@ -108,6 +109,7 @@ class OnlineTEWorkerNode(DistributedSolverNodeBase):
     def __init__(self, params: DistributedSolverNodeParams):
         super().__init__(params)
         self._solver_params: Optional[EdgeBasedOnlineTEParameters] = None
+        self._objective: Optional[TEObjective] = None
         self._ready: bool = False
 
         self._T: Optional[int] = None
@@ -141,8 +143,13 @@ class OnlineTEWorkerNode(DistributedSolverNodeBase):
     def run(self):
         self.backend.wait()
 
-    def set_solver_parameters(self, new_params: EdgeBasedOnlineTEParameters, num_workers: int):
+    def set_solver_parameters(self,
+        new_params: EdgeBasedOnlineTEParameters,
+        num_workers: int,
+        objective: TEObjective
+    ):
         self._solver_params = new_params
+        self._objective = objective
         self.number_of_workers = num_workers
         set_global_precision(precision=new_params.Precision)
 

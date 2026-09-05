@@ -2,7 +2,7 @@ import networkx as nx
 from typing import Tuple, Callable
 from .base import CommunicationBackendBase
 from array_utils.cpu.types import *
-from te.algorithms.base import SolverParams
+from te.algorithms.base import SolverParams, TEObjective
 
 
 
@@ -14,10 +14,10 @@ class WorkerBackendBase[P: SolverParams](CommunicationBackendBase[P]):
         return True
 
     @property
-    def set_solver_parameters(self) -> Callable[[P, int], None]:
+    def set_solver_parameters(self) -> Callable[[P, int, TEObjective], None]:
         return self._set_solver_parameters
     @set_solver_parameters.setter
-    def set_solver_parameters(self, f: Callable[[P, int], None]):
+    def set_solver_parameters(self, f: Callable[[P, int, TEObjective], None]):
         self._set_solver_parameters = f
 
     @property

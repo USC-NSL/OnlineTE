@@ -78,7 +78,8 @@ class OnlineTECoordinator(TELP[EdgeBasedOnlineTEParameters], DistributedSolverNo
         # Reveal the topology to the worker nodes
         self.backend.initialize_worker_nodes(
             self._solver_params,
-            self._graph
+            self._graph,
+            self.objective
         )
         # Finalize all controller states
         self._initialize_variables_and_residuals()

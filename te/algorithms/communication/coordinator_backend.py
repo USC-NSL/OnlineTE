@@ -1,9 +1,9 @@
 import networkx as nx
 from abc import abstractmethod
-from typing import Tuple
+from typing import Tuple, Optional
 from .base import CommunicationBackendBase
 from array_utils.cpu.types import *
-from te.algorithms.base import SolverParams
+from te.algorithms.base import SolverParams, TEObjective
 
 
 class CoordinatorBackendBase[P: SolverParams](CommunicationBackendBase[P]):
@@ -11,7 +11,8 @@ class CoordinatorBackendBase[P: SolverParams](CommunicationBackendBase[P]):
     def initialize_worker_nodes(
         self,
         solver_params: P,
-        topology: nx.DiGraph
+        topology: nx.DiGraph,
+        objective: TEObjective
     ):
         """
         The nodes need to know a few thing before they can start.
@@ -39,7 +40,7 @@ class CoordinatorBackendBase[P: SolverParams](CommunicationBackendBase[P]):
         """Get the total flow over each edge"""
     
     @abstractmethod
-    def do_network_update(self, epoch: int) -> Tuple[int, CPUArray]:
+    def do_network_update(self, epoch: int) -> Tuple[int, CPUArray, Optional[float]]:
         """Do network update for a given epoch and return the aggregate"""
     
     @abstractmethod

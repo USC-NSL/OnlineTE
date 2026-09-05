@@ -16,8 +16,8 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple
 from array_utils.cpu.types import *
 from array_utils.cpu.grpc_utils import *
-from te.algorithms.base import SolverParams
-from ..base import RPCParams
+from te.algorithms.base import SolverParams, TEObjective
+from ..base import RPCParams, OBJECTIVE_TO_ID
 from ..coordinator_backend import CoordinatorBackendBase
 from .partial_barrier import PartialBarrier
 
@@ -116,12 +116,17 @@ class AsynchronousgRPCCoordinatorBackend[P: SolverParams](CoordinatorBackendBase
             return None
         return self._event_loop.run_until_complete(self._are_all_workers_reachable())
 
-    async def _initialize_worker_nodes(self, solver_params: P, graph: nx.DiGraph):
+    async def _initialize_worker_nodes(self,
+        solver_params: P,
+        graph: nx.DiGraph,
+        objecitve: TEObjective
+    ):
         WORKERS = self._worker_stubs
         # Set solver parameters
         params = core_messages.SolverParameters()
         params.parameters.Pack(self.serialize_solver_params(solver_params))
         params.num_workers = self.number_of_workers
+        params.objective = OBJECTIVE_TO_ID[objecitve]
         await asyncio.gather(*[stub.SetSolverParameters(params) for stub in WORKERS])
         # Set topology
         topology = graph_to_serialized_message(graph)
@@ -129,9 +134,12 @@ class AsynchronousgRPCCoordinatorBackend[P: SolverParams](CoordinatorBackendBase
     
     def initialize_worker_nodes(self,
         solver_params: P,
-        graph: nx.DiGraph
+        graph: nx.DiGraph,
+        objecitve: TEObjective
     ):
-        self._event_loop.run_until_complete(self._initialize_worker_nodes(solver_params, graph))
+        self._event_loop.run_until_complete(self._initialize_worker_nodes(
+            solver_params, graph, objecitve
+        ))
     
     async def _update_demands(self, demands: CPUArray):
         WORKERS = self._worker_stubs
@@ -179,18 +187,18 @@ class AsynchronousgRPCCoordinatorBackend[P: SolverParams](CoordinatorBackendBase
     async def _stub_net_update(self, node_id: int, request: core_messages.NetworkUpdateRequest):
         return await self._worker_stubs[node_id].DoNetworkUpdate(request)
 
-    def _deserialize_update_response(self, message: core_messages.NetworkUpdateResponse) -> Tuple[int, CPUArray]:
-        return message.runtime_ns, serialized_message_to_array(message.means)
+    def _deserialize_update_response(self, message: core_messages.NetworkUpdateResponse) -> Tuple[int, CPUArray, Optional[float]]:
+        return message.runtime_ns, serialized_message_to_array(message.means), message.demand
 
-    def do_network_update(self, epoch: int) -> Tuple[int, CPUArray]:
+    def do_network_update(self, epoch: int) -> Tuple[int, CPUArray, Optional[float]]:
         message = core_messages.NetworkUpdateRequest(epoch=epoch)
         updates = self._barrier.gather(
             message=message,
             node_coroutine=self._stub_net_update,
             store_operation=self._deserialize_update_response 
         )
-        runtimes, means = zip(*updates)
-        return max(runtimes), np.mean(means, axis=0)
+        runtimes, means, demands = zip(*updates)
+        return max(runtimes), np.mean(means, axis=0), sum(demands) if all(demands) else None
     
     # async def _reconvene_network_updates(self, message: core_messages.UpdateMessage):
     #     await asyncio.gather(*[

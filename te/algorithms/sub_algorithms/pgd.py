@@ -106,14 +106,32 @@ def do_path_based_nesterov_pgd(
 
 
 def do_path_based_maxflow_pgd(
-    y_block: CPUArray, A_block: CPUArray, C_block: CPUArray, D_block: CPUArray,
-    beta_block: CPUArray, step_size: float, n_iter: int, eta: float
+    y_block: CPUArray, y_block_old: CPUArray,
+    alpha_rows: NumbaList, alpha_cols: NumbaList, sharing_bias: CPUArray,
+    beta_block: CPUArray, demand_block: CPUArray, num_edges: int, 
+    num_paths: int, step_sizes: Union[float, np.ndarray], n_iter: int, eta: float,
+    capacities: Optional[CPUArray] = None
 ) -> CPUArray:
+    t = 1
+    z_block = np.copy(y_block)
     for _ in range(n_iter):
-        grad_block = eta * (np.einsum('kij,jk->ik', A_block, y_block) - C_block) - D_block[np.newaxis, :]
-        y_block = project_onto_probability_orthant(y_block - step_size * grad_block, beta_block)
-    return y_block
+        grad_block = \
+            path_based_projection_nnz(
+                z_block - y_block_old, alpha_rows, alpha_cols,
+                num_edges, demand_block, capacities
+            ) + \
+            path_based_transpose_vector_product_nnz(
+                sharing_bias, alpha_rows, alpha_cols,
+                num_paths, demand_block, capacities
+            ) - \
+            demand_block / eta
+        candidate = project_onto_probability_orthant(z_block - step_sizes * grad_block, beta_block)
+        t_acc = cpu_cast_float(0.5 * (1.0 + np.sqrt(1.0 + 4.0 * t * t)))
+        z_block = candidate + cpu_cast_float((t - 1.0)/t_acc) * (candidate - y_block)
+        y_block = candidate
+        t = t_acc
 
+    return y_block
 
 try:
     """

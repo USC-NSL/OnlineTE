@@ -7,7 +7,8 @@ from array_utils import set_global_precision
 from array_utils.cpu.types import *
 from array_utils.cpu.wrapper import cpu_fill
 from te.algorithms.communication import *
-from te.algorithms.sub_algorithms.pgd import do_path_based_pgd, do_path_based_maxflow_pgd, do_path_based_nesterov_pgd
+from te.algorithms.base import TEObjective
+from te.algorithms.sub_algorithms.pgd import do_path_based_maxflow_pgd, do_path_based_nesterov_pgd
 from te.path_providers import *
 from te.path_providers.sparse_ops import *
 from utils.logging import as_warning
@@ -25,7 +26,8 @@ class DenseSolver:
         eta: float,
         adjust_step_size: bool,
         capacities: CPUArray,
-        scale_with_capacity: bool
+        scale_with_capacity: bool,
+        objective: TEObjective
     ):
         self._demands: CPUArray = demands
         K, N, T = alpha_shape
@@ -38,6 +40,7 @@ class DenseSolver:
         self._eta = eta
         self._scale_with_capacity = scale_with_capacity
         self._capacities = capacities
+        self._objective = objective
 
         self._pgd_step_0 = pgd_step
         self._pgd_steps = pgd_step if not adjust_step_size else \
@@ -79,6 +82,10 @@ class DenseSolver:
             self.conditional_capacity
         )
 
+    @property
+    def total_flow(self) -> float:
+        return np.sum(np.multiply(np.sum(self._Y_tk, axis=0), self._demands))
+
     def set_demands(self, demands: CPUArray):
         self._demands = demands
         self._pgd_steps = self._pgd_step_0 if not self._adjust_step_size else \
@@ -89,34 +96,39 @@ class DenseSolver:
     
     def update(self, sharing_bias: CPUArray) -> CPUArray:
         new_Y_old = cpu_array(self._Y_tk)
-        # self._Y_tk = do_path_based_pgd(
-        #     y_block=self._Y_tk,
-        #     y_block_old=self._Y_tk_old,
-        #     alpha_rows=self._alpha_rows,
-        #     alpha_cols=self._alpha_cols,
-        #     sharing_bias=sharing_bias,
-        #     beta_block=self._beta,
-        #     demand_block=self._demands,
-        #     num_edges=self._N,
-        #     num_paths=self._T,
-        #     step_sizes=self._pgd_steps,
-        #     n_iter=self._pgd_iters,
-        #     capacities=self.conditional_capacity
-        # )
-        self._Y_tk = do_path_based_nesterov_pgd(
-            y_block=self._Y_tk,
-            y_block_old=self._Y_tk_old,
-            alpha_rows=self._alpha_rows,
-            alpha_cols=self._alpha_cols,
-            sharing_bias=sharing_bias,
-            beta_block=self._beta,
-            demand_block=self._demands,
-            num_edges=self._N,
-            num_paths=self._T,
-            step_sizes=self._pgd_steps,
-            n_iter=self._pgd_iters,
-            capacities=self.conditional_capacity
-        )
+        if self._objective == TEObjective.MLU:
+            self._Y_tk = do_path_based_nesterov_pgd(
+                y_block=self._Y_tk,
+                y_block_old=self._Y_tk_old,
+                alpha_rows=self._alpha_rows,
+                alpha_cols=self._alpha_cols,
+                sharing_bias=sharing_bias,
+                beta_block=self._beta,
+                demand_block=self._demands,
+                num_edges=self._N,
+                num_paths=self._T,
+                step_sizes=self._pgd_steps,
+                n_iter=self._pgd_iters,
+                capacities=self.conditional_capacity
+            )
+        elif self._objective == TEObjective.MAX_FLOW:
+            self._Y_tk = do_path_based_maxflow_pgd(
+                y_block=self._Y_tk,
+                y_block_old=self._Y_tk_old,
+                alpha_rows=self._alpha_rows,
+                alpha_cols=self._alpha_cols,
+                sharing_bias=sharing_bias,
+                beta_block=self._beta,
+                demand_block=self._demands,
+                num_edges=self._N,
+                num_paths=self._T,
+                step_sizes=self._pgd_steps,
+                n_iter=self._pgd_iters,
+                eta=self._eta,
+                capacities=self.conditional_capacity
+            )
+        else:
+            raise ValueError
         self._Y_tk_old = new_Y_old
         return path_based_to_edge_based_mean_nnz(
             self._Y_tk, self._alpha_rows, self._alpha_cols,
@@ -128,6 +140,7 @@ class OnlineTEWorkerNode(DistributedSolverNodeBase):
     def __init__(self, params: DistributedSolverNodeParams):
         super().__init__(params)
         self._solver_params: Optional[PathBasedOnlineTEParameters] = None
+        self._objective: Optional[TEObjective] = None
         self._ready: bool = False
 
         self._T: Optional[int] = None
@@ -160,8 +173,13 @@ class OnlineTEWorkerNode(DistributedSolverNodeBase):
     def run(self):
         self.backend.wait()
 
-    def set_solver_parameters(self, new_params: PathBasedOnlineTEParameters, num_workers: int):
+    def set_solver_parameters(self,
+        new_params: PathBasedOnlineTEParameters,
+        num_workers: int,
+        objective: TEObjective
+    ):
         self._solver_params = new_params
+        self._objective = objective
         self.number_of_workers = num_workers
         set_global_precision(precision=new_params.Precision)
 
@@ -235,13 +253,15 @@ class OnlineTEWorkerNode(DistributedSolverNodeBase):
             eta=self._solver_params.Eta,
             adjust_step_size=self._solver_params.AdjustGamma,
             capacities=self._capacities,
-            scale_with_capacity=self._solver_params.ScaleWithCapacity
+            scale_with_capacity=self._solver_params.ScaleWithCapacity,
+            objective=self._objective
         )
 
-    def do_inner_loop_pgd_update(self, epoch: int) -> Tuple[int, CPUArray]:
+    def do_inner_loop_pgd_update(self, epoch: int) -> Tuple[int, CPUArray, Optional[float]]:
         start = time.perf_counter_ns()
         mean = self._dense_solver.update(self._sharing_bias_cached)
-        return (time.perf_counter_ns() - start) // 1000, mean
+        total_flow = self._dense_solver.total_flow
+        return (time.perf_counter_ns() - start) // 1000, mean, total_flow
 
     def update_cached_values(self, sharing_bias: CPUArray):
         self._sharing_bias_cached = sharing_bias

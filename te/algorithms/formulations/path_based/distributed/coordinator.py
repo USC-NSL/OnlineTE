@@ -51,9 +51,8 @@ class OnlineTECoordinator(TELP[PathBasedOnlineTEParameters], DistributedSolverNo
         self.backend.start()
         # These we call right now, as opposed to doing them under `initialize`
         set_global_precision(self._solver_params.Precision)
-        # TODO: Add back MaxFlow after refactor is done
-        assert self.objective == TEObjective.MLU
         self._skip_loop_check = True
+        self._total_flow = 0
         self.initialize()
     
     def initialize(self):
@@ -72,7 +71,8 @@ class OnlineTECoordinator(TELP[PathBasedOnlineTEParameters], DistributedSolverNo
         # Initialize the algorithm
         self.backend.initialize_worker_nodes(
             self._solver_params,
-            self._graph
+            self._graph,
+            self.objective
         )
         # Finalize all controller states
         self._initialize_variables_and_residuals()
@@ -83,7 +83,10 @@ class OnlineTECoordinator(TELP[PathBasedOnlineTEParameters], DistributedSolverNo
 
     @property
     def current_objective(self) -> float:
-        return self._mlu_solver.current_u
+        match self.objective:
+            case TEObjective.MLU: return self._mlu_solver.current_u
+            case TEObjective.MAX_FLOW: return self._total_flow
+            case _: raise NotImplementedError
 
     def _initialize_variables_and_residuals(self):
         N = self.number_of_edges
@@ -98,7 +101,8 @@ class OnlineTECoordinator(TELP[PathBasedOnlineTEParameters], DistributedSolverNo
             # The feasibility and optimality tolerances for the inner MLU problem
             # most be tighter!
             self._problem_description.eval_params.feasibility_tolerance * 0.1,
-            self._problem_description.eval_params.optimality_tolerance * 0.1
+            self._problem_description.eval_params.optimality_tolerance * 0.1,
+            self.objective
         )
         self._mlu_solver.rho = self._solver_params.Rho
         self._mlu_solver.alpha = self._alpha
@@ -144,7 +148,9 @@ class OnlineTECoordinator(TELP[PathBasedOnlineTEParameters], DistributedSolverNo
     def _do_network_update(self, epoch: int):
         # TODO: Try to make the workers return aggregate flows as well
         # max_run, self._Y_bar_t = self.backend.do_network_update(epoch)
-        max_run, self._sharing_mean_1 = self.backend.do_network_update(epoch)
+        max_run, self._sharing_mean_1, demand = self.backend.do_network_update(epoch)
+        if self.objective == TEObjective.MAX_FLOW:
+            self._total_flow = demand
         return max_run * 1000
 
     # @record_cpu_runtime('Sharing-Mean')
@@ -217,18 +223,29 @@ class OnlineTECoordinator(TELP[PathBasedOnlineTEParameters], DistributedSolverNo
                 self._update_controller_objective()
                 MODEL_CONTROLLER.solve()
                 self._update_r_e()
-                if self._solver_params.ScaleWithCapacity:
-                    max_util = float(np.max(self.number_of_commodities * self._sharing_mean_1))
-                else:
-                    max_util = float(np.max(self.number_of_commodities * self._sharing_mean_1 / self._capacities))
                 # Inner loop infeasibility is usually very small, no need to bother with it!
                 gap = 2*self._outer_admm_wrapper.infeasibility / self._outer_inf_bound()
-                progress_bar.set_postfix({
-                    'Cont. Util.': f'{self._mlu_solver.current_u:.4f}',
-                    'Net. Util.': f'{max_util:.4f}',
-                    'Obj. Gap': f'{gap:.4f}',
-                    'Outer Step.': f'{self._outer_admm_wrapper.step_size:.2f}'
-                })
+
+                match self.objective:
+                    case TEObjective.MLU:
+                        if self._solver_params.ScaleWithCapacity:
+                            max_util = float(np.max(self.number_of_commodities * self._sharing_mean_1))
+                        else:
+                            max_util = float(np.max(self.number_of_commodities * self._sharing_mean_1 / self._capacities)    )    
+                        progress_bar.set_postfix({
+                            'Cont. Util.': f'{self._mlu_solver.current_u:.4f}',
+                            'Net. Util.': f'{max_util:.4f}',
+                            'Obj. Gap': f'{gap:.4f}',
+                            'Outer Step.': f'{self._outer_admm_wrapper.step_size:.2f}'
+                        })
+                    case TEObjective.MAX_FLOW:
+                        progress_bar.set_postfix({
+                            'Total Flow.': f'{self._total_flow:.4f}',
+                            'Obj. Gap': f'{gap:.4f}',
+                            'Outer Step.': f'{self._outer_admm_wrapper.step_size:.2f}'
+                        })
+                    case _: raise NotImplementedError
+
                 if gap < 0.005:
                     progress_bar._pbar.close()
                     if self.first_solve:
