@@ -9,4 +9,4 @@ dependencies:
       - -r requirements.txt
       # Match Dockerfile.gpu default; override manually if your driver/CUDA stack differs.
       # Example alternative: cupy-cuda11x
-      - cupy-cuda12x
+      - cupy-cuda12x==14.2.0

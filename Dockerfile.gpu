@@ -19,7 +19,7 @@ COPY requirements.txt /app/requirements.txt
 # Keep base dependencies from requirements.txt, then add CuPy explicitly.
 # If your host CUDA stack differs, override at build time:
 #   --build-arg CUPY_PACKAGE=cupy-cuda11x
-ARG CUPY_PACKAGE=cupy-cuda12x
+ARG CUPY_PACKAGE=cupy-cuda12x==14.2.0
 RUN python -m pip install --upgrade pip && \
     python -m pip install -r /app/requirements.txt && \
     python -m pip install ${CUPY_PACKAGE}
