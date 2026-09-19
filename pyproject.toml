@@ -1,0 +1,21 @@
+[build-system]
+requires = [
+    "scikit-build-core==0.11.6",
+    "nanobind==2.9.2",
+]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "onlinete"
+version = "0.1.0"
+description = "Distributed traffic-engineering solvers"
+readme = "README.md"
+requires-python = ">=3.13"
+
+[tool.scikit-build]
+minimum-version = "build-system.requires"
+build-dir = "build/{wheel_tag}"
+wheel.packages = ["array_utils", "benchmarks", "protos", "te", "topologies", "utils"]
+
+[tool.scikit-build.cmake]
+build-type = "Release"

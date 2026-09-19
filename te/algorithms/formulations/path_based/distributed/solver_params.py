@@ -1,7 +1,7 @@
 from typing import Optional, Literal
 from dataclasses import dataclass
 from te.algorithms.base import SolverParams
-from array_utils import SINGLE_PRECISION
+from array_utils import HALF_PRECISION, SINGLE_PRECISION
 from utils.logging import as_warning
 
 
@@ -19,7 +19,7 @@ class PathBasedOnlineTEParameters(SolverParams):
     """Step size for solving the switch-level problems"""
     SwitchIterations: int = 5
     """Number of iterations for each switch-level problem"""
-    Precision: Literal['double', 'single', 'half'] = SINGLE_PRECISION
+    Precision: Literal['double', 'single'] = SINGLE_PRECISION
     """Floating point operation precision"""
     ScaleWithCapacity: bool = False
     """Scale everything with link capacities"""
@@ -29,7 +29,15 @@ class PathBasedOnlineTEParameters(SolverParams):
     """Max number of available paths for each commodity"""
     AdjustGamma: bool = True
     """Whether to adjust PGD step size based on path lengths"""
+    KernelThreads: Optional[int] = None
+    """Native kernel threads; defaults to available worker CPUs capped at four"""
     def __post_init__(self):
+        if self.Precision == HALF_PRECISION:
+            raise ValueError(
+                "The distributed native path solver supports only single and double precision"
+            )
+        if self.KernelThreads is not None and self.KernelThreads <= 0:
+            raise ValueError("KernelThreads must be a positive integer or None")
         if self.Rho > self.Eta:
             as_warning(f"Outer ADMM step size (`Rho`) = {self.Rho} is strictly larger "
                        f"than inner ADMM step size (`Eta`) = {self.Eta}.\nThis is almost never beneficial.")

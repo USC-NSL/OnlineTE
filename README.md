@@ -6,6 +6,18 @@ A (hoperfully generic, in time) framrwork for implementation of Traffic Engineer
 
 At times when we see no need to implement a solver for a specific problem, we let Gurobi handle it.
 
+## Native extension setup
+
+The distributed path-based worker requires a C++17 compiler with OpenMP support.
+After installing `requirements.txt` in `.onlinete-venv`, build the native kernels
+from the repository root:
+
+```sh
+python -m pip install -e .
+```
+
+Docker and SPHERE/Ansible provisioning perform this build automatically.
+
 ```
 DistributedTE
   |
