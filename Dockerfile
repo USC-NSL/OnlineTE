@@ -7,12 +7,18 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends build-essential cmake ninja-build python3-dev && \
+    rm -rf /var/lib/apt/lists/*
+
 # Keep CPU image aligned with the current requirements.txt only.
 COPY requirements.txt /app/requirements.txt
 RUN python -m pip install --upgrade pip && \
     python -m pip install -r /app/requirements.txt
 
 COPY . /app
+
+RUN python -m pip install --no-deps /app
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends unzip vim && \

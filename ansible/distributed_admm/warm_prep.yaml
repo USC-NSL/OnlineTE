@@ -8,6 +8,8 @@
     path_home: "{{ lookup('env', 'SPHERE_HOME') }}"
     path_venv: "{{ lookup('env', 'VENV_HOME') }}"
   tasks:
+  - name: Build and install OnlineTE native extensions
+    command: chdir="{{path_home}}" "{{path_venv}}/bin/python -m uv pip install --no-deps -e ."
   - name: Compile protobuffs
     command: chdir="{{path_home}}" "{{path_venv}}/bin/python protos/__init__.py"
 

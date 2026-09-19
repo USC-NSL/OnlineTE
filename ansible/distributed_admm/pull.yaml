@@ -30,6 +30,11 @@
     args:
       chdir: "{{path_home}}"
 
+  - name: Build and install OnlineTE native extensions
+    ansible.builtin.shell: "{{path_venv}}/bin/python -m uv pip install --no-deps -e ."
+    args:
+      chdir: "{{path_home}}"
+
   - name: Give EXEC Premission To Launcher
     command: chdir="{{path_home}}" chmod +x ./"{{path_launch}}"
     when: "'workers_group' in group_names"

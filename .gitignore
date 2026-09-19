@@ -4,6 +4,7 @@
 # Debug outputs
 *.nsys-rep
 *.txt
+!CMakeLists.txt
 res.json
 
 # VENV
@@ -59,3 +60,11 @@ presentation/
 # Numba compiled functions
 *.nbc
 *.nbi
+
+# Native extension build products
+build/
+*.pyd
+*.so
+
+# VSCODE
+.vscode

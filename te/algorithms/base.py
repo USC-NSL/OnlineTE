@@ -59,7 +59,9 @@ class TEEvaluationParams(SolverParams):
     skip_checks: bool = False
         Skip all per-TM checks.
     scale_factor: float = 1.0
-        TM scale factor.
+        Multiplier applied to every generated traffic-matrix demand. This
+        does not scale link capacities and is independent of a solver's
+        capacity-normalization setting.
     sequence_length: int = 1
         Number of TMs in sequence to evaluate.
     trace_out: Optional[str] = None

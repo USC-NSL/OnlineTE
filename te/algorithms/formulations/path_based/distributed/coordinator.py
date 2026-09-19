@@ -125,7 +125,18 @@ class OnlineTECoordinator(TELP[PathBasedOnlineTEParameters], DistributedSolverNo
         return self._outer_admm_wrapper.get_X_step_bias()
     
     def _set_X_ek(self):
-        self._X_ek = self.backend.get_X_ek()
+        """Store the public assignment in physical flow units.
+
+        With capacity scaling enabled, worker-side path operators return
+        ``y[e, k] = x[e, k] / C[e]`` so the outer ADMM and MLU controller
+        operate against unit capacities.  ``TELP.current_assignment`` is
+        consumed by physical-flow checks, however, so undo that change of
+        variables only at this reporting boundary.
+        """
+        assignment = self.backend.get_X_ek()
+        if self._solver_params.ScaleWithCapacity:
+            assignment = assignment * self._capacities[:, None]
+        self._X_ek = assignment
     
     def _add_constraints(self):
         assert self._mlu_solver is not None
@@ -246,7 +257,7 @@ class OnlineTECoordinator(TELP[PathBasedOnlineTEParameters], DistributedSolverNo
                         })
                     case _: raise NotImplementedError
 
-                if gap < 0.005:
+                if gap < 0.05:
                     progress_bar._pbar.close()
                     if self.first_solve:
                         print(as_success("Cold start finished!"))

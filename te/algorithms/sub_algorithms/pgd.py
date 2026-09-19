@@ -4,11 +4,14 @@ handling non-negativity constraints.
 """
 
 import numpy as np
-from typing import Union, Optional
+from typing import Union, Optional, TYPE_CHECKING
 from numba.typed import List as NumbaList
 from array_utils.cpu.types import *
 from te.algorithms.sub_algorithms.simplex_projection import project_onto_probability_simplex, project_onto_probability_orthant
 from te.path_providers.sparse_ops import path_based_projection_nnz, path_based_transpose_vector_product_nnz
+
+if TYPE_CHECKING:
+    from te.algorithms.formulations.path_based.distributed.packed_paths import PackedPathBatch
 
 
 # TODO: We no longer need the input/output mask. Remove it ....
@@ -132,6 +135,87 @@ def do_path_based_maxflow_pgd(
         t = t_acc
 
     return y_block
+
+
+def _do_packed_path_based_nesterov_pgd(
+    y_block: CPUArray,
+    y_block_old: CPUArray,
+    path_batch: "PackedPathBatch",
+    linear_term: CPUArray,
+    demand_block: CPUArray,
+    step_sizes: CPUArray,
+    n_iter: int,
+    orthant: bool,
+) -> CPUArray:
+    """Run the existing Nesterov PGD recurrence on unpadded path segments."""
+    t = cpu_cast_float(1.0)
+    current = np.copy(y_block)
+    candidate = np.empty_like(current)
+    z_block = np.copy(current)
+    next_z = np.empty_like(current)
+
+    for _ in range(n_iter):
+        path_batch.projected_qp_step(
+            z=z_block,
+            y_old=y_block_old,
+            linear=linear_term,
+            demands=demand_block,
+            step_sizes=step_sizes,
+            orthant=orthant,
+            output=candidate,
+        )
+        t_acc = cpu_cast_float(0.5 * (1.0 + np.sqrt(1.0 + 4.0 * t * t)))
+        np.subtract(candidate, current, out=next_z)
+        next_z *= cpu_cast_float((t - 1.0) / t_acc)
+        next_z += candidate
+
+        current, candidate = candidate, current
+        z_block, next_z = next_z, z_block
+        t = t_acc
+
+    return current
+
+
+def do_packed_path_based_nesterov_pgd(
+    y_block: CPUArray,
+    y_block_old: CPUArray,
+    path_batch: "PackedPathBatch",
+    linear_term: CPUArray,
+    demand_block: CPUArray,
+    step_sizes: CPUArray,
+    n_iter: int,
+) -> CPUArray:
+    return _do_packed_path_based_nesterov_pgd(
+        y_block=y_block,
+        y_block_old=y_block_old,
+        path_batch=path_batch,
+        linear_term=linear_term,
+        demand_block=demand_block,
+        step_sizes=step_sizes,
+        n_iter=n_iter,
+        orthant=False,
+    )
+
+
+def do_packed_path_based_maxflow_pgd(
+    y_block: CPUArray,
+    y_block_old: CPUArray,
+    path_batch: "PackedPathBatch",
+    linear_term: CPUArray,
+    demand_block: CPUArray,
+    step_sizes: CPUArray,
+    n_iter: int,
+) -> CPUArray:
+    return _do_packed_path_based_nesterov_pgd(
+        y_block=y_block,
+        y_block_old=y_block_old,
+        path_batch=path_batch,
+        linear_term=linear_term,
+        demand_block=demand_block,
+        step_sizes=step_sizes,
+        n_iter=n_iter,
+        orthant=True,
+    )
 
 try:
     """

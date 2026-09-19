@@ -47,7 +47,8 @@ class AsynchronousgRPCCoordinatorBackend[P: SolverParams](CoordinatorBackendBase
         # Defer channel and stub creation until the async peer check loop
         self._worker_channels: List[Optional[grpc.Channel]] = [None] * self.number_of_workers
         self._worker_stubs: List[Optional[OnlineTECoreStub]] = [None] * self.number_of_workers
-        self._event_loop = asyncio.get_event_loop()
+        self._event_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self._event_loop)
         # The partial barrier for asynchronous broadcasts
         self._barrier = PartialBarrier[
             core_messages.NetworkUpdateRequest,

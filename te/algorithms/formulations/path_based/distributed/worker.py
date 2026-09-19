@@ -1,139 +1,107 @@
 import time
-import numpy as np
 import networkx as nx
 from typing import Optional, Tuple
-from numba.typed import List as NumbaList
 from array_utils import set_global_precision
 from array_utils.cpu.types import *
 from array_utils.cpu.wrapper import cpu_fill
 from te.algorithms.communication import *
 from te.algorithms.base import TEObjective
-from te.algorithms.sub_algorithms.pgd import do_path_based_maxflow_pgd, do_path_based_nesterov_pgd
+from te.algorithms.sub_algorithms.pgd import (
+    do_packed_path_based_maxflow_pgd,
+    do_packed_path_based_nesterov_pgd,
+)
 from te.path_providers import *
-from te.path_providers.sparse_ops import *
 from utils.logging import as_warning
+from .packed_paths import PackedPathBatch
 from .solver_params import PathBasedOnlineTEParameters
 
 
 class DenseSolver:
     def __init__(self,
         demands: CPUArray,
-        alpha_shape: Tuple[int, int, int],
-        alpha_cols: NumbaList,
-        alpha_rows: NumbaList, 
-        beta: IntegerCPUArray,
+        path_batch: PackedPathBatch,
         pgd_step: float, pgd_iters: int,
         eta: float,
         adjust_step_size: bool,
         capacities: CPUArray,
-        scale_with_capacity: bool,
         objective: TEObjective
     ):
-        self._demands: CPUArray = demands
-        K, N, T = alpha_shape
-        self._alpha_shape = alpha_shape
-        self._alpha_rows = alpha_rows
-        self._alpha_cols = alpha_cols
-        self._beta = beta
+        self._paths = path_batch
+        self._demands: CPUArray = cpu_array(demands)
         self._adjust_step_size = adjust_step_size
         self._pgd_iters = pgd_iters
         self._eta = eta
-        self._scale_with_capacity = scale_with_capacity
-        self._capacities = capacities
+        self._capacities = cpu_array(capacities)
         self._objective = objective
 
         self._pgd_step_0 = pgd_step
-        self._pgd_steps = pgd_step if not adjust_step_size else \
-            cpu_array(pgd_step / path_based_power_method(
-                alpha_rows, alpha_cols, alpha_shape,
-                demands, self.conditional_capacity
-            ))
-
-        self._K = K
-        self._N = N
-        self._T = T
-        self._Y_tk = cpu_zeros((T, K))
+        self._K = path_batch.num_commodities
+        self._N = path_batch.num_edges
+        self._Y_tk = cpu_zeros((path_batch.num_paths,))
         self._initialize_splits()
         self._Y_tk_old = cpu_array(self._Y_tk)
+        self._update_step_sizes()
     
     def _initialize_splits(self):
-        self._Y_tk = get_path_split_with_capacity(
-            self._Y_tk,self._alpha_rows,
-            self._alpha_cols, self._capacities
-        )
+        self._Y_tk = self._paths.initialize_splits(self._capacities)
 
-    @property
-    def conditional_capacity(self) -> Optional[CPUArray]:
-        return self._capacities if self._scale_with_capacity else None
+    def _update_step_sizes(self):
+        if self._adjust_step_size:
+            self._pgd_steps = cpu_array(
+                self._pgd_step_0 / self._paths.estimate_lipschitz(self._demands)
+            )
+        else:
+            self._pgd_steps = cpu_fill((self._K,), self._pgd_step_0)
 
     @property
     def X_ek(self) -> CPUArray:
-        return path_based_to_edge_based_nnz(
-            self._Y_tk,self._alpha_rows, self._alpha_cols,
-            self._N, self._demands,
-            self.conditional_capacity
-        )
+        return self._paths.paths_to_edge(self._Y_tk, self._demands)
 
     @property
     def X_bar(self) -> CPUArray:
-        return path_based_to_edge_based_mean_nnz(
-            self._Y_tk, self._alpha_rows, self._alpha_cols,
-            self._N, self._demands,
-            self.conditional_capacity
-        )
+        return self._paths.paths_to_edge_mean(self._Y_tk, self._demands)
 
     @property
     def total_flow(self) -> float:
-        return np.sum(np.multiply(np.sum(self._Y_tk, axis=0), self._demands))
+        return self._paths.total_flow(self._Y_tk, self._demands)
 
     def set_demands(self, demands: CPUArray):
-        self._demands = demands
-        self._pgd_steps = self._pgd_step_0 if not self._adjust_step_size else \
-            cpu_array(self._pgd_step_0 / path_based_power_method(
-                self._alpha_rows, self._alpha_cols, self._alpha_shape,
-                demands, self.conditional_capacity
-            ))
+        self._demands = cpu_array(demands)
+        self._update_step_sizes()
     
     def update(self, sharing_bias: CPUArray) -> CPUArray:
         new_Y_old = cpu_array(self._Y_tk)
+        sharing_bias = cpu_array(sharing_bias)
         if self._objective == TEObjective.MLU:
-            self._Y_tk = do_path_based_nesterov_pgd(
+            linear_term = self._paths.linear_term(sharing_bias, self._demands)
+            self._Y_tk = do_packed_path_based_nesterov_pgd(
                 y_block=self._Y_tk,
                 y_block_old=self._Y_tk_old,
-                alpha_rows=self._alpha_rows,
-                alpha_cols=self._alpha_cols,
-                sharing_bias=sharing_bias,
-                beta_block=self._beta,
+                path_batch=self._paths,
+                linear_term=linear_term,
                 demand_block=self._demands,
-                num_edges=self._N,
-                num_paths=self._T,
                 step_sizes=self._pgd_steps,
                 n_iter=self._pgd_iters,
-                capacities=self.conditional_capacity
             )
         elif self._objective == TEObjective.MAX_FLOW:
-            self._Y_tk = do_path_based_maxflow_pgd(
+            linear_term = self._paths.linear_term(
+                sharing_bias,
+                self._demands,
+                maxflow_shift=1.0 / self._eta,
+            )
+            self._Y_tk = do_packed_path_based_maxflow_pgd(
                 y_block=self._Y_tk,
                 y_block_old=self._Y_tk_old,
-                alpha_rows=self._alpha_rows,
-                alpha_cols=self._alpha_cols,
-                sharing_bias=sharing_bias,
-                beta_block=self._beta,
+                path_batch=self._paths,
+                linear_term=linear_term,
                 demand_block=self._demands,
-                num_edges=self._N,
-                num_paths=self._T,
                 step_sizes=self._pgd_steps,
                 n_iter=self._pgd_iters,
-                eta=self._eta,
-                capacities=self.conditional_capacity
             )
         else:
             raise ValueError
         self._Y_tk_old = new_Y_old
-        return path_based_to_edge_based_mean_nnz(
-            self._Y_tk, self._alpha_rows, self._alpha_cols,
-            self._N, self._demands, self.conditional_capacity
-        )
+        return self._paths.paths_to_edge_mean(self._Y_tk, self._demands)
 
 
 class OnlineTEWorkerNode(DistributedSolverNodeBase):
@@ -142,12 +110,6 @@ class OnlineTEWorkerNode(DistributedSolverNodeBase):
         self._solver_params: Optional[PathBasedOnlineTEParameters] = None
         self._objective: Optional[TEObjective] = None
         self._ready: bool = False
-
-        self._T: Optional[int] = None
-        self._alpha_shape: Optional[Tuple[int, int, int]] = None
-        self._alpha_rows_chunk: Optional[NumbaList[IntegerCPUArray]] = None
-        self._alpha_cols_chunk: Optional[NumbaList[IntegerCPUArray]] = None
-        self._beta_k_chunk: Optional[IntegerCPUArray] = None
 
         self._sharing_bias_cached: Optional[CPUArray] = None
 
@@ -240,20 +202,21 @@ class OnlineTEWorkerNode(DistributedSolverNodeBase):
                 self._create_local_path_object()
                 # Save it for future use!
                 self._path_object.save(path)
-        warm_start_jit()
         self._sharing_bias_cached = cpu_zeros((graph.number_of_edges(),))
+        path_batch = PackedPathBatch.from_path_provider(
+            provider=self._path_object,
+            capacities=self._capacities,
+            scale_with_capacity=self._solver_params.ScaleWithCapacity,
+            kernel_threads=self._solver_params.KernelThreads,
+        )
         self._dense_solver = DenseSolver(
             demands=cpu_fill((self.assigned_commodity_count,), 1),
-            alpha_shape=self._path_object.shape,
-            alpha_cols=NumbaList(self._path_object.cols),
-            alpha_rows=NumbaList(self._path_object.rows),
-            beta=self._path_object.beta,
+            path_batch=path_batch,
             pgd_step=self._solver_params.Gamma,
             pgd_iters=self._solver_params.SwitchIterations,
             eta=self._solver_params.Eta,
             adjust_step_size=self._solver_params.AdjustGamma,
             capacities=self._capacities,
-            scale_with_capacity=self._solver_params.ScaleWithCapacity,
             objective=self._objective
         )
 
