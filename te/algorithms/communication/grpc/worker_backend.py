@@ -101,23 +101,19 @@ class OnlineTEWorkerNodeListener(OnlineTECoreServicer):
         return array_to_serialized_message(X_bar)
     
     def DoNetworkUpdate(self, request: core_messages.NetworkUpdateRequest, context):
-        runtime, means, total_flow = self._backend.do_inner_loop_update(request.epoch)
+        runtime, means, data = self._backend.do_inner_loop_update(
+            serialized_message_to_array(request.sharing_gap),
+            serialized_message_to_array(request.sharing_dual),
+            request.sharing_rho
+        )
         return core_messages.NetworkUpdateResponse(
-            runtime_ns=runtime, means=array_to_serialized_message(means),
-            demand=total_flow
+            runtime_us=runtime,
+            means=array_to_serialized_message(means),
+            data=data
         )
-    
-    def UpdateWorkerNode(self, request: core_messages.UpdateMessage, context):
-        self._backend.update_cached_values(
-            serialized_message_to_array(request.sharing_bias)
-        )
-        return Empty()
     
     def RequestChunk(self, request, context):
         return chunk_big_array(self._backend.report_chunk(), te.constants.GRPC_ARRAY_STREAM_MAX_LEN)
-    
-    def RequestAggregate(self, request, context):
-        return array_to_serialized_message(self._backend.report_aggregate())
     
     def QueryState(self, request, context):
         return core_messages.State(ready=self._backend.is_alive)

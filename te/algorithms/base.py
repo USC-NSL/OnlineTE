@@ -326,6 +326,10 @@ class TELP[P: SolverParams](ABC):
         return self._problem_description.eval_params.optimality_tolerance
 
     @property
+    def feasibility_tolerance(self) -> float:
+        return self._problem_description.eval_params.feasibility_tolerance
+
+    @property
     def unscaled_outer_inf_bound(self) -> float:
         return self._c_norm**2 / np.sqrt(self.number_of_edges)
 

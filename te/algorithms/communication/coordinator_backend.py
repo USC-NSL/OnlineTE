@@ -1,6 +1,6 @@
 import networkx as nx
 from abc import abstractmethod
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Dict
 from .base import CommunicationBackendBase
 from array_utils.cpu.types import *
 from te.algorithms.base import SolverParams, TEObjective
@@ -36,13 +36,22 @@ class CoordinatorBackendBase[P: SolverParams](CommunicationBackendBase[P]):
         """Get the final solution array (X_ek)"""
     
     @abstractmethod
-    def get_X_ek_sum(self) -> CPUArray:
-        """Get the total flow over each edge"""
-    
-    @abstractmethod
-    def do_network_update(self, epoch: int) -> Tuple[int, CPUArray, Optional[float]]:
-        """Do network update for a given epoch and return the aggregate"""
-    
-    @abstractmethod
-    def reconvene_network_updates(self, sharing_mean_1: CPUArray, sharing_mean_2: CPUArray, sharing_dual: CPUArray):
-        """Finalize network updates for a single inner ADMM iteration"""
+    def do_network_update(
+        self,
+        sharing_gap: CPUArray,
+        sharing_dual: CPUArray,
+        sharing_rho: float
+    ) -> Tuple[int, CPUArray, Dict[str, float]]:
+        """
+        Do network update for a given epoch.
+        Returns how long the update took (in micro-seconds),
+        the new sharing mean, as well as a dict of arbitrary
+        data.
+
+        Note
+        ----
+        Each worker returns its own dict object. It is _ASSUMED_
+        that we can just sum up the value of each key to create
+        the new values and return a dict object with those values
+        instead.
+        """

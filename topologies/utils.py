@@ -206,36 +206,6 @@ def get_zoo_topology_at_least_as_large_as(n: int, m: int = -1, seed: Optional[in
     return load_zoo_topology(chosen)
 
 
-# def get_capacity_lower_bound(graph: nx.DiGraph, traffic: np.ndarray) -> float:
-#     """
-#     This returns the `lower bound` for capacity needed for the problem to not be
-#     `trivially` infeasible.
-#     By `trivially` infeasible, we mean that the sum of demands that any node
-#     sends and receives, must be less than the total capacity of all edges
-#     that are connected to it.
-#     This sets a low bar for the capacity to be assigned to the problem.
-
-#     Note: This assumes all edges have the same capacity ...
-#     """
-
-#     cap = 0
-#     degrees_in = graph.in_degree()
-#     degrees_out = graph.out_degree()
-#     flow_outs = np.sum(traffic, axis=1)
-#     flow_ins = np.sum(traffic, axis=0)
-
-#     assert len(flow_outs) == len(flow_ins)
-#     for i, send_recv in enumerate(zip(flow_outs, flow_ins)):
-#         sending, receiving = send_recv
-#         cap = max(
-#             cap, 
-#             sending / degrees_out[i],
-#             receiving / degrees_in[i]
-#         )
-    
-#     return float(cap)
-
-
 def make_graph_from_dict(graph_n: int, graph_dict: Dict[Tuple[int, int], float]) -> nx.DiGraph:
     """
     Create a graph out of a dictionary object that maps edges

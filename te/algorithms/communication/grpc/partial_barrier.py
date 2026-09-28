@@ -1,11 +1,11 @@
 import asyncio
-from typing import List, Optional, Any, Set, Dict, Tuple, Callable, Awaitable
+from typing import List, Optional, Set, Dict, Tuple, Callable, Awaitable
 from array_utils.cpu.types import *
 from array_utils.cpu.grpc_utils import *
 from utils.logging import as_fail, as_warning
 
 
-class PartialBarrier[GatherRequest, GatherResponse, StoreType, ScatterRequest]:
+class PartialBarrier[ScatterType, GatherType, StoreType]:
     """
     Implements a Partial Barrier for a scatter-gather operation.
     The idea is to have a separate partial barrier object for
@@ -16,44 +16,41 @@ class PartialBarrier[GatherRequest, GatherResponse, StoreType, ScatterRequest]:
     The barrier maintains internal state for tracking the progress
     of each broadcast operation. Each endpoint will have only at
     most one in-progress task at a time.
+
+    The set of nodes with no pending request is called the "arrival set".
     
-    - At each generation, the barrier broadcasts **only to non-pending nodes**
+    - At each generation, the barrier broadcasts **only to the arrival set**
     - The barrier then waits until all the following are true:
-        - At least `min_arrival` endpoints have responded
-        - No endpoint exists that has not responded in `max_lag` iterations
+        - The arrival set has at least `min_arrivals` members
+        - No endpoint exists that has not arrived in `max_lag` iterations
           or more
-        - No endpoint exists that has not responded even once
+        - No endpoint exists that has not arrived even once
     - When the barrier breaks, responses are stored in an internal dict object
       for each node.
-    
-    Gather Operation
-    ----------------
-    For gather operations, a request of type `GatherType` will be broadcast
-    to all non-pending endpoints. We accumulate responses of type `GatherResponse`
-    until the barrier opens.
-    The user can provide a store operation callable that takes each `GatherResponse`
-    object as input and stores the output (e.g. deserializing data from the response
-    and storing the result).
-    When a gather operation starts again, **the set of previous arrivals will be cleared**.
 
     Scatter Operation
     -----------------
-    For a scatter operation, the barrier no longer waits and merely broadcasts to
-    some nodes.
-    - The barrier **does not wait for individual scatter operations to finish**.
-    - Scatter operations **only target arrived nodes from a previous gather operation**.
-    - Each scatter task is only awaited when the next scatter request has been
-      issued.
+    A request of type `ScatterType` is broadcast to the arrival set. Currently, before
+    the scatter operation is done, the barrier quickly checks for any newly arrived
+    nodes and quickly adds them to the arrival set, which means that they will also
+    receive the scatter request.
+    
+    Gather Operation
+    ----------------
+    For gather operations, a response of type `GatherType` will be accumulated over
+    time until the barrier breaks.
+    The user can provide a store operation callable that takes each `GatherType`
+    object as input and stores the output (e.g. deserializing data from the response
+    and storing the result).
 
     Types
     -----
-    - `GatherRequest` is the type of gather request that we broadcast to
-      all endpoits.
-    - `GatherResponse` is the type of received messages from each endpoint
-    - `StoreType` is the type of the data stored for each endpoint during gather.
-      When this is `GatherResponse`, we just store the original response and leave
-      any processing to the caller.
-    - `ScatterRequest` is the type of value that we scatter to all arrived nodes.
+    - `ScatterType` is the type of the message we scatter to the current arrival set.
+    - `GatherType` is the type of received messages from each endpoint.
+    - `StoreType` is the type of the data stored for each endpoint during gather. This
+      can simply be `GatherType`, indicating that responses are stored without modification.
+    - The store operation (if exists), takes a `GatherType` as input as returns a `StoreType`
+      as output.
     """
     def __init__(self,
         number_of_endpoints: int,
@@ -72,7 +69,7 @@ class PartialBarrier[GatherRequest, GatherResponse, StoreType, ScatterRequest]:
         """Maps endpoint ID to a pair of task and start clock"""
         self._scatter_tasks: List[asyncio.Task] = []
         """List of scatter tasks to be awaited on next iteration"""
-        self._arrival_set: Set[int] = set()
+        self._arrival_set: Set[int] = set([i for i in range(number_of_endpoints)])
         """Set of node IDs that arrived since last iteration"""
         self._storage: List[Optional[StoreType]] = [None] * number_of_endpoints
         """List of the last stored value for each endpoint"""
@@ -101,26 +98,24 @@ class PartialBarrier[GatherRequest, GatherResponse, StoreType, ScatterRequest]:
     def break_barrier(self):
         self._active = False
 
-    async def _gather(self,
-        message: GatherRequest,
+    async def _scatter_gather(self,
+        message: ScatterType,
         node_coroutine: Callable[
-            [int, GatherRequest],
-            Awaitable[GatherResponse]
+            [int, ScatterType],
+            Awaitable[GatherType]
         ],
-        store_operation: Callable[[GatherResponse], StoreType]
+        store_operation: Callable[[GatherType], StoreType]
     ):
-        # Clear arrival set
-        self._arrival_set.clear()
-
-        # Broadcast to any non-pending node and increment the local clock
+        # Broadcast to any arrived node and increment the local clock
         for node_id in range(self.number_of_endpoints):
-            if node_id not in self._gather_tasks:
+            if node_id in self._arrival_set:
                 task = asyncio.create_task(node_coroutine(node_id, message))
                 self._gather_tasks[node_id] = (task, int(self._clock))
+                self._arrival_set.discard(node_id)
         self._clock += 1
         
-        # Gather finished responses since last time
-        current_batch_responses: List[Tuple[GatherResponse, int]] = []
+        # Gather finished responses until barrier breaks
+        current_batch_responses: List[Tuple[GatherType, int]] = []
         while self._active:
             finished_this_loop = [
                 node_id for node_id, (task, _) in self._gather_tasks.items() if task.done()
@@ -142,7 +137,7 @@ class PartialBarrier[GatherRequest, GatherResponse, StoreType, ScatterRequest]:
             ]
 
             if (
-                len(current_batch_responses) >= self._min_arrival and \
+                len(self._arrival_set) >= self._min_arrival and \
                 not stale_nodes and \
                 len(self._initial_response_set) == 0
             ):
@@ -162,55 +157,20 @@ class PartialBarrier[GatherRequest, GatherResponse, StoreType, ScatterRequest]:
             self._storage[node_id] = store_operation(response)
             if len(self._initial_response_set) > 0:
                 self._initial_response_set.discard(node_id)
+            assert node_id not in self._arrival_set
             self._arrival_set.add(node_id)
         return self._storage
 
-    def gather(self,
-        message: GatherRequest,
+    def scatter_gather(self,
+        message: ScatterType,
         node_coroutine: Callable[
-            [int, GatherRequest],
-            Awaitable[GatherResponse]
+            [int, ScatterType],
+            Awaitable[GatherType]
         ],
-        store_operation: Callable[[GatherResponse], StoreType]
+        store_operation: Callable[[StoreType], StoreType]
     ) -> List[StoreType]:
-        return self._event_loop.run_until_complete(self._gather(
+        return self._event_loop.run_until_complete(self._scatter_gather(
             message=message, node_coroutine=node_coroutine,
             store_operation=store_operation
-        ))
-
-    async def _scatter(self,
-        message: ScatterRequest,
-        node_coroutine: Callable[
-            [int, ScatterRequest],
-            Awaitable[Any]
-        ]
-    ):
-        assert len(self._arrival_set) > 0
-        # Check for previous scatter
-        pending_scatters = []
-        for task in self._scatter_tasks:
-            if task.done():
-                try:
-                    await task
-                except Exception as e:
-                    print(as_fail(f'Failure while awaiting scatter update: {e}'))
-            else:
-                pending_scatters.append(task)
-
-        # Scatter to the new arrivals
-        for node_id in self._arrival_set:
-            pending_scatters.append(asyncio.create_task(node_coroutine(node_id, message)))
-        self._scatter_tasks = pending_scatters
-
-    def scatter(self,
-        message: ScatterRequest,
-        node_coroutine: Callable[
-            [int, ScatterRequest],
-            Awaitable[Any]
-        ]
-    ):
-        self._event_loop.run_until_complete(self._scatter(
-            message=message,
-            node_coroutine=node_coroutine
         ))
     

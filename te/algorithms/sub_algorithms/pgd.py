@@ -146,8 +146,16 @@ def _do_packed_path_based_nesterov_pgd(
     step_sizes: CPUArray,
     n_iter: int,
     orthant: bool,
+    optimality_tolerance: Optional[float] = None,
 ) -> CPUArray:
     """Run the existing Nesterov PGD recurrence on unpadded path segments."""
+    if n_iter <= 0:
+        raise ValueError("n_iter must be positive")
+    if optimality_tolerance is not None and (
+        not np.isfinite(optimality_tolerance) or
+        not 0 < optimality_tolerance < 1
+    ):
+        raise ValueError("optimality_tolerance must be finite and strictly between zero and one")
     t = cpu_cast_float(1.0)
     current = np.copy(y_block)
     candidate = np.empty_like(current)
@@ -155,7 +163,7 @@ def _do_packed_path_based_nesterov_pgd(
     next_z = np.empty_like(current)
 
     for _ in range(n_iter):
-        path_batch.projected_qp_step(
+        relative_gaps = path_batch.projected_qp_step(
             z=z_block,
             y_old=y_block_old,
             linear=linear_term,
@@ -164,6 +172,10 @@ def _do_packed_path_based_nesterov_pgd(
             orthant=orthant,
             output=candidate,
         )
+        if optimality_tolerance is not None and np.all(
+            relative_gaps <= optimality_tolerance
+        ):
+            return candidate
         t_acc = cpu_cast_float(0.5 * (1.0 + np.sqrt(1.0 + 4.0 * t * t)))
         np.subtract(candidate, current, out=next_z)
         next_z *= cpu_cast_float((t - 1.0) / t_acc)
@@ -184,6 +196,7 @@ def do_packed_path_based_nesterov_pgd(
     demand_block: CPUArray,
     step_sizes: CPUArray,
     n_iter: int,
+    optimality_tolerance: Optional[float] = None,
 ) -> CPUArray:
     return _do_packed_path_based_nesterov_pgd(
         y_block=y_block,
@@ -194,6 +207,7 @@ def do_packed_path_based_nesterov_pgd(
         step_sizes=step_sizes,
         n_iter=n_iter,
         orthant=False,
+        optimality_tolerance=optimality_tolerance,
     )
 
 
@@ -205,6 +219,7 @@ def do_packed_path_based_maxflow_pgd(
     demand_block: CPUArray,
     step_sizes: CPUArray,
     n_iter: int,
+    optimality_tolerance: Optional[float] = None,
 ) -> CPUArray:
     return _do_packed_path_based_nesterov_pgd(
         y_block=y_block,
@@ -215,6 +230,7 @@ def do_packed_path_based_maxflow_pgd(
         step_sizes=step_sizes,
         n_iter=n_iter,
         orthant=True,
+        optimality_tolerance=optimality_tolerance,
     )
 
 try:

@@ -17,17 +17,8 @@ service OnlineTECore {
     // the topology to the switch nodes so that they can recalculate initial state
     // independently.
     rpc SetTopology(Topology) returns (google.protobuf.Empty) {}
-    // The switch-only inner-loop update, where switches update each-other regarding
-    // what the current Sharing solution looks like. In our current implementation,
-    // the coordinator is used as a rendezvous point, but in practice, a dataplane
-    // broadcast will be much better.
+    // TODO: Comment!
     rpc DoNetworkUpdate(NetworkUpdateRequest) returns (NetworkUpdateResponse) {}
-    // The coordinator-side broadcast to all switches. This is used for the outer
-    // loop broadcast (where we inform switches of the dual variables for the
-    // capacity constraint), and (ab)used for the inner loop update where the
-    // capacity dual variable isn't changed but the dual variable for sharing is
-    // changed by the switches.
-    rpc UpdateWorkerNode(UpdateMessage) returns (google.protobuf.Empty) {}
     // When a new traffic matrix is revealed by the controller, the switches
     // can be informed by this RPC. This is a debugging RPC as in practice,
     // switches independently dictate demands. In our tests, we use this RPC
@@ -40,11 +31,6 @@ service OnlineTECore {
     // switches into the coordinator to check if everything makes sense. In practice,
     // such an RPC should never be used.
     rpc RequestChunk(google.protobuf.Empty) returns (stream Chunk) {}
-    // Requests the aggregate flow over all links from a switch. This is requested
-    // for the outer loop of the coordinator(s) and is used to penalize lack of
-    // consensus between what the coordinator(s) want and what the switches have
-    // actually installed.
-    rpc RequestAggregate(google.protobuf.Empty) returns (SerializedNumpyArrayMessage) {}
     // Query the state of a remove worker node. This is used to determine when the
     // workers are ready and also functions as a keep-alive.
     rpc QueryState(google.protobuf.Empty) returns (State) {}
@@ -57,40 +43,46 @@ service OnlineTECore {
 
 
 // The coordinator side update message to the switches.
-message UpdateMessage {
+message NetworkUpdateRequest {
     // The coordinator only needs to reveal the `sharing_bias`,
     // which is defined as the expression `X_bar - P_bar + u` as
     // it appears in the appendix of the paper. This is a vector
     // with one entry per link.
-    SerializedNumpyArrayMessage sharing_bias = 1;
+    // In practice, we break it into two parts. One part is the
+    // `sharing gap` which is `X_bar - P_bar`. The second part
+    // is the sharing dual `u` itself. We need to reveal this to
+    // the switches as it is needed for calculating the dual
+    // objective bound.
+    SerializedNumpyArrayMessage sharing_gap = 1;
+    SerializedNumpyArrayMessage sharing_dual = 2;
+    float sharing_rho = 3;
     // Field for checking transactions IDs in case a message got
     // lost. This is with our unreliable backends (particularly,
     // the IP Multicast backend) in mind.
-    int32 xid = 2;
-}
-
-// The coordinator request for a network update on the switches.
-message NetworkUpdateRequest {
-    // The current epoch ID (mostly for housekeeping)
-    int32 epoch = 1;
-    // Transaction ID
-    int32 xid = 2;
+    int32 xid = 4;
 }
 
 // Response from switches upon completing the an inner loop iteration.
 message NetworkUpdateResponse {
     // ID of the switch worker process
     int32 worker_id = 1;
-    // How long the update took in nano-seconds
-    int32 runtime_ns = 2;
+    // How long the update took in micro-seconds
+    int32 runtime_us = 2;
     // The local value of `P` (the local sharing average) as it appears
     // in the paper appendix. We gather these from the network and use
-    // them to calculated `P_bar`, the sharing mean.
+    // them to calculate `P_bar`, the sharing mean.
     SerializedNumpyArrayMessage means = 3;
     // Transaction ID
     int32 xid = 4;
-    // Total demand satisfied until now
-    optional float demand = 5;
+    // Extra key-value pairs communicated
+    // Usually, this contains:
+    // - Total demand satisfied until now
+    //   Both for house-keeping and needed for Max-Flow
+    // - The Frobenius norm of the current assignment
+    //   Needed to calculate dual ADMM infeasibilities
+    // - Switch-side dual objective term
+    //   Necessary for the stopping criterion
+    map<string, float> data = 5;
 }
 
 // Trivial state keep-alive message

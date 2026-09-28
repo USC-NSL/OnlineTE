@@ -262,12 +262,13 @@ class PackedPathBatch:
         step_sizes: np.ndarray,
         orthant: bool,
         output: np.ndarray,
-    ) -> None:
+    ) -> np.ndarray:
         kernels = require_native_kernels()
         for name, array in (("z", z), ("y_old", y_old), ("linear", linear), ("output", output)):
             _require_float_array(array, name, self.num_paths, self.dtype)
         _require_float_array(demands, "demands", self.num_commodities, self.dtype)
         _require_float_array(step_sizes, "step_sizes", self.num_commodities, self.dtype)
+        relative_gaps = np.empty(self.num_commodities, dtype=np.float64)
         _typed_kernel(kernels, "projected_qp_step", self.dtype)(
             self.commodity_path_offsets,
             self.gram_offsets,
@@ -279,8 +280,12 @@ class PackedPathBatch:
             step_sizes,
             orthant,
             output,
+            relative_gaps,
             self.kernel_threads,
         )
+        # if not np.all(np.isfinite(relative_gaps)):
+        #     raise FloatingPointError("Projected QP step produced a non-finite Wolfe gap")
+        return relative_gaps
 
     def estimate_lipschitz(self, demands: np.ndarray, iterations: int = 20) -> np.ndarray:
         kernels = require_native_kernels()
@@ -353,6 +358,50 @@ class PackedPathBatch:
             _typed_kernel(kernels, "total_flow", self.dtype)(
                 self.commodity_path_offsets,
                 values,
+                demands,
+                self.kernel_threads,
+            )
+        )
+
+    def assignment_delta_norm_squared(
+        self,
+        current: np.ndarray,
+        previous: np.ndarray,
+        demands: np.ndarray,
+    ) -> float:
+        """Return the local squared Frobenius norm of an assignment update."""
+        kernels = require_native_kernels()
+        _require_float_array(current, "current", self.num_paths, self.dtype)
+        _require_float_array(previous, "previous", self.num_paths, self.dtype)
+        _require_float_array(demands, "demands", self.num_commodities, self.dtype)
+        return float(
+            _typed_kernel(kernels, "assignment_delta_norm_squared", self.dtype)(
+                self.commodity_path_offsets,
+                self.gram_offsets,
+                self.gram_values,
+                current,
+                previous,
+                demands,
+                self.kernel_threads,
+            )
+        )
+
+    def dual_objective_term(
+        self,
+        edge_duals: np.ndarray,
+        demands: np.ndarray,
+    ) -> float:
+        """Return this batch's path-minimization term in the dual objective."""
+        kernels = require_native_kernels()
+        _require_float_array(edge_duals, "edge_duals", self.num_edges, self.dtype)
+        _require_float_array(demands, "demands", self.num_commodities, self.dtype)
+        return float(
+            _typed_kernel(kernels, "dual_objective_term", self.dtype)(
+                self.commodity_path_offsets,
+                self.path_edge_offsets,
+                self.path_edges,
+                self.edge_scale,
+                edge_duals,
                 demands,
                 self.kernel_threads,
             )

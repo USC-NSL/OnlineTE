@@ -1,6 +1,7 @@
 import numpy as np
 import te.constants
 import scipy.sparse as sp
+from typing import Optional
 from dataclasses import dataclass
 from te.algorithms.base import SolverParams
 from ortools.pdlp import solve_log_pb2
@@ -59,28 +60,34 @@ class ConstraintVector:
         lp.constraint_upper_bounds = self.uppers
 
 
-def solve_qp_or_scream(
-    qp: pdlp.QuadraticProgram,
+def get_pdhg_params(
     params: PDLPSolverParams,
     feasibility_tolerance: float,
     optimality_tolerance: float,
     verbose: bool = True
-) -> pdlp.SolverResult:
-    PDHG_PARAMS = solvers_pb2.PrimalDualHybridGradientParams()
-    PDHG_PARAMS.termination_criteria\
+) -> solvers_pb2.PrimalDualHybridGradientParams:
+    pdhg_params = solvers_pb2.PrimalDualHybridGradientParams()
+    pdhg_params.termination_criteria\
         .simple_optimality_criteria\
         .eps_optimal_relative = optimality_tolerance
-    PDHG_PARAMS.termination_criteria\
+    pdhg_params.termination_criteria\
         .eps_primal_infeasible = feasibility_tolerance
-    PDHG_PARAMS.termination_criteria\
+    pdhg_params.termination_criteria\
         .eps_dual_infeasible = feasibility_tolerance
-    PDHG_PARAMS.termination_criteria.time_sec_limit = np.inf
-    PDHG_PARAMS.num_threads = params.Threads
-    PDHG_PARAMS.presolve_options.use_glop = params.Presolve
-    PDHG_PARAMS.verbosity_level = 3 if verbose else 0
+    pdhg_params.termination_criteria.time_sec_limit = np.inf
+    pdhg_params.num_threads = params.Threads
+    pdhg_params.presolve_options.use_glop = params.Presolve
+    pdhg_params.verbosity_level = 3 if verbose else 0
+    return pdhg_params
 
+
+def solve_qp_or_scream(
+    qp: pdlp.QuadraticProgram,
+    pdhg_params: solvers_pb2.PrimalDualHybridGradientParams,
+    initial_solution: Optional[pdlp.PrimalAndDualSolution] = None
+) -> pdlp.SolverResult:
     try:
-        result: pdlp.SolverResult = pdlp.primal_dual_hybrid_gradient(qp, PDHG_PARAMS)
+        result: pdlp.SolverResult = pdlp.primal_dual_hybrid_gradient(qp, pdhg_params, initial_solution)
         if result.solve_log.termination_reason == solve_log_pb2.TERMINATION_REASON_OPTIMAL:
             return result
         raise RuntimeError(as_fail(
@@ -88,3 +95,11 @@ def solve_qp_or_scream(
         ))
     except Exception as e:
         raise RuntimeError(as_fail(f"Error while solving: {e}"))
+
+
+__all__ = [
+    'PDLPSolverParams',
+    'ConstraintVector',
+    'get_pdhg_params',
+    'solve_qp_or_scream'
+]

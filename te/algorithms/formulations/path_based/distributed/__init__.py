@@ -1,4 +1,5 @@
-from .coordinator import OnlineTECoordinator
+# from .coordinator import OnlineTECoordinator
+from .single_loop_coordinator import OnlineTECoordinator
 from .packed_paths import PackedPathBatch
 from .solver_params import PathBasedOnlineTEParameters
 from .worker import OnlineTEWorkerNode

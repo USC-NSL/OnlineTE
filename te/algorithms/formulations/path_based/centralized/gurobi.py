@@ -11,16 +11,38 @@ from te.path_providers.sparse_ops import path_based_to_edge_based_nnz
 from . import GurobiPathBasedSolverParams
 
 
+"""
+NOTE: In this formulation, and the one for PDLP, we solve for routed demand of commodity
+`k` over path index `t`, _NOT_ the split over that path.
+This means that the total routed demand is:
+
+    sum_t Y_{tk}
+
+Instead of:
+
+    sum_t d_k Y_{tk}
+
+We do this as updating the demands would require only a right hand side change rather
+than a coefficient update.
+
+This is _NOT_ how OnlineTE treats path assignments though. Constraining `Y_{tk}` to the
+probability simplex is a defensible choice in that setting.
+
+To avoid confusion, these modules use `routed_demand_tk` instead of `Y_tk` to represent
+these variables.
+"""
+
+
 class GurobiPathBasedTE(TELP[GurobiPathBasedSolverParams]):
     def __init__(self, problem_description: TEProblemDescription, solver_params: GurobiPathBasedSolverParams) -> None:
         super().__init__(problem_description, solver_params)
         self._env: Optional[gurobipy.Env] = None
         self._model: Optional[gurobipy.Model] = None
-        self._Y_tk: Optional[gurobipy.tupledict] = None
+        self._routed_demand_tk: Optional[gurobipy.tupledict] = None
         self._utility: Optional[gurobipy.Var] = None
         self._objective: Optional[gurobipy.LinExpr] = None
         self._X_ek: Optional[np.ndarray] = None
-        self._splits: Optional[np.ndarray] = None
+        self._Y_tk: Optional[np.ndarray] = None
         self._path_object: Optional[PathProvider] = None
         self._demand_constraints: Optional[List[gurobipy.Constr]] = None
         self._total_flow: Optional[gurobipy.LinExpr] = None
@@ -57,19 +79,20 @@ class GurobiPathBasedTE(TELP[GurobiPathBasedSolverParams]):
         ROWS = self._path_object.rows
         COLS = self._path_object.cols
         K, N, T = self._path_object.shape
-        ASSIGNMENTS = self._Y_tk
+        ROUTED = self._routed_demand_tk
         DEMANDS = traffic_to_demands(self._current_TM)
         Y_TK = np.ndarray(shape=(T, K))
         for k in range(K):
+            d = DEMANDS[k]
             for t in range(T):
-                Y_TK[t, k] = ASSIGNMENTS[(t, k)].X
-        self._splits = Y_TK
+                Y_TK[t, k] = ROUTED[(t, k)].X / d
+        self._Y_tk = Y_TK
         self._X_ek = path_based_to_edge_based_nnz(
             Y_TK, ROWS, COLS, N, DEMANDS
         )
     
     def _make_variables(self):
-        assert self._model is None and self._Y_tk is None
+        assert self._model is None and self._routed_demand_tk is None
 
         K = self.number_of_commodities
         T = self._solver_params.max_num_paths_per_commodity
@@ -87,15 +110,15 @@ class GurobiPathBasedTE(TELP[GurobiPathBasedSolverParams]):
         self._model = MODEL
 
         print(as_info("Adding tunnel assignment variables"))
-        self._Y_tk = MODEL.addVars(T, K, lb=0.0, vtype=GRB.CONTINUOUS, name='Y')
+        self._routed_demand_tk = MODEL.addVars(T, K, lb=0.0, vtype=GRB.CONTINUOUS, name='Y')
         if self.objective == TEObjective.MLU:
             self._utility = MODEL.addVar(lb=0.0, vtype=GRB.CONTINUOUS, name='U')
     
     def _add_constraints(self):
-        assert self._model is not None and self._Y_tk is not None
+        assert self._model is not None and self._routed_demand_tk is not None
 
         MODEL = self._model
-        Y_TK = self._Y_tk
+        ROUTED_TK = self._routed_demand_tk
         CAPS = self._capacities
         ROWS = self._path_object.rows
         COLS = self._path_object.cols
@@ -112,7 +135,7 @@ class GurobiPathBasedTE(TELP[GurobiPathBasedSolverParams]):
             for i in range(nnz):
                 e = rows[i]
                 t = cols[i]
-                total_flows[e].addTerms(1, Y_TK[(t, k)])
+                total_flows[e].addTerms(1, ROUTED_TK[(t, k)])
 
         match self.objective:
             case TEObjective.MLU:
@@ -132,27 +155,34 @@ class GurobiPathBasedTE(TELP[GurobiPathBasedSolverParams]):
         for k in ShortTQDM(range(K)):
             total_assignment = gurobipy.LinExpr()
             for t in range(T):
-                total_assignment.addTerms(1, Y_TK[(t, k)])
-            demand_constraints.append(MODEL.addConstr(total_assignment == 1))
+                total_assignment.addTerms(1, ROUTED_TK[(t, k)])
+
+            match self.objective:
+                case TEObjective.MLU:
+                    demand_constraints.append(MODEL.addConstr(total_assignment == 1))
+                case TEObjective.MAX_FLOW:
+                    demand_constraints.append(MODEL.addConstr(total_assignment <= 1))
+                case _: raise ValueError
+
         self._demand_constraints = demand_constraints
         
         # Number of paths constraint
         print(as_info("Adding path availability constraints"))
         for k in ShortTQDM(range(K)):
             for t in range(BETA_K[k], T):
-                MODEL.addConstr(Y_TK[(t, k)] == 0)
+                MODEL.addConstr(ROUTED_TK[(t, k)] == 0)
 
         # Total flow objective
         if self.objective == TEObjective.MAX_FLOW:
             total_flow = gurobipy.LinExpr()
             for k in range(K):
                 for t in range(T):
-                    total_flow.addTerms(-1, Y_TK[(t, k)])
+                    total_flow.addTerms(-1, ROUTED_TK[(t, k)])
             self._total_flow = total_flow
 
     def _add_objective(self):
         assert self._model is not None and \
-                self._Y_tk is not None and \
+                self._routed_demand_tk is not None and \
                 self._objective is None
         
         MODEL = self._model

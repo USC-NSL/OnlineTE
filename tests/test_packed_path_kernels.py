@@ -10,6 +10,9 @@ from google.protobuf.json_format import MessageToDict
 from protos.solver_params.solver_params_pb2 import PathBasedOnlineTEParameters as PathParamsMessage
 from te.algorithms.formulations.path_based.distributed.packed_paths import PackedPathBatch
 from te.algorithms.formulations.path_based.distributed.coordinator import OnlineTECoordinator
+from te.algorithms.formulations.path_based.distributed.single_loop_coordinator import (
+    OnlineTECoordinator as SingleLoopOnlineTECoordinator,
+)
 from te.algorithms.formulations.path_based.distributed.solver_params import PathBasedOnlineTEParameters
 from te.algorithms.formulations.path_based.distributed.worker import DenseSolver
 from te.algorithms.base import TEObjective
@@ -167,6 +170,94 @@ class PackedPathKernelTests(unittest.TestCase):
                         places=5 if dtype == np.float32 else 12,
                     )
 
+    def test_assignment_delta_norm_squared_matches_dense_edge_difference(self):
+        provider = make_provider()
+        rng = np.random.default_rng(20260921)
+        for dtype in (np.float32, np.float64):
+            for scaled in (False, True):
+                with self.subTest(dtype=dtype, scaled=scaled):
+                    batch, _ = self._make_batch(dtype, scaled)
+                    current = rng.normal(size=batch.num_paths).astype(dtype)
+                    previous = rng.normal(size=batch.num_paths).astype(dtype)
+                    demands = rng.uniform(0.1, 3.0, size=batch.num_commodities).astype(dtype)
+
+                    current_edge = batch.paths_to_edge(current, demands)
+                    previous_edge = batch.paths_to_edge(previous, demands)
+                    expected = float(np.sum(
+                        (current_edge.astype(np.float64) - previous_edge.astype(np.float64)) ** 2
+                    ))
+                    actual = batch.assignment_delta_norm_squared(
+                        current, previous, demands
+                    )
+                    tolerance = 2e-6 if dtype == np.float32 else 1e-12
+                    self.assertAlmostEqual(actual, expected, delta=tolerance * max(1.0, expected))
+                    self.assertEqual(
+                        batch.assignment_delta_norm_squared(current, current, demands),
+                        0.0,
+                    )
+
+                    one_thread = PackedPathBatch.from_path_provider(
+                        provider,
+                        np.asarray([2, 3, 5, 7, 11, 13], dtype=dtype),
+                        scaled,
+                        kernel_threads=1,
+                    )
+                    self.assertEqual(
+                        actual,
+                        one_thread.assignment_delta_norm_squared(current, previous, demands),
+                    )
+
+    def test_dual_objective_term_matches_path_enumeration(self):
+        provider = make_provider()
+        for dtype in (np.float32, np.float64):
+            for scaled in (False, True):
+                with self.subTest(dtype=dtype, scaled=scaled):
+                    batch, capacities = self._make_batch(dtype, scaled)
+                    demands = np.asarray([1.5, 2.0, 0.75], dtype=dtype)
+                    edge_duals = np.asarray(
+                        [0.3, -0.2, 0.5, -0.7, 0.1, 0.4], dtype=dtype
+                    )
+                    edge_scale = 1 / capacities if scaled else np.ones_like(capacities)
+                    expected = 0.0
+                    for k in range(batch.num_commodities):
+                        alpha = dense_alpha(provider, k, dtype)
+                        path_values = alpha.T @ (edge_scale * edge_duals)
+                        expected += float(demands[k]) * float(np.min(path_values))
+
+                    actual = batch.dual_objective_term(edge_duals, demands)
+                    tolerance = 2e-6 if dtype == np.float32 else 1e-12
+                    self.assertAlmostEqual(actual, expected, delta=tolerance * max(1.0, abs(expected)))
+                    self.assertEqual(
+                        batch.dual_objective_term(np.zeros_like(edge_duals), demands),
+                        0.0,
+                    )
+
+                    one_thread = PackedPathBatch.from_path_provider(
+                        provider, capacities, scaled, kernel_threads=1
+                    )
+                    self.assertEqual(
+                        actual,
+                        one_thread.dual_objective_term(edge_duals, demands),
+                    )
+
+    def test_diagnostic_kernel_inputs_are_validated(self):
+        batch, _ = self._make_batch(np.float32)
+        values = np.zeros(batch.num_paths, dtype=np.float32)
+        demands = np.ones(batch.num_commodities, dtype=np.float32)
+        edge_duals = np.zeros(batch.num_edges, dtype=np.float32)
+
+        with self.assertRaisesRegex(TypeError, "current must have dtype"):
+            batch.assignment_delta_norm_squared(
+                values.astype(np.float64), values, demands
+            )
+        with self.assertRaisesRegex(ValueError, "previous must have shape"):
+            batch.assignment_delta_norm_squared(values, values[:-1], demands)
+        with self.assertRaisesRegex(ValueError, "edge_duals must be native-endian and C-contiguous"):
+            noncontiguous = np.zeros(batch.num_edges * 2, dtype=np.float32)[::2]
+            batch.dual_objective_term(noncontiguous, demands)
+        with self.assertRaisesRegex(ValueError, "demands must have shape"):
+            batch.dual_objective_term(edge_duals, demands[:-1])
+
     def test_projected_step_matches_dense_reference(self):
         rng = np.random.default_rng(12345)
         for dtype in (np.float32, np.float64):
@@ -181,9 +272,11 @@ class PackedPathKernelTests(unittest.TestCase):
             for orthant in (False, True):
                 with self.subTest(dtype=dtype, orthant=orthant):
                     actual = np.empty_like(z)
-                    batch.projected_qp_step(
+                    relative_gaps = batch.projected_qp_step(
                         z, y_old, linear, demands, steps, orthant, actual
                     )
+                    self.assertEqual(relative_gaps.dtype, np.float64)
+                    self.assertEqual(relative_gaps.shape, (batch.num_commodities,))
                     expected = np.empty_like(z)
                     for k, block in enumerate(blocks):
                         start, end = batch.commodity_path_offsets[k:k + 2]
@@ -201,12 +294,115 @@ class PackedPathKernelTests(unittest.TestCase):
                     np.testing.assert_allclose(actual, expected, rtol=2e-6, atol=2e-7)
                     for k in range(batch.num_commodities):
                         start, end = batch.commodity_path_offsets[k:k + 2]
+                        candidate = actual[start:end].astype(np.float64)
+                        previous = y_old[start:end].astype(np.float64)
+                        q_gradient = (
+                            float(demands[k]) ** 2
+                            * blocks[k].astype(np.float64)
+                            @ (candidate - previous)
+                        )
+                        gradient = q_gradient + linear[start:end].astype(np.float64)
+                        primal = (
+                            0.5 * float((candidate - previous) @ q_gradient)
+                            + float(linear[start:end].astype(np.float64) @ candidate)
+                        )
+                        linear_minimum = float(np.min(gradient))
+                        if orthant:
+                            linear_minimum = min(0.0, linear_minimum)
+                        gap = max(0.0, float(gradient @ candidate) - linear_minimum)
+                        lower_bound = primal - gap
+                        expected_relative_gap = gap / max(
+                            1.0, abs(primal), abs(lower_bound)
+                        )
+                        tolerance = 3e-6 if dtype == np.float32 else 1e-12
+                        self.assertAlmostEqual(
+                            relative_gaps[k],
+                            expected_relative_gap,
+                            delta=tolerance,
+                        )
                         self.assertTrue(np.all(actual[start:end] >= 0))
                         segment_sum = actual[start:end].sum()
                         if orthant:
                             self.assertLessEqual(float(segment_sum), 1.0 + 1e-6)
                         else:
                             self.assertAlmostEqual(float(segment_sum), 1.0, places=5)
+
+    def test_projected_step_wolfe_gap_is_exact_at_known_linear_optima(self):
+        for dtype in (np.float32, np.float64):
+            batch, _ = self._make_batch(dtype)
+            demands = np.zeros(batch.num_commodities, dtype=dtype)
+            steps = np.ones(batch.num_commodities, dtype=dtype)
+            y_old = np.zeros(batch.num_paths, dtype=dtype)
+
+            simplex_z = np.zeros(batch.num_paths, dtype=dtype)
+            simplex_linear = np.empty(batch.num_paths, dtype=dtype)
+            orthant_z = np.zeros(batch.num_paths, dtype=dtype)
+            orthant_linear = np.ones(batch.num_paths, dtype=dtype)
+            for k in range(batch.num_commodities):
+                start, end = batch.commodity_path_offsets[k:k + 2]
+                simplex_z[start] = 1
+                simplex_linear[start:end] = np.arange(end - start, dtype=dtype)
+
+            output = np.empty_like(simplex_z)
+            simplex_gaps = batch.projected_qp_step(
+                simplex_z, y_old, simplex_linear, demands, steps, False, output
+            )
+            np.testing.assert_allclose(simplex_gaps, 0.0, atol=1e-12)
+
+            orthant_output = np.empty_like(orthant_z)
+            orthant_gaps = batch.projected_qp_step(
+                orthant_z, y_old, orthant_linear, demands, steps, True, orthant_output
+            )
+            np.testing.assert_allclose(orthant_output, 0.0, atol=1e-12)
+            np.testing.assert_allclose(orthant_gaps, 0.0, atol=1e-12)
+
+            nonoptimal_z = np.empty_like(simplex_z)
+            for k in range(batch.num_commodities):
+                start, end = batch.commodity_path_offsets[k:k + 2]
+                nonoptimal_z[start:end] = 1 / (end - start)
+            small_steps = np.full(batch.num_commodities, 1e-3, dtype=dtype)
+            nonoptimal_output = np.empty_like(nonoptimal_z)
+            nonoptimal_gaps = batch.projected_qp_step(
+                nonoptimal_z,
+                y_old,
+                simplex_linear,
+                demands,
+                small_steps,
+                False,
+                nonoptimal_output,
+            )
+            self.assertTrue(np.any(nonoptimal_gaps > 0))
+
+    def test_packed_pgd_stops_on_gap_or_iteration_cap(self):
+        y = np.asarray([0.5, 0.5], dtype=np.float64)
+        demands = np.asarray([1.0], dtype=np.float64)
+        steps = np.asarray([0.1], dtype=np.float64)
+        linear = np.zeros_like(y)
+        batch = Mock()
+
+        def converged_step(**kwargs):
+            np.copyto(kwargs["output"], kwargs["z"])
+            return np.zeros(1, dtype=np.float64)
+
+        batch.projected_qp_step.side_effect = converged_step
+        result = do_packed_path_based_nesterov_pgd(
+            y, y.copy(), batch, linear, demands, steps, 7,
+            optimality_tolerance=1e-3,
+        )
+        np.testing.assert_allclose(result, y)
+        self.assertEqual(batch.projected_qp_step.call_count, 1)
+
+        def unconverged_step(**kwargs):
+            np.copyto(kwargs["output"], kwargs["z"])
+            return np.ones(1, dtype=np.float64)
+
+        batch.reset_mock()
+        batch.projected_qp_step.side_effect = unconverged_step
+        do_packed_path_based_maxflow_pgd(
+            y, y.copy(), batch, linear, demands, steps, 7,
+            optimality_tolerance=1e-3,
+        )
+        self.assertEqual(batch.projected_qp_step.call_count, 7)
 
     def test_edge_conversion_matches_legacy_numba(self):
         provider = make_provider()
@@ -382,14 +578,39 @@ class PackedPathKernelTests(unittest.TestCase):
                 self.assertGreaterEqual(solver.total_flow, 0)
 
     def test_kernel_thread_parameter_is_serializable(self):
-        params = PathBasedOnlineTEParameters(KernelThreads=3)
+        params = PathBasedOnlineTEParameters(
+            KernelThreads=3,
+            SwitchOptimalityTolerance=1e-3,
+        )
         self.assertEqual(params.KernelThreads, 3)
         message = PathParamsMessage(**params.child_fields)
         self.assertEqual(MessageToDict(message)["KernelThreads"], 3)
+        self.assertAlmostEqual(
+            MessageToDict(message)["SwitchOptimalityTolerance"],
+            1e-3,
+        )
         with self.assertRaisesRegex(ValueError, "positive"):
             PathBasedOnlineTEParameters(KernelThreads=0)
+        with self.assertRaisesRegex(ValueError, "SwitchIterations"):
+            PathBasedOnlineTEParameters(SwitchIterations=0)
+        for invalid in (0.0, 1.0, np.nan):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(
+                ValueError, "SwitchOptimalityTolerance"
+            ):
+                PathBasedOnlineTEParameters(SwitchOptimalityTolerance=invalid)
         with self.assertRaisesRegex(ValueError, "single and double"):
             PathBasedOnlineTEParameters(Precision="half")
+
+    def test_single_loop_coordinator_derives_worker_tolerance(self):
+        coordinator = object.__new__(SingleLoopOnlineTECoordinator)
+        coordinator._solver_params = PathBasedOnlineTEParameters()
+        coordinator._problem_description = Mock()
+        coordinator._problem_description.eval_params.optimality_tolerance = 2e-2
+
+        worker_params = coordinator._get_worker_solver_params()
+
+        self.assertAlmostEqual(worker_params.SwitchOptimalityTolerance, 2e-3)
+        self.assertIsNone(coordinator._solver_params.SwitchOptimalityTolerance)
 
 
 if __name__ == "__main__":

@@ -180,6 +180,7 @@ void projected_qp_step(
     ConstArray1<Scalar> step_sizes,
     bool orthant,
     Array1<Scalar> output,
+    Array1<double> relative_gaps,
     int num_threads
 ) {
     const auto *commodity_offsets = static_cast<const int64_t *>(commodity_path_offsets.data());
@@ -191,6 +192,7 @@ void projected_qp_step(
     const auto *d = static_cast<const Scalar *>(demands.data());
     const auto *steps = static_cast<const Scalar *>(step_sizes.data());
     auto *out = static_cast<Scalar *>(output.data());
+    auto *gaps = static_cast<double *>(relative_gaps.data());
     const int64_t commodities = static_cast<int64_t>(commodity_path_offsets.shape(0)) - 1;
     const int threads = effective_threads(num_threads);
 
@@ -220,6 +222,61 @@ void projected_qp_step(
         } else {
             project_simplex(trial, out + start);
         }
+
+        // Evaluate a rigorous Wolfe dual-gap certificate at the projected
+        // candidate.  The Nesterov extrapolate above need not be feasible, so
+        // its first-order residual cannot be used as a stopping certificate.
+        // Accumulate in double precision even for the float32 specialization.
+        double quadratic = 0.0;
+        double linear_objective = 0.0;
+        double gradient_dot_candidate = 0.0;
+        double minimum_gradient = std::numeric_limits<double>::infinity();
+        const double demand_sq_double = static_cast<double>(d[k]) * static_cast<double>(d[k]);
+
+        for (int64_t i = 0; i < beta; ++i) {
+            double gram_product = 0.0;
+            for (int64_t j = 0; j < beta; ++j) {
+                const double delta_j = static_cast<double>(out[start + j]) -
+                                       static_cast<double>(old_data[start + j]);
+                gram_product += static_cast<double>(block[i * beta + j]) * delta_j;
+            }
+            const double quadratic_gradient = demand_sq_double * gram_product;
+            const double gradient_i = quadratic_gradient + static_cast<double>(c[start + i]);
+            const double candidate_i = static_cast<double>(out[start + i]);
+            const double delta_i = candidate_i - static_cast<double>(old_data[start + i]);
+            quadratic += delta_i * quadratic_gradient;
+            linear_objective += static_cast<double>(c[start + i]) * candidate_i;
+            gradient_dot_candidate += gradient_i * candidate_i;
+            minimum_gradient = std::min(minimum_gradient, gradient_i);
+        }
+
+        const double primal_objective = 0.5 * quadratic + linear_objective;
+        const double linear_minimum = orthant
+            ? std::min(0.0, minimum_gradient)
+            : minimum_gradient;
+        double gap = gradient_dot_candidate - linear_minimum;
+        const double roundoff_tolerance =
+            64.0 * static_cast<double>(std::numeric_limits<Scalar>::epsilon()) *
+            std::max({1.0, std::abs(gradient_dot_candidate), std::abs(linear_minimum)});
+
+        if (gap < -roundoff_tolerance ||
+            !std::isfinite(primal_objective) ||
+            !std::isfinite(gap)) {
+            gaps[k] = std::numeric_limits<double>::quiet_NaN();
+            continue;
+        }
+        gap = std::max(0.0, gap);
+        const double lower_bound = primal_objective - gap;
+        if (!std::isfinite(lower_bound)) {
+            gaps[k] = std::numeric_limits<double>::quiet_NaN();
+            continue;
+        }
+        const double denominator = std::max({
+            1.0,
+            std::abs(primal_objective),
+            std::abs(lower_bound),
+        });
+        gaps[k] = gap / denominator;
     }
 }
 
@@ -417,6 +474,96 @@ Scalar total_flow(
 }
 
 template <typename Scalar>
+double assignment_delta_norm_squared(
+    I64Array commodity_path_offsets,
+    I64Array gram_offsets,
+    ConstArray1<Scalar> gram_values,
+    ConstArray1<Scalar> current,
+    ConstArray1<Scalar> previous,
+    ConstArray1<Scalar> demands,
+    int num_threads
+) {
+    const auto *commodity_offsets = static_cast<const int64_t *>(commodity_path_offsets.data());
+    const auto *q_offsets = static_cast<const int64_t *>(gram_offsets.data());
+    const auto *q = static_cast<const Scalar *>(gram_values.data());
+    const auto *y = static_cast<const Scalar *>(current.data());
+    const auto *y_old = static_cast<const Scalar *>(previous.data());
+    const auto *d = static_cast<const Scalar *>(demands.data());
+    const int64_t commodities = static_cast<int64_t>(commodity_path_offsets.shape(0)) - 1;
+    const int threads = effective_threads(num_threads);
+    std::vector<double> contributions(static_cast<size_t>(commodities), 0.0);
+
+#pragma omp parallel for schedule(static) num_threads(threads) if(commodities > 1)
+    for (int64_t k = 0; k < commodities; ++k) {
+        const int64_t start = commodity_offsets[k];
+        const int64_t beta = commodity_offsets[k + 1] - start;
+        const Scalar *block = q + q_offsets[k];
+        double quadratic = 0.0;
+        for (int64_t i = 0; i < beta; ++i) {
+            const double delta_i = static_cast<double>(y[start + i]) -
+                                   static_cast<double>(y_old[start + i]);
+            double row_product = 0.0;
+            for (int64_t j = 0; j < beta; ++j) {
+                const double delta_j = static_cast<double>(y[start + j]) -
+                                       static_cast<double>(y_old[start + j]);
+                row_product += static_cast<double>(block[i * beta + j]) * delta_j;
+            }
+            quadratic += delta_i * row_product;
+        }
+        const double demand = static_cast<double>(d[k]);
+        contributions[static_cast<size_t>(k)] = demand * demand * quadratic;
+    }
+
+    double total = 0.0;
+    for (const double contribution : contributions) {
+        total += contribution;
+    }
+    return total;
+}
+
+template <typename Scalar>
+double dual_objective_term(
+    I64Array commodity_path_offsets,
+    I64Array path_edge_offsets,
+    I32Array path_edges,
+    ConstArray1<Scalar> edge_scale,
+    ConstArray1<Scalar> edge_duals,
+    ConstArray1<Scalar> demands,
+    int num_threads
+) {
+    const auto *commodity_offsets = static_cast<const int64_t *>(commodity_path_offsets.data());
+    const auto *edge_offsets = static_cast<const int64_t *>(path_edge_offsets.data());
+    const auto *edges = static_cast<const int32_t *>(path_edges.data());
+    const auto *scales = static_cast<const Scalar *>(edge_scale.data());
+    const auto *duals = static_cast<const Scalar *>(edge_duals.data());
+    const auto *d = static_cast<const Scalar *>(demands.data());
+    const int64_t commodities = static_cast<int64_t>(commodity_path_offsets.shape(0)) - 1;
+    const int threads = effective_threads(num_threads);
+    std::vector<double> contributions(static_cast<size_t>(commodities), 0.0);
+
+#pragma omp parallel for schedule(static) num_threads(threads) if(commodities > 1)
+    for (int64_t k = 0; k < commodities; ++k) {
+        double minimum = std::numeric_limits<double>::infinity();
+        for (int64_t path = commodity_offsets[k]; path < commodity_offsets[k + 1]; ++path) {
+            double path_value = 0.0;
+            for (int64_t i = edge_offsets[path]; i < edge_offsets[path + 1]; ++i) {
+                const int32_t edge = edges[i];
+                path_value += static_cast<double>(scales[edge]) *
+                              static_cast<double>(duals[edge]);
+            }
+            minimum = std::min(minimum, path_value);
+        }
+        contributions[static_cast<size_t>(k)] = static_cast<double>(d[k]) * minimum;
+    }
+
+    double total = 0.0;
+    for (const double contribution : contributions) {
+        total += contribution;
+    }
+    return total;
+}
+
+template <typename Scalar>
 void bind_float_kernels(nb::module_ &m, const std::string &suffix) {
     m.def(("build_gram_" + suffix).c_str(), &build_gram<Scalar>, nb::call_guard<nb::gil_scoped_release>());
     m.def(("block_gram_matvec_" + suffix).c_str(), &block_gram_matvec<Scalar>, nb::call_guard<nb::gil_scoped_release>());
@@ -427,6 +574,8 @@ void bind_float_kernels(nb::module_ &m, const std::string &suffix) {
     m.def(("paths_to_edge_" + suffix).c_str(), &paths_to_edge<Scalar>, nb::call_guard<nb::gil_scoped_release>());
     m.def(("paths_to_edge_mean_" + suffix).c_str(), &paths_to_edge_mean<Scalar>, nb::call_guard<nb::gil_scoped_release>());
     m.def(("total_flow_" + suffix).c_str(), &total_flow<Scalar>, nb::call_guard<nb::gil_scoped_release>());
+    m.def(("assignment_delta_norm_squared_" + suffix).c_str(), &assignment_delta_norm_squared<Scalar>, nb::call_guard<nb::gil_scoped_release>());
+    m.def(("dual_objective_term_" + suffix).c_str(), &dual_objective_term<Scalar>, nb::call_guard<nb::gil_scoped_release>());
 }
 
 NB_MODULE(_path_kernels, m) {
