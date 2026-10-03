@@ -1,6 +1,6 @@
 import pickle
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import networkx as nx
 import numpy as np
@@ -14,7 +14,10 @@ from te.algorithms.formulations.path_based.distributed.single_loop_coordinator i
     OnlineTECoordinator as SingleLoopOnlineTECoordinator,
 )
 from te.algorithms.formulations.path_based.distributed.solver_params import PathBasedOnlineTEParameters
-from te.algorithms.formulations.path_based.distributed.worker import DenseSolver
+from te.algorithms.formulations.path_based.distributed.worker import (
+    DenseSolver,
+    OnlineTEWorkerNode,
+)
 from te.algorithms.base import TEObjective
 from te.algorithms.sub_algorithms.pgd import (
     do_packed_path_based_maxflow_pgd,
@@ -444,6 +447,28 @@ class PackedPathKernelTests(unittest.TestCase):
         normalized_mlu = np.max(normalized_assignment.sum(axis=1))
         self.assertAlmostEqual(physical_mlu, normalized_mlu)
 
+    def test_capacity_scaling_rejects_invalid_capacities(self):
+        valid = np.asarray([2, 3, 5, 7, 11, 13], dtype=np.float64)
+        for invalid in (0.0, -1.0, np.inf, np.nan):
+            with self.subTest(invalid=invalid):
+                capacities = valid.copy()
+                capacities[2] = invalid
+                with self.assertRaisesRegex(
+                    ValueError, "finite, strictly positive"
+                ):
+                    PackedPathBatch.from_path_provider(
+                        make_provider(), capacities, True, kernel_threads=1
+                    )
+
+        # The validation belongs to the reciprocal-capacity coordinate
+        # transform and must not change the legacy unscaled path.
+        capacities = valid.copy()
+        capacities[2] = 0
+        batch = PackedPathBatch.from_path_provider(
+            make_provider(), capacities, False, kernel_threads=1
+        )
+        np.testing.assert_allclose(batch.edge_scale, 1)
+
     def test_coordinator_reports_physical_assignment_after_capacity_scaling(self):
         normalized_assignment = np.asarray(
             [[0.5, 0.0], [0.0, 0.8]], dtype=np.float64
@@ -480,6 +505,81 @@ class PackedPathKernelTests(unittest.TestCase):
             ),
             [],
         )
+
+    def test_single_loop_coordinator_uses_normalized_capacity_coordinates(self):
+        capacities = np.asarray([2.0, 5.0], dtype=np.float64)
+        coordinator = object.__new__(SingleLoopOnlineTECoordinator)
+        coordinator._capacities = capacities
+
+        coordinator._solver_params = PathBasedOnlineTEParameters(
+            ScaleWithCapacity=True
+        )
+        np.testing.assert_allclose(
+            coordinator._get_capacity_qp_capacities(), np.ones_like(capacities)
+        )
+
+        coordinator._solver_params = PathBasedOnlineTEParameters(
+            ScaleWithCapacity=False
+        )
+        self.assertIs(coordinator._get_capacity_qp_capacities(), capacities)
+
+    def test_single_loop_coordinator_reports_assignments_in_physical_units(self):
+        normalized_assignment = np.asarray(
+            [[0.5, 0.0], [0.0, 0.8]], dtype=np.float64
+        )
+        capacities = np.asarray([2.0, 5.0], dtype=np.float64)
+
+        for scaled in (False, True):
+            with self.subTest(scaled=scaled):
+                coordinator = object.__new__(SingleLoopOnlineTECoordinator)
+                coordinator._solver_params = PathBasedOnlineTEParameters(
+                    ScaleWithCapacity=scaled
+                )
+                coordinator._capacities = capacities
+                coordinator.backend = Mock()
+                coordinator.backend.get_X_ek.return_value = normalized_assignment
+
+                coordinator._set_X_ek()
+
+                expected = normalized_assignment * capacities[:, None] \
+                    if scaled else normalized_assignment
+                np.testing.assert_allclose(coordinator.current_assignment, expected)
+                np.testing.assert_allclose(
+                    coordinator.backend.get_X_ek.return_value,
+                    normalized_assignment,
+                )
+
+    def test_single_loop_coordinator_computes_mlu_in_internal_coordinates(self):
+        capacities = np.asarray([2.0, 4.0], dtype=np.float64)
+        graph = nx.DiGraph()
+        graph.add_nodes_from((0, 1))
+
+        for scaled, mean in (
+            (False, np.asarray([0.4, 1.6])),
+            (True, np.asarray([0.2, 0.4])),
+        ):
+            with self.subTest(scaled=scaled):
+                coordinator = object.__new__(SingleLoopOnlineTECoordinator)
+                coordinator._solver_params = PathBasedOnlineTEParameters(
+                    ScaleWithCapacity=scaled
+                )
+                coordinator._capacities = capacities
+                coordinator._graph = graph
+                coordinator._problem_description = Mock()
+                coordinator._problem_description.objective = TEObjective.MLU
+                coordinator._mlu_solver = Mock()
+                coordinator._mlu_solver.current_Z = np.zeros_like(capacities)
+                coordinator._sharing_wrapper = Mock()
+                coordinator._sharing_wrapper.X_mean = mean
+
+                coordinator._do_coordinator_update()
+
+                self.assertAlmostEqual(coordinator.current_objective, 0.8)
+
+        coordinator._problem_description.objective = TEObjective.MAX_FLOW
+        coordinator._total_flow = 3.25
+        coordinator._do_coordinator_update()
+        self.assertEqual(coordinator.current_objective, 3.25)
 
     def test_power_method_matches_current_recurrence(self):
         for dtype in (np.float32, np.float64):
@@ -555,27 +655,68 @@ class PackedPathKernelTests(unittest.TestCase):
             )
 
     def test_dense_solver_integration_for_both_objectives(self):
-        batch, capacities = self._make_batch(np.float64)
         demands = np.asarray([1.0, 1.5, 2.0], dtype=np.float64)
         bias = np.asarray([0.1, -0.2, 0.3, 0.05, -0.1, 0.2], dtype=np.float64)
-        for objective in (TEObjective.MLU, TEObjective.MAX_FLOW):
-            with self.subTest(objective=objective):
-                solver = DenseSolver(
-                    demands=demands,
-                    path_batch=batch,
-                    pgd_step=0.01,
-                    pgd_iters=3,
-                    eta=0.4,
-                    adjust_step_size=False,
-                    capacities=capacities,
-                    objective=objective,
+        for scaled in (False, True):
+            batch, capacities = self._make_batch(np.float64, scaled=scaled)
+            for objective in (TEObjective.MLU, TEObjective.MAX_FLOW):
+                with self.subTest(scaled=scaled, objective=objective):
+                    solver = DenseSolver(
+                        demands=demands,
+                        path_batch=batch,
+                        pgd_step=0.01,
+                        pgd_iters=3,
+                        eta=0.4,
+                        adjust_step_size=False,
+                        capacities=capacities,
+                        objective=objective,
+                    )
+                    initial = solver.X_ek
+                    self.assertEqual(initial.shape, (batch.num_edges, batch.num_commodities))
+                    self.assertAlmostEqual(solver.total_flow, float(demands.sum()))
+                    mean = solver.update(bias)
+                    self.assertEqual(mean.shape, (batch.num_edges,))
+                    np.testing.assert_allclose(mean, solver.X_ek.mean(axis=1), rtol=1e-12)
+                    self.assertGreaterEqual(solver.total_flow, 0)
+
+    def test_worker_forwards_capacity_scaling_to_packed_paths(self):
+        graph = nx.DiGraph()
+        for edge, capacity in zip(
+            ((0, 1), (1, 0), (0, 2), (2, 0), (1, 2), (2, 1)),
+            (2.0, 3.0, 5.0, 7.0, 11.0, 13.0),
+        ):
+            graph.add_edge(*edge, capacity=capacity)
+
+        for scaled in (False, True):
+            with self.subTest(scaled=scaled):
+                worker = object.__new__(OnlineTEWorkerNode)
+                worker._solver_params = PathBasedOnlineTEParameters(
+                    ScaleWithCapacity=scaled
                 )
-                initial = solver.X_ek
-                self.assertEqual(initial.shape, (batch.num_edges, batch.num_commodities))
-                mean = solver.update(bias)
-                self.assertEqual(mean.shape, (batch.num_edges,))
-                np.testing.assert_allclose(mean, solver.X_ek.mean(axis=1), rtol=1e-12)
-                self.assertGreaterEqual(solver.total_flow, 0)
+                worker._objective = TEObjective.MLU
+                worker._number_of_workers = 1
+                worker._node_params = Mock()
+                worker._node_params.RPCParams_.PeerIndex = 0
+                worker._create_local_path_object = Mock(
+                    side_effect=lambda: setattr(worker, "_path_object", make_provider())
+                )
+                packed = Mock()
+
+                with patch.object(
+                    PackedPathBatch, "from_path_provider", return_value=packed
+                ) as build_batch, patch(
+                    "te.algorithms.formulations.path_based.distributed.worker.DenseSolver"
+                ) as dense_solver:
+                    worker.set_topology(graph)
+
+                build_batch.assert_called_once()
+                call = build_batch.call_args.kwargs
+                self.assertEqual(call["scale_with_capacity"], scaled)
+                np.testing.assert_allclose(
+                    call["capacities"],
+                    np.asarray([2.0, 5.0, 3.0, 11.0, 7.0, 13.0]),
+                )
+                dense_solver.assert_called_once()
 
     def test_kernel_thread_parameter_is_serializable(self):
         params = PathBasedOnlineTEParameters(

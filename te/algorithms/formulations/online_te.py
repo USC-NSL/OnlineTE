@@ -32,8 +32,8 @@ class OnlineTESolverDescription:
     MasterCLS: type[TELP]
     MasterBackendCLS: type[CommunicationBackendBase]
     MasterRPCParams: RPCParams
-    MLUCLS: type[ControllerMLUSolver]
-    MLUParams: SolverParams
+    MLUCLS: Optional[type[ControllerMLUSolver]]
+    MLUParams: Optional[SolverParams]
     WorkerCLS: type[DistributedSolverNodeBase]
     WorkerBackendCLS: type[CommunicationBackendBase]
     WorkerRPCParamList: List[RPCParams]
@@ -41,11 +41,13 @@ class OnlineTESolverDescription:
 
 def online_te_parser(
     name: str,
-    solver_param_cls: type[SolverParams]
+    solver_param_cls: type[SolverParams],
+    simple: bool = False
 ) -> jsonargparse.ArgumentParser:
     parser = jsonargparse.ArgumentParser(name)
     parser.add_class_arguments(solver_param_cls, 'SolverParams', help='Algorithm parameters')
-    add_mlu_backend_parser(parser)
+    if not simple:
+        add_mlu_backend_parser(parser)
     single_controller_topology_address_parser(parser)
     add_communication_backend_params_parser(parser)
     return parser
@@ -55,10 +57,14 @@ def parse_online_te_config(
     args: jsonargparse.Namespace,
     solver_param_cls: type[SolverParams],
     coordinator_cls: type[TELP],
-    worker_cls: type[DistributedSolverNodeBase]
+    worker_cls: type[DistributedSolverNodeBase],
+    simplified: bool = False
 ) -> OnlineTESolverDescription:
     solver_params = solver_param_cls.make_from_args(args.SolverParams)
-    mlu_backend_params, mlu_backend_cls = parse_mlu_backend_params(args)
+    if not simplified:
+        mlu_backend_params, mlu_backend_cls = parse_mlu_backend_params(args)
+    else:
+        mlu_backend_params, mlu_backend_cls = None, None
     master_addr, worker_addr_list = parse_single_controller_topology_address_parser(args)
     comm_backend_description = parse_communication_backend_params(master_addr, worker_addr_list, args)
     return OnlineTESolverDescription(

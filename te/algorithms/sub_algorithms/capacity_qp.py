@@ -17,8 +17,7 @@ class CapacityQP:
         feasibility_tolerance: float,
         optimality_tolerance: float,
         objective: TEObjective = TEObjective.MLU,
-        capacities: Optional[CPUArray] = None,
-        mean_scaled: bool = False
+        capacities: Optional[CPUArray] = None
     ):
         self._rho: float = rho
         self._num_edges: int = num_edges
@@ -26,8 +25,8 @@ class CapacityQP:
         self._objective = objective
         self._feasibility_tolerance = feasibility_tolerance
         self._optimality_tolerance = optimality_tolerance
-        self._capacities = np.array(capacities, dtype=np.float64) if capacities is not None else None
-        self._mean_scaled = mean_scaled
+        self._capacities = np.array(capacities, dtype=np.float64)\
+            if capacities is not None else np.ones((num_edges,))
 
         self._current_F: np.ndarray = None
         self._solved: bool = False
@@ -73,8 +72,8 @@ class CapacityQP:
     @property
     def objective_value(self) -> float:
         if self._objective == TEObjective.MLU:
-            return self.current_u if not self._mean_scaled else \
-                self.current_u / self._num_commodities
+            return self.current_u
+        return 1
     
     def _get_variable_lower_bound_vector(self) -> np.ndarray:
         out = np.full((self._NUM_VARIABLES,), -np.inf)
@@ -103,15 +102,15 @@ class CapacityQP:
         return constraints
     
     def _get_objective_matrix_diagonal(self) -> np.ndarray:
-        # d = np.full((self._NUM_VARIABLES,), fill_value=self._rho * self._num_commodities)
-        d = np.full((self._NUM_VARIABLES,), fill_value=self._rho)
+        d = np.full((self._NUM_VARIABLES,), fill_value=self._rho * self._num_commodities)
+        # d = np.full((self._NUM_VARIABLES,), fill_value=self._rho)
         d[-1] = 0
         return d
     
     def _get_objective_vector(self) -> np.ndarray:
         out = np.zeros((self._NUM_VARIABLES,))
-        # out[:-1] = -self._current_F * self._rho * self._num_commodities
-        out[:-1] = -self._current_F * self._rho
+        out[:-1] = -self._current_F * self._rho * self._num_commodities
+        # out[:-1] = -self._current_F * self._rho
         if self.is_mlu:
             out[-1] = 1
         return out

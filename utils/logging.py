@@ -1,3 +1,4 @@
+import time
 import tqdm
 import numpy as np
 import te.constants
@@ -132,3 +133,79 @@ class TQDMSpinner:
     
     def __next__(self):
         return next(self._counter)
+
+    def __enter__(self):
+        self._pbar.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return self._pbar.__exit__(exc_type, exc, tb)
+
+
+class TQDMTimer:
+    @classmethod
+    def pbar_format(cls) -> str:
+        return '{l_bar}{bar:36}{n:.3f}/{total:.3f}s[{elapsed_s:.3f}s] {postfix}'
+
+    def __init__(self, timeout: float, desc: str):
+        self._desc = desc
+        self._timeout = float(timeout)
+        
+        self.start_time: Optional[float] = None
+        self._pbar: Optional[tqdm.tqdm] = None
+        self.timed_out: bool = False
+        self.completed: bool = False
+
+    def __enter__(self):
+        self.start_time = time.monotonic()
+        self.timed_out = False
+        self.completed = False
+        self._pbar = tqdm.tqdm(
+            total=self._timeout,
+            desc=self._desc,
+            bar_format=self.pbar_format(),
+            unit="s"
+        )
+        return self
+
+    @property
+    def elapsed(self) -> float:
+        if self.start_time is None:
+            return 0.0
+        return time.monotonic() - self.start_time
+
+    def set_postfix(self, data: Dict):
+        self._pbar.set_postfix(data)
+
+    def update(self) -> bool:
+        curr_elapsed = self.elapsed
+        if curr_elapsed >= self._timeout:
+            self.timed_out = True
+            self._pbar.n = self._timeout
+            self._pbar.refresh()
+            return False
+
+        self._pbar.n = curr_elapsed
+        self._pbar.refresh()
+        return True
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        final_elapsed = self.elapsed
+
+        if exc_type is None:
+            # Reached end of 'with' block without unhandled exceptions
+            if final_elapsed >= self._timeout or self.timed_out:
+                self.timed_out = True
+                self.completed = False
+                self._pbar.n = self._timeout
+            else:
+                self.completed = True
+                self.timed_out = False
+                self._pbar.n = min(final_elapsed, self._timeout)
+        else:
+            # An exception was raised inside the with block
+            self.completed = False
+
+        self._pbar.refresh()
+        self._pbar.close()
+        return False

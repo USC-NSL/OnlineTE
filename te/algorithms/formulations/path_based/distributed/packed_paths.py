@@ -145,6 +145,12 @@ class PackedPathBatch:
             raise ValueError("PathProvider commodity metadata is inconsistent")
         if num_edges != len(capacities):
             raise ValueError("PathProvider edge count does not match capacities")
+        if scale_with_capacity and (
+            not np.all(np.isfinite(capacities)) or np.any(capacities <= 0)
+        ):
+            raise ValueError(
+                "capacity scaling requires finite, strictly positive capacities"
+            )
 
         betas = np.asarray(provider.beta, dtype=np.int64)
         if betas.shape != (commodity_count,) or np.any(betas <= 0):

@@ -1,9 +1,9 @@
 import time
 import networkx as nx
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict
 from array_utils import set_global_precision
 from array_utils.cpu.types import *
-from array_utils.cpu.wrapper import cpu_fill
+from array_utils.cpu.wrapper import cpu_fill, cpu_copyto
 from te.algorithms.communication import *
 from te.algorithms.base import TEObjective
 from te.algorithms.sub_algorithms.pgd import (
@@ -13,7 +13,7 @@ from te.algorithms.sub_algorithms.pgd import (
 from te.path_providers import *
 from utils.logging import as_warning
 from .packed_paths import PackedPathBatch
-from .solver_params import PathBasedOnlineTEParameters
+from .solver_params import PathBasedSimplifiedOnlineTEParameters, WorkerUpdateData
 
 
 class DenseSolver:
@@ -21,16 +21,14 @@ class DenseSolver:
         demands: CPUArray,
         path_batch: PackedPathBatch,
         pgd_step: float, pgd_iters: int,
-        eta: float,
-        adjust_step_size: bool,
         capacities: CPUArray,
-        objective: TEObjective
+        objective: TEObjective,
+        optimality_tolerance: Optional[float] = None
     ):
         self._paths = path_batch
         self._demands: CPUArray = cpu_array(demands)
-        self._adjust_step_size = adjust_step_size
         self._pgd_iters = pgd_iters
-        self._eta = eta
+        self._optimality_tolerance = optimality_tolerance
         self._capacities = cpu_array(capacities)
         self._objective = objective
 
@@ -46,12 +44,9 @@ class DenseSolver:
         self._Y_tk = self._paths.initialize_splits(self._capacities)
 
     def _update_step_sizes(self):
-        if self._adjust_step_size:
-            self._pgd_steps = cpu_array(
-                self._pgd_step_0 / self._paths.estimate_lipschitz(self._demands)
-            )
-        else:
-            self._pgd_steps = cpu_fill((self._K,), self._pgd_step_0)
+        self._pgd_steps = cpu_array(
+            self._pgd_step_0 / self._paths.estimate_lipschitz(self._demands)
+        )
 
     @property
     def X_ek(self) -> CPUArray:
@@ -65,12 +60,25 @@ class DenseSolver:
     def total_flow(self) -> float:
         return self._paths.total_flow(self._Y_tk, self._demands)
 
+    @property
+    def norm_F_delta_X(self) -> float:
+        return self._paths.assignment_delta_norm_squared(
+            current=self._Y_tk,
+            previous=self._Y_tk_old,
+            demands=self._demands
+        )
+
+    def dual_objective_term(self, sharing_dual: CPUArray) -> float:
+        return self._paths.dual_objective_term(
+            edge_duals=sharing_dual,
+            demands=self._demands
+        )
+
     def set_demands(self, demands: CPUArray):
         self._demands = cpu_array(demands)
         self._update_step_sizes()
     
     def update(self, sharing_bias: CPUArray) -> CPUArray:
-        new_Y_old = cpu_array(self._Y_tk)
         sharing_bias = cpu_array(sharing_bias)
         if self._objective == TEObjective.MLU:
             linear_term = self._paths.linear_term(sharing_bias, self._demands)
@@ -82,12 +90,13 @@ class DenseSolver:
                 demand_block=self._demands,
                 step_sizes=self._pgd_steps,
                 n_iter=self._pgd_iters,
+                optimality_tolerance=self._optimality_tolerance,
             )
         elif self._objective == TEObjective.MAX_FLOW:
             linear_term = self._paths.linear_term(
                 sharing_bias,
                 self._demands,
-                maxflow_shift=1.0 / self._eta,
+                maxflow_shift=1.0,
             )
             self._Y_tk = do_packed_path_based_maxflow_pgd(
                 y_block=self._Y_tk,
@@ -97,30 +106,34 @@ class DenseSolver:
                 demand_block=self._demands,
                 step_sizes=self._pgd_steps,
                 n_iter=self._pgd_iters,
+                optimality_tolerance=self._optimality_tolerance,
             )
         else:
             raise ValueError
-        self._Y_tk_old = new_Y_old
         return self._paths.paths_to_edge_mean(self._Y_tk, self._demands)
 
+    def update_Y_tk_old(self):
+        cpu_copyto(self._Y_tk, self._Y_tk_old)
 
-class OnlineTEWorkerNode(DistributedSolverNodeBase):
+
+class SimpleOnlineTEWorkerNode(DistributedSolverNodeBase):
     def __init__(self, params: DistributedSolverNodeParams):
         super().__init__(params)
-        self._solver_params: Optional[PathBasedOnlineTEParameters] = None
+        self._solver_params: Optional[PathBasedSimplifiedOnlineTEParameters] = None
         self._objective: Optional[TEObjective] = None
         self._ready: bool = False
 
         self._sharing_bias_cached: Optional[CPUArray] = None
+        self._sharing_dual_cached: Optional[CPUArray] = None
 
         self._dense_solver: Optional[DenseSolver] = None
 
         assert issubclass(
             params.CommunicationBackendCLS, WorkerBackendBase)
         self.backend: WorkerBackendBase =\
-            params.CommunicationBackendCLS[PathBasedOnlineTEParameters](
+            params.CommunicationBackendCLS[PathBasedSimplifiedOnlineTEParameters](
                 rpc_params=params.RPCParams_,
-                solver_params_cls=PathBasedOnlineTEParameters
+                solver_params_cls=PathBasedSimplifiedOnlineTEParameters
             )
         self.backend.start()
 
@@ -128,7 +141,6 @@ class OnlineTEWorkerNode(DistributedSolverNodeBase):
         self.backend.set_solver_parameters = self.set_solver_parameters
         self.backend.set_topology = self.set_topology
         self.backend.do_inner_loop_update = self.do_inner_loop_pgd_update
-        self.backend.update_cached_values = self.update_cached_values
         self.backend.report_chunk = self.report_chunk
         self.backend.update_demands = self.update_demands
     
@@ -136,7 +148,7 @@ class OnlineTEWorkerNode(DistributedSolverNodeBase):
         self.backend.wait()
 
     def set_solver_parameters(self,
-        new_params: PathBasedOnlineTEParameters,
+        new_params: PathBasedSimplifiedOnlineTEParameters,
         num_workers: int,
         objective: TEObjective
     ):
@@ -203,37 +215,51 @@ class OnlineTEWorkerNode(DistributedSolverNodeBase):
                 # Save it for future use!
                 self._path_object.save(path)
         self._sharing_bias_cached = cpu_zeros((graph.number_of_edges(),))
+        self._sharing_dual_cached = cpu_zeros((graph.number_of_edges(),))
         path_batch = PackedPathBatch.from_path_provider(
             provider=self._path_object,
             capacities=self._capacities,
-            scale_with_capacity=self._solver_params.ScaleWithCapacity,
+            scale_with_capacity=True,
             kernel_threads=self._solver_params.KernelThreads,
         )
         self._dense_solver = DenseSolver(
             demands=cpu_fill((self.assigned_commodity_count,), 1),
             path_batch=path_batch,
             pgd_step=self._solver_params.Gamma,
-            pgd_iters=self._solver_params.SwitchIterations,
-            eta=self._solver_params.Eta,
-            adjust_step_size=self._solver_params.AdjustGamma,
+            pgd_iters=self._solver_params.MaxSwitchIterations,
+            optimality_tolerance=self._solver_params.SwitchOptimalityTolerance,
             capacities=self._capacities,
             objective=self._objective
         )
 
-    def do_inner_loop_pgd_update(self, epoch: int) -> Tuple[int, CPUArray, Optional[float]]:
+    def do_inner_loop_pgd_update(
+        self,
+        sharing_gap: CPUArray,
+        sharing_dual: CPUArray,
+        sharing_rho: float
+    ) -> Tuple[int, CPUArray, Dict[str, float]]:
+        # Update cached values
+        self._sharing_bias_cached = sharing_gap + sharing_dual
+        self._sharing_dual_cached = sharing_dual * sharing_rho
+        # self._sharing_dual_cached = sharing_dual * sharing_rho / self.total_commodity_count
+        # X-step
+        DENSE = self._dense_solver
         start = time.perf_counter_ns()
-        mean = self._dense_solver.update(self._sharing_bias_cached)
-        total_flow = self._dense_solver.total_flow
-        return (time.perf_counter_ns() - start) // 1000, mean, total_flow
-
-    def update_cached_values(self, sharing_bias: CPUArray):
-        self._sharing_bias_cached = sharing_bias
+        mean = DENSE.update(self._sharing_bias_cached)
+        total_routed_flow = DENSE.total_flow
+        norm_F_delta_X = DENSE.norm_F_delta_X
+        dual_objective = DENSE.dual_objective_term(
+            self._sharing_dual_cached
+        )
+        DENSE.update_Y_tk_old()
+        return (time.perf_counter_ns() - start) // 1000, mean, {
+            WorkerUpdateData.DEMANDS: total_routed_flow,
+            WorkerUpdateData.NORM_F_DELTA_X: norm_F_delta_X,
+            WorkerUpdateData.DUAL_OBJ: dual_objective
+        }
     
     def report_chunk(self) -> CPUArray:
         return self._dense_solver.X_ek
-    
-    def report_aggregate(self) -> CPUArray:
-        raise ValueError("This should NOT be used!")
 
     def update_demands(self, demands: CPUArray) -> CPUArray:
         self._dense_solver.set_demands(demands)

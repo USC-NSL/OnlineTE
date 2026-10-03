@@ -142,7 +142,6 @@ class OnlineTECoordinator(TELP[PathBasedOnlineTEParameters], DistributedSolverNo
         assert self._mlu_solver is not None
         self._mlu_solver._add_constraints()
     
-    # @record_cpu_runtime('Controller-Update')
     def _update_controller_objective(self):
         assert self._mlu_solver is not None
         self._mlu_solver.update_F_m(
@@ -154,11 +153,7 @@ class OnlineTECoordinator(TELP[PathBasedOnlineTEParameters], DistributedSolverNo
         assert self._mlu_solver is not None
         self._mlu_solver._add_objective()
 
-    # @record_return_value('PGD-Runtime')
-    # @record_cpu_runtime('Network-Update')
     def _do_network_update(self, epoch: int):
-        # TODO: Try to make the workers return aggregate flows as well
-        # max_run, self._Y_bar_t = self.backend.do_network_update(epoch)
         max_run, self._sharing_mean_1, demand = self.backend.do_network_update(epoch)
         if self.objective == TEObjective.MAX_FLOW:
             self._total_flow = demand
@@ -242,7 +237,7 @@ class OnlineTECoordinator(TELP[PathBasedOnlineTEParameters], DistributedSolverNo
                         if self._solver_params.ScaleWithCapacity:
                             max_util = float(np.max(self.number_of_commodities * self._sharing_mean_1))
                         else:
-                            max_util = float(np.max(self.number_of_commodities * self._sharing_mean_1 / self._capacities)    )    
+                            max_util = float(np.max(self.number_of_commodities * self._sharing_mean_1 / self._capacities))
                         progress_bar.set_postfix({
                             'Cont. Util.': f'{self._mlu_solver.current_u:.4f}',
                             'Net. Util.': f'{max_util:.4f}',
