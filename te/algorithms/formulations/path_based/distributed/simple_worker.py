@@ -23,6 +23,8 @@ class DenseSolver:
         pgd_step: float, pgd_iters: int,
         capacities: CPUArray,
         objective: TEObjective,
+        rho: float,
+        total_numbar_of_commodities: int,
         optimality_tolerance: Optional[float] = None
     ):
         self._paths = path_batch
@@ -31,9 +33,10 @@ class DenseSolver:
         self._optimality_tolerance = optimality_tolerance
         self._capacities = cpu_array(capacities)
         self._objective = objective
+        self._rho = rho
 
         self._pgd_step_0 = pgd_step
-        self._K = path_batch.num_commodities
+        self._total_numbar_of_commodities = total_numbar_of_commodities
         self._N = path_batch.num_edges
         self._Y_tk = cpu_zeros((path_batch.num_paths,))
         self._initialize_splits()
@@ -41,7 +44,7 @@ class DenseSolver:
         self._update_step_sizes()
     
     def _initialize_splits(self):
-        self._Y_tk = self._paths.initialize_splits(self._capacities)
+        self._Y_tk = self._paths.initialize_splits(self._capacities, self._objective)
 
     def _update_step_sizes(self):
         self._pgd_steps = cpu_array(
@@ -71,15 +74,18 @@ class DenseSolver:
     def dual_objective_term(self, sharing_dual: CPUArray) -> float:
         return self._paths.dual_objective_term(
             edge_duals=sharing_dual,
-            demands=self._demands
+            demands=self._demands,
+            objective=self._objective,
+            total_num_commodities=self._total_numbar_of_commodities
         )
 
     def set_demands(self, demands: CPUArray):
         self._demands = cpu_array(demands)
         self._update_step_sizes()
     
-    def update(self, sharing_bias: CPUArray) -> CPUArray:
+    def update(self, sharing_bias: CPUArray, sharing_rho: float) -> CPUArray:
         sharing_bias = cpu_array(sharing_bias)
+        self._rho = sharing_rho
         if self._objective == TEObjective.MLU:
             linear_term = self._paths.linear_term(sharing_bias, self._demands)
             self._Y_tk = do_packed_path_based_nesterov_pgd(
@@ -96,7 +102,7 @@ class DenseSolver:
             linear_term = self._paths.linear_term(
                 sharing_bias,
                 self._demands,
-                maxflow_shift=1.0,
+                maxflow_shift=1 / (self._rho * self._total_numbar_of_commodities),
             )
             self._Y_tk = do_packed_path_based_maxflow_pgd(
                 y_block=self._Y_tk,
@@ -125,6 +131,7 @@ class SimpleOnlineTEWorkerNode(DistributedSolverNodeBase):
 
         self._sharing_bias_cached: Optional[CPUArray] = None
         self._sharing_dual_cached: Optional[CPUArray] = None
+        self._sharing_rho_cached: Optional[float] = None
 
         self._dense_solver: Optional[DenseSolver] = None
 
@@ -216,6 +223,7 @@ class SimpleOnlineTEWorkerNode(DistributedSolverNodeBase):
                 self._path_object.save(path)
         self._sharing_bias_cached = cpu_zeros((graph.number_of_edges(),))
         self._sharing_dual_cached = cpu_zeros((graph.number_of_edges(),))
+        self._sharing_rho_cached = self._solver_params.Rho
         path_batch = PackedPathBatch.from_path_provider(
             provider=self._path_object,
             capacities=self._capacities,
@@ -229,7 +237,9 @@ class SimpleOnlineTEWorkerNode(DistributedSolverNodeBase):
             pgd_iters=self._solver_params.MaxSwitchIterations,
             optimality_tolerance=self._solver_params.SwitchOptimalityTolerance,
             capacities=self._capacities,
-            objective=self._objective
+            objective=self._objective,
+            rho=self._sharing_rho_cached,
+            total_numbar_of_commodities=self.total_commodity_count
         )
 
     def do_inner_loop_pgd_update(
@@ -241,11 +251,12 @@ class SimpleOnlineTEWorkerNode(DistributedSolverNodeBase):
         # Update cached values
         self._sharing_bias_cached = sharing_gap + sharing_dual
         self._sharing_dual_cached = sharing_dual * sharing_rho
+        self._sharing_rho_cached = sharing_rho
         # self._sharing_dual_cached = sharing_dual * sharing_rho / self.total_commodity_count
         # X-step
         DENSE = self._dense_solver
         start = time.perf_counter_ns()
-        mean = DENSE.update(self._sharing_bias_cached)
+        mean = DENSE.update(self._sharing_bias_cached, self._sharing_rho_cached)
         total_routed_flow = DENSE.total_flow
         norm_F_delta_X = DENSE.norm_F_delta_X
         dual_objective = DENSE.dual_objective_term(

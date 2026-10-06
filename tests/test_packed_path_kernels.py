@@ -11,9 +11,9 @@ from protos.solver_params.solver_params_pb2 import PathBasedOnlineTEParameters a
 from te.algorithms.formulations.path_based.distributed.packed_paths import PackedPathBatch
 from te.algorithms.formulations.path_based.distributed.coordinator import OnlineTECoordinator
 from te.algorithms.formulations.path_based.distributed.single_loop_coordinator import (
-    OnlineTECoordinator as SingleLoopOnlineTECoordinator,
+    SimpleOnlineTECoordinator as SingleLoopOnlineTECoordinator,
 )
-from te.algorithms.formulations.path_based.distributed.solver_params import PathBasedOnlineTEParameters
+from te.algorithms.formulations.path_based.distributed.solver_params import PathBasedOnlineTEParameters, PathBasedSimplifiedOnlineTEParameters
 from te.algorithms.formulations.path_based.distributed.worker import (
     DenseSolver,
     OnlineTEWorkerNode,
@@ -227,11 +227,11 @@ class PackedPathKernelTests(unittest.TestCase):
                         path_values = alpha.T @ (edge_scale * edge_duals)
                         expected += float(demands[k]) * float(np.min(path_values))
 
-                    actual = batch.dual_objective_term(edge_duals, demands)
+                    actual = batch.dual_objective_term(edge_duals, demands, TEObjective.MLU)
                     tolerance = 2e-6 if dtype == np.float32 else 1e-12
                     self.assertAlmostEqual(actual, expected, delta=tolerance * max(1.0, abs(expected)))
                     self.assertEqual(
-                        batch.dual_objective_term(np.zeros_like(edge_duals), demands),
+                        batch.dual_objective_term(np.zeros_like(edge_duals), demands, TEObjective.MLU),
                         0.0,
                     )
 
@@ -240,7 +240,7 @@ class PackedPathKernelTests(unittest.TestCase):
                     )
                     self.assertEqual(
                         actual,
-                        one_thread.dual_objective_term(edge_duals, demands),
+                        one_thread.dual_objective_term(edge_duals, demands, TEObjective.MLU),
                     )
 
     def test_diagnostic_kernel_inputs_are_validated(self):
@@ -257,9 +257,9 @@ class PackedPathKernelTests(unittest.TestCase):
             batch.assignment_delta_norm_squared(values, values[:-1], demands)
         with self.assertRaisesRegex(ValueError, "edge_duals must be native-endian and C-contiguous"):
             noncontiguous = np.zeros(batch.num_edges * 2, dtype=np.float32)[::2]
-            batch.dual_objective_term(noncontiguous, demands)
+            batch.dual_objective_term(noncontiguous, demands, TEObjective.MLU)
         with self.assertRaisesRegex(ValueError, "demands must have shape"):
-            batch.dual_objective_term(edge_duals, demands[:-1])
+            batch.dual_objective_term(edge_duals, demands[:-1], TEObjective.MLU)
 
     def test_projected_step_matches_dense_reference(self):
         rng = np.random.default_rng(12345)
@@ -506,23 +506,6 @@ class PackedPathKernelTests(unittest.TestCase):
             [],
         )
 
-    def test_single_loop_coordinator_uses_normalized_capacity_coordinates(self):
-        capacities = np.asarray([2.0, 5.0], dtype=np.float64)
-        coordinator = object.__new__(SingleLoopOnlineTECoordinator)
-        coordinator._capacities = capacities
-
-        coordinator._solver_params = PathBasedOnlineTEParameters(
-            ScaleWithCapacity=True
-        )
-        np.testing.assert_allclose(
-            coordinator._get_capacity_qp_capacities(), np.ones_like(capacities)
-        )
-
-        coordinator._solver_params = PathBasedOnlineTEParameters(
-            ScaleWithCapacity=False
-        )
-        self.assertIs(coordinator._get_capacity_qp_capacities(), capacities)
-
     def test_single_loop_coordinator_reports_assignments_in_physical_units(self):
         normalized_assignment = np.asarray(
             [[0.5, 0.0], [0.0, 0.8]], dtype=np.float64
@@ -532,9 +515,7 @@ class PackedPathKernelTests(unittest.TestCase):
         for scaled in (False, True):
             with self.subTest(scaled=scaled):
                 coordinator = object.__new__(SingleLoopOnlineTECoordinator)
-                coordinator._solver_params = PathBasedOnlineTEParameters(
-                    ScaleWithCapacity=scaled
-                )
+                coordinator._solver_params = PathBasedSimplifiedOnlineTEParameters()
                 coordinator._capacities = capacities
                 coordinator.backend = Mock()
                 coordinator.backend.get_X_ek.return_value = normalized_assignment
@@ -560,9 +541,7 @@ class PackedPathKernelTests(unittest.TestCase):
         ):
             with self.subTest(scaled=scaled):
                 coordinator = object.__new__(SingleLoopOnlineTECoordinator)
-                coordinator._solver_params = PathBasedOnlineTEParameters(
-                    ScaleWithCapacity=scaled
-                )
+                coordinator._solver_params = PathBasedSimplifiedOnlineTEParameters()
                 coordinator._capacities = capacities
                 coordinator._graph = graph
                 coordinator._problem_description = Mock()
@@ -741,17 +720,6 @@ class PackedPathKernelTests(unittest.TestCase):
                 PathBasedOnlineTEParameters(SwitchOptimalityTolerance=invalid)
         with self.assertRaisesRegex(ValueError, "single and double"):
             PathBasedOnlineTEParameters(Precision="half")
-
-    def test_single_loop_coordinator_derives_worker_tolerance(self):
-        coordinator = object.__new__(SingleLoopOnlineTECoordinator)
-        coordinator._solver_params = PathBasedOnlineTEParameters()
-        coordinator._problem_description = Mock()
-        coordinator._problem_description.eval_params.optimality_tolerance = 2e-2
-
-        worker_params = coordinator._get_worker_solver_params()
-
-        self.assertAlmostEqual(worker_params.SwitchOptimalityTolerance, 2e-3)
-        self.assertIsNone(coordinator._solver_params.SwitchOptimalityTolerance)
 
 
 if __name__ == "__main__":

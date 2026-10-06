@@ -8,7 +8,7 @@ from utils.exceptions import SolutionInterrupted
 from utils.logging import as_info, as_success, as_warning, as_fail, TQDMSpinner, TQDMTimer
 from array_utils import set_global_precision
 from array_utils.cpu.types import *
-from te.algorithms.sub_algorithms.admm import DistributedSharingWrapper, AdaptiveStepSizeParams
+from te.algorithms.sub_algorithms.admm import DistributedSharingWrapper, AdaptiveStepSizeParams, NesterovAccelerationParams
 from te.algorithms.communication import *
 from te.algorithms.sub_algorithms.capacity_qp import CapacityQP
 from .solver_params import PathBasedSimplifiedOnlineTEParameters, WorkerUpdateData
@@ -79,7 +79,7 @@ class SimpleOnlineTECoordinator(TELP[PathBasedSimplifiedOnlineTEParameters], Dis
 
     @property
     def alg_name(self) -> str:
-        return 'Path Based OnlineTE'
+        return 'Simplifed Path Based OnlineTE'
 
     @property
     def current_objective(self) -> float:
@@ -93,7 +93,7 @@ class SimpleOnlineTECoordinator(TELP[PathBasedSimplifiedOnlineTEParameters], Dis
             (self.number_of_edges, self.number_of_commodities),
             self._solver_params.Rho,
             adaptation=AdaptiveStepSizeParams(
-                infeasibility_bound=10,
+                infeasibility_bound=5,
                 multiplicative_factor=2,
                 strike_count=3
             )
@@ -136,7 +136,14 @@ class SimpleOnlineTECoordinator(TELP[PathBasedSimplifiedOnlineTEParameters], Dis
             next_X_mean=X_bar,
             delta_X_frobenius=data[WorkerUpdateData.NORM_F_DELTA_X]
         )
-        self._dual_objective = data[WorkerUpdateData.DUAL_OBJ]
+        match self.objective:
+            case TEObjective.MLU:
+                self._dual_objective = data[WorkerUpdateData.DUAL_OBJ]
+            case TEObjective.MAX_FLOW:
+                self._dual_objective = - data[WorkerUpdateData.DUAL_OBJ] - np.sum(
+                    self._sharing_wrapper.dual_var * self._sharing_wrapper.step_size
+                )
+            case _: raise NotImplementedError
     
     def _do_coordinator_update(self):
         MLU = self._mlu_solver
@@ -157,7 +164,9 @@ class SimpleOnlineTECoordinator(TELP[PathBasedSimplifiedOnlineTEParameters], Dis
             case TEObjective.MLU:
                 total_assignment = self.number_of_commodities * SHARING.X_mean
                 self._primal_objective = float(np.max(total_assignment))
-            case TEObjective.MAX_FLOW: self._primal_objective = self._total_flow
+            case TEObjective.MAX_FLOW:
+                # The Max-Flow objective is scaled by number of commodities.
+                self._primal_objective = -self._total_flow / self.number_of_commodities
             case _: raise NotImplementedError
 
     def close(self):
@@ -165,28 +174,41 @@ class SimpleOnlineTECoordinator(TELP[PathBasedSimplifiedOnlineTEParameters], Dis
         if self._mlu_solver is not None:
             self._mlu_solver.close()
 
-    def _single_solve_step(self) -> Tuple[float, float, float]:
+    def _single_solve_step(self) -> Tuple[float, float, float, bool, float]:
         self._do_network_update()
         self._do_coordinator_update()
 
         p = self._primal_objective
         d = self._dual_objective
         if p != 0:
-            gap = abs(d - p) / p
+            gap = abs(d - p) / abs(p)
         else:
             gap = np.inf
-        return self._primal_objective, gap, self._sharing_wrapper.step_size
+        admm_primal_feasible = self._sharing_wrapper.is_primal_feasible(
+            eps_abs=self.feasibility_tolerance,
+            eps_rel=self.optimality_tolerance
+        )
+        congestion = \
+            abs(float(np.max(
+                self._sharing_wrapper.X_mean * self.number_of_commodities
+            )) - self._mlu_solver.current_u)
+        # congestion_vec = np.clip((self._sharing_wrapper.X_mean * self.number_of_commodities) - self._mlu_solver.current_u, a_min=0, a_max=None)
+        # congestion = np.max(congestion_vec)
+        return self._primal_objective, gap, self._sharing_wrapper.step_size, admm_primal_feasible, congestion
 
     def _cold_start(self) -> bool:
         with TQDMSpinner('Cold Start.') as progress_bar:
             while self.backend.is_alive:
-                val, gap, step = self._single_solve_step()
+                val, gap, step, admm_primal_feasible, congestion = self._single_solve_step()
                 progress_bar.set_postfix({
                     'Obj. Val.': f'{val:.4f}',
                     'Obj. Gap': f'{gap*100:.2f}%',
-                    'Outer Step.': f'{step:.2f}'
+                    'ADMM Penalty.': f'{step:.2f}',
+                    'Congestion': f'{congestion*100:.2f}%'
                 })
-                if (gap < self.optimality_tolerance):
+                if (gap < self.optimality_tolerance and \
+                    admm_primal_feasible and \
+                    congestion < self.optimality_tolerance):
                     return True
                 progress_bar.update()
         return False
@@ -194,15 +216,18 @@ class SimpleOnlineTECoordinator(TELP[PathBasedSimplifiedOnlineTEParameters], Dis
     def _warm_start(self) -> bool:
         with TQDMTimer(timeout=self._solver_params.Timeout, desc="Warm Start.") as progress_bar:
             while self.backend.is_alive and progress_bar.update():
-                val, gap, step = self._single_solve_step()
+                val, gap, step, admm_primal_feasible, congestion = self._single_solve_step()
                 progress_bar.set_postfix({
                     'Obj. Val.': f'{val:.4f}',
                     'Obj. Gap': f'{gap*100:.2f}%',
-                    'Outer Step.': f'{step:.2f}'
+                    'ADMM Penalty.': f'{step:.2f}',
+                    'Congestion': f'{congestion*100:.2f}%'
                 })
-                if (gap < self.optimality_tolerance):
+                if (gap < self.optimality_tolerance and \
+                    admm_primal_feasible and \
+                    congestion < self.optimality_tolerance):
                     return True
-        return progress_bar.timed_out
+        return not progress_bar.timed_out
 
     def _solve_for_tm(self, tm: np.ndarray):
         try:

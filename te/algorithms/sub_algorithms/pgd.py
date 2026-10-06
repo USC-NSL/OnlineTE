@@ -146,12 +146,14 @@ def _do_packed_path_based_nesterov_pgd(
     step_sizes: CPUArray,
     n_iter: int,
     orthant: bool,
-    optimality_tolerance: Optional[float] = None,
+    optimality_tolerance: float,
 ) -> CPUArray:
     """Run the existing Nesterov PGD recurrence on unpadded path segments."""
     if n_iter <= 0:
         raise ValueError("n_iter must be positive")
-    if optimality_tolerance is not None and (
+    if optimality_tolerance is None:
+        raise ValueError("optimality_tolerance is mandatory")
+    if (
         not np.isfinite(optimality_tolerance) or
         not 0 < optimality_tolerance < 1
     ):
@@ -161,6 +163,7 @@ def _do_packed_path_based_nesterov_pgd(
     candidate = np.empty_like(current)
     z_block = np.copy(current)
     next_z = np.empty_like(current)
+    unconverged = np.arange(path_batch.num_commodities, dtype=np.int64)
 
     for _ in range(n_iter):
         relative_gaps = path_batch.projected_qp_step(
@@ -170,11 +173,14 @@ def _do_packed_path_based_nesterov_pgd(
             demands=demand_block,
             step_sizes=step_sizes,
             orthant=orthant,
+            unconverged=unconverged,
             output=candidate,
         )
-        if optimality_tolerance is not None and np.all(
-            relative_gaps <= optimality_tolerance
-        ):
+        # np.less_equal(relative_gaps, optimality_tolerance, out=converged)
+        # if np.all(converged):
+        unconverged = unconverged[relative_gaps[unconverged] > optimality_tolerance]
+        # if np.all(relative_gaps < optimality_tolerance):
+        if len(unconverged) == 0:
             return candidate
         t_acc = cpu_cast_float(0.5 * (1.0 + np.sqrt(1.0 + 4.0 * t * t)))
         np.subtract(candidate, current, out=next_z)

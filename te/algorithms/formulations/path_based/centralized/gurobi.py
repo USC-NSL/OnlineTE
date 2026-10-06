@@ -73,7 +73,7 @@ class GurobiPathBasedTE(TELP[GurobiPathBasedSolverParams]):
 
     @property
     def current_objective(self) -> float:
-        return abs(self._objective.getValue())
+        return self._objective.getValue()
 
     def _set_X_ek(self):
         ROWS = self._path_object.rows
@@ -177,7 +177,7 @@ class GurobiPathBasedTE(TELP[GurobiPathBasedSolverParams]):
             total_flow = gurobipy.LinExpr()
             for k in range(K):
                 for t in range(T):
-                    total_flow.addTerms(-1, ROUTED_TK[(t, k)])
+                    total_flow.addTerms(-1/K, ROUTED_TK[(t, k)])
             self._total_flow = total_flow
 
     def _add_objective(self):

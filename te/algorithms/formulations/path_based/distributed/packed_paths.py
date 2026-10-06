@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from typing import Optional, TYPE_CHECKING
+from te.algorithms.base import TEObjective
 
 import numpy as np
 
@@ -267,7 +268,8 @@ class PackedPathBatch:
         demands: np.ndarray,
         step_sizes: np.ndarray,
         orthant: bool,
-        output: np.ndarray,
+        unconverged: np.ndarray,
+        output: np.ndarray
     ) -> np.ndarray:
         kernels = require_native_kernels()
         for name, array in (("z", z), ("y_old", y_old), ("linear", linear), ("output", output)):
@@ -287,6 +289,7 @@ class PackedPathBatch:
             orthant,
             output,
             relative_gaps,
+            unconverged,
             self.kernel_threads,
         )
         # if not np.all(np.isfinite(relative_gaps)):
@@ -308,18 +311,25 @@ class PackedPathBatch:
         )
         return output
 
-    def initialize_splits(self, capacities: np.ndarray) -> np.ndarray:
+    def initialize_splits(self, capacities: np.ndarray, objective: TEObjective) -> np.ndarray:
         kernels = require_native_kernels()
         _require_float_array(capacities, "capacities", self.num_edges, self.dtype)
-        output = np.empty(self.num_paths, dtype=self.dtype)
-        _typed_kernel(kernels, "initialize_splits", self.dtype)(
-            self.commodity_path_offsets,
-            self.path_edge_offsets,
-            self.path_edges,
-            capacities,
-            output,
-            self.kernel_threads,
-        )
+        match objective:
+            case TEObjective.MLU:
+                # Start with all demands satisfied, then handle congestion
+                output = np.empty(self.num_paths, dtype=self.dtype)
+                _typed_kernel(kernels, "initialize_splits", self.dtype)(
+                    self.commodity_path_offsets,
+                    self.path_edge_offsets,
+                    self.path_edges,
+                    capacities,
+                    output,
+                    self.kernel_threads,
+                )
+            case TEObjective.MAX_FLOW:
+                # Just start from 0
+                output = np.zeros(self.num_paths, dtype=self.dtype)
+            case _: raise NotImplementedError
         return output
 
     def paths_to_edge(self, values: np.ndarray, demands: np.ndarray) -> np.ndarray:
@@ -396,22 +406,40 @@ class PackedPathBatch:
         self,
         edge_duals: np.ndarray,
         demands: np.ndarray,
+        objective: TEObjective,
+        total_num_commodities: int
     ) -> float:
         """Return this batch's path-minimization term in the dual objective."""
         kernels = require_native_kernels()
         _require_float_array(edge_duals, "edge_duals", self.num_edges, self.dtype)
         _require_float_array(demands, "demands", self.num_commodities, self.dtype)
-        return float(
-            _typed_kernel(kernels, "dual_objective_term", self.dtype)(
-                self.commodity_path_offsets,
-                self.path_edge_offsets,
-                self.path_edges,
-                self.edge_scale,
-                edge_duals,
-                demands,
-                self.kernel_threads,
-            )
-        )
+        match objective:
+            case TEObjective.MLU:
+                return float(
+                    _typed_kernel(kernels, "mlu_dual_objective_term", self.dtype)(
+                        self.commodity_path_offsets,
+                        self.path_edge_offsets,
+                        self.path_edges,
+                        self.edge_scale,
+                        edge_duals,
+                        demands,
+                        self.kernel_threads,
+                    )
+                )
+            case TEObjective.MAX_FLOW:
+                return float(
+                    _typed_kernel(kernels, "maxflow_dual_objective_term", self.dtype)(
+                        self.commodity_path_offsets,
+                        self.path_edge_offsets,
+                        self.path_edges,
+                        self.edge_scale,
+                        edge_duals,
+                        demands,
+                        total_num_commodities,
+                        self.kernel_threads,
+                    )
+                )
+            case _: raise NotImplementedError
 
 
 __all__ = ["PackedPathBatch", "require_native_kernels", "resolve_kernel_threads"]

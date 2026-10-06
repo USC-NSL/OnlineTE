@@ -9,7 +9,7 @@ import networkx as nx
 import te.constants
 import dataclasses
 from collections import defaultdict
-from typing import List, Optional, Tuple, Dict, Callable, Any
+from typing import List, Optional, Tuple, Dict, Callable, Any, Union
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from utils.logging import as_fail, as_warning, as_info, log_subsection_title, str_round
@@ -115,9 +115,9 @@ class TECheckResult:
 
     Attributes
     ----------
-    loop_witness: Optional[Tuple[int, int, int]]
+    loop_witness: Tuple[bool, Optional[Tuple[int, int, int]]]
         A commodity that has a loop. If we have one of these, then
-        we messed up!
+        we messed up! If skipped, the first entry will be `False`.
     congestions: List[Tuple[int, int, int, float, float]]
         A list of 5-tuples, containing edge index, edge source and
         edge destination, followed by the amount of routed flow over
@@ -130,17 +130,35 @@ class TECheckResult:
         A list of 5-tuples, containing commodity index, source and
         destination followed by the routed demand and declared demand
         value.
-    total_routed_flow: float
-        Total routed flow in this solution.
     density: float
         Number of non-zero entries in the edge-based assignment.
     """
-    loop_witness: Optional[Tuple[int, int, int]]
-    congestions: List[Tuple[int, int, int, float, float]]
-    leaks: List[Tuple[int, int, int, float]]
-    satisfaction: Optional[Tuple[int, int, int, float, float]]
-    # total_routed_flow: float
+    loop_witness: Tuple[bool, Optional[Tuple[int, int, int]]]
+    congestions: Tuple[float, List[Tuple[int, int, int, float, float]]]
+    leaks: Tuple[float, List[Tuple[int, int, int, float]]]
+    satisfaction: Optional[Tuple[float, List[Tuple[int, int, int, float, float]]]]
     density: float
+
+
+@dataclass
+class TECcheckSummary(TableDataclass):
+    max_link_congestion_ratio: str
+    demand_leak_ratio: str
+    solution_density: str
+    flow_satisfaction: str
+    loop_witness: str
+
+    @classmethod
+    def from_check_result(cls, res: TECheckResult) -> TECcheckSummary:
+        return TECcheckSummary(
+            max_link_congestion_ratio=f'{res.congestions[0]*100:.2f} %',
+            demand_leak_ratio=f'{res.leaks[0]*100:.2f} %',
+            solution_density=f'{res.density*100:.2f} %',
+            flow_satisfaction=f'{res.satisfaction[0]*100:.2f} %'\
+                if res.satisfaction is not None else "<SKIPPED>",
+            loop_witness=f'{res.loop_witness[1] is not None}'\
+                if res.loop_witness[0] else '<SKIPPED>'
+        )
 
 
 class SolverCallbackType(str, enum.Enum):
@@ -434,7 +452,9 @@ class TELP[P: SolverParams](ABC):
         self._tracer.add_result("objective_trace", (self.current_objective, runtime))
         print(as_info(f"Solved in {str_round(runtime, 3)} seconds. Objective Value: {str_round(self.current_objective, 4)}"))
         if not self._problem_description.eval_params.skip_checks:
-            self._check_results.append(self.check())
+            res = self.check()
+            print(as_info(TECcheckSummary.from_check_result(res)))
+            self._check_results.append(res)
         self._first_solve = False
         self._tracer.execute_callbacks(self, SolverCallbackType.PostTMSolve)
 
@@ -468,12 +488,12 @@ class TELP[P: SolverParams](ABC):
         loop_tolerance = eval_params.loop_tolerance
         indexing = self._edge_indexing
         if not self._skip_loop_check:
-            witness = check_loop_free_assignment(
+            witness = (True, check_loop_free_assignment(
                 assignments, graph, loop_tolerance
-            )
+            ))
         else:
-            witness = None
-        if witness is not None:
+            witness = (False, None)
+        if witness[1] is not None:
             print(as_fail(f"Solution contains a loop for commodity {witness[0]}!"))
         leaks = check_flow_leaks(
             assignments, graph, commodity_list,
@@ -483,17 +503,13 @@ class TELP[P: SolverParams](ABC):
             assignments, graph, feasibility_tolerance
         )
         if self._problem_description.objective == TEObjective.MLU:
-            # satisfaction, total_routed_flow = check_flow_satisfaction(
+            # MLU gives satisfaction by default ...
+            satisfaction = None
+        else:
             satisfaction = check_flow_satisfaction(
                 assignments, graph, commodity_list,
                 feasibility_tolerance, indexing
             )
-        else:
-            satisfaction = None
-            # _, total_routed_flow = check_flow_satisfaction(
-            #     assignments, graph, commodity_list,
-            #     feasibility_tolerance, indexing
-            # )
         return TECheckResult(
             loop_witness=witness,
             congestions=congestions,

@@ -914,12 +914,18 @@ class DistributedSharingWrapper:
         self._round_stage = "finalized"
         return new_rho
 
-    def is_feasible(self, eps_abs: float, eps_rel: float) -> bool:
+    def is_primal_feasible(self, eps_abs: float, eps_rel: float) -> bool:
         N, K = self._X_shape
         eps_primal = eps_abs * np.sqrt(N) + eps_rel * max([
             np.linalg.norm(self._X_mean),
             np.linalg.norm(self._Z_mean)
         ]) * np.sqrt(K)
+        return self.primal_infeasibility <= eps_primal
+
+    def is_dual_feasible(self, eps_abs: float, eps_rel: float) -> bool:
+        N, K = self._X_shape
         eps_dual = eps_abs * np.sqrt(N) + eps_rel * np.linalg.norm(self._dual_var) * np.sqrt(K)
-        return self.primal_infeasibility <= eps_primal and \
-            self.dual_infeasibility <= eps_dual
+        return self.dual_infeasibility <= eps_dual
+
+    def is_feasible(self, eps_abs: float, eps_rel: float) -> bool:
+        return self.is_primal_feasible(eps_abs, eps_rel) and self.is_dual_feasible(eps_abs, eps_rel)

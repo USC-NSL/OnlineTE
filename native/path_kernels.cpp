@@ -181,6 +181,7 @@ void projected_qp_step(
     bool orthant,
     Array1<Scalar> output,
     Array1<double> relative_gaps,
+    I64Array unconverged_commodities,
     int num_threads
 ) {
     const auto *commodity_offsets = static_cast<const int64_t *>(commodity_path_offsets.data());
@@ -193,11 +194,13 @@ void projected_qp_step(
     const auto *steps = static_cast<const Scalar *>(step_sizes.data());
     auto *out = static_cast<Scalar *>(output.data());
     auto *gaps = static_cast<double *>(relative_gaps.data());
+    const auto *indices = static_cast<const int64_t *>(unconverged_commodities.data());
     const int64_t commodities = static_cast<int64_t>(commodity_path_offsets.shape(0)) - 1;
     const int threads = effective_threads(num_threads);
 
 #pragma omp parallel for schedule(static) num_threads(threads) if(commodities > 1)
-    for (int64_t k = 0; k < commodities; ++k) {
+    for (int64_t i = 0; i < unconverged_commodities.size(); i++) {
+        const int64_t k = indices[i];
         const int64_t start = commodity_offsets[k];
         const int64_t beta = commodity_offsets[k + 1] - start;
         const Scalar *block = q + q_offsets[k];
@@ -522,13 +525,12 @@ double assignment_delta_norm_squared(
 }
 
 template <typename Scalar>
-double dual_objective_term(
+std::vector<double> _cheapest_path_per_commodity(
     I64Array commodity_path_offsets,
     I64Array path_edge_offsets,
     I32Array path_edges,
     ConstArray1<Scalar> edge_scale,
     ConstArray1<Scalar> edge_duals,
-    ConstArray1<Scalar> demands,
     int num_threads
 ) {
     const auto *commodity_offsets = static_cast<const int64_t *>(commodity_path_offsets.data());
@@ -536,7 +538,6 @@ double dual_objective_term(
     const auto *edges = static_cast<const int32_t *>(path_edges.data());
     const auto *scales = static_cast<const Scalar *>(edge_scale.data());
     const auto *duals = static_cast<const Scalar *>(edge_duals.data());
-    const auto *d = static_cast<const Scalar *>(demands.data());
     const int64_t commodities = static_cast<int64_t>(commodity_path_offsets.shape(0)) - 1;
     const int threads = effective_threads(num_threads);
     std::vector<double> contributions(static_cast<size_t>(commodities), 0.0);
@@ -553,12 +554,63 @@ double dual_objective_term(
             }
             minimum = std::min(minimum, path_value);
         }
-        contributions[static_cast<size_t>(k)] = static_cast<double>(d[k]) * minimum;
+        contributions[static_cast<size_t>(k)] = minimum;
     }
+    return contributions;
+}
 
+template <typename Scalar>
+double mlu_dual_objective_term(
+    I64Array commodity_path_offsets,
+    I64Array path_edge_offsets,
+    I32Array path_edges,
+    ConstArray1<Scalar> edge_scale,
+    ConstArray1<Scalar> edge_duals,
+    ConstArray1<Scalar> demands,
+    int num_threads
+) {
+    auto contributions = _cheapest_path_per_commodity(
+        commodity_path_offsets,
+        path_edge_offsets,
+        path_edges,
+        edge_scale,
+        edge_duals,
+        num_threads
+    );
+    const auto *d = static_cast<const Scalar *>(demands.data());
+    
     double total = 0.0;
-    for (const double contribution : contributions) {
-        total += contribution;
+    for (size_t k = 0; k < contributions.size(); ++k) {
+        total += contributions[k] * d[k];
+    }
+    return total;
+}
+
+template <typename Scalar>
+double maxflow_dual_objective_term(
+    I64Array commodity_path_offsets,
+    I64Array path_edge_offsets,
+    I32Array path_edges,
+    ConstArray1<Scalar> edge_scale,
+    ConstArray1<Scalar> edge_duals,
+    ConstArray1<Scalar> demands,
+    int total_number_of_commodities,
+    int num_threads
+) {
+    auto contributions = _cheapest_path_per_commodity(
+        commodity_path_offsets,
+        path_edge_offsets,
+        path_edges,
+        edge_scale,
+        edge_duals,
+        num_threads
+    );
+    const auto *d = static_cast<const Scalar *>(demands.data());
+    
+    double total = 0.0;
+    double K_recip = 1.0 / total_number_of_commodities;
+    for (size_t k = 0; k < contributions.size(); ++k) {
+        total += std::max(K_recip - contributions[k], 0.0) * d[k];
     }
     return total;
 }
@@ -575,7 +627,8 @@ void bind_float_kernels(nb::module_ &m, const std::string &suffix) {
     m.def(("paths_to_edge_mean_" + suffix).c_str(), &paths_to_edge_mean<Scalar>, nb::call_guard<nb::gil_scoped_release>());
     m.def(("total_flow_" + suffix).c_str(), &total_flow<Scalar>, nb::call_guard<nb::gil_scoped_release>());
     m.def(("assignment_delta_norm_squared_" + suffix).c_str(), &assignment_delta_norm_squared<Scalar>, nb::call_guard<nb::gil_scoped_release>());
-    m.def(("dual_objective_term_" + suffix).c_str(), &dual_objective_term<Scalar>, nb::call_guard<nb::gil_scoped_release>());
+    m.def(("mlu_dual_objective_term_" + suffix).c_str(), &mlu_dual_objective_term<Scalar>, nb::call_guard<nb::gil_scoped_release>());
+    m.def(("maxflow_dual_objective_term_" + suffix).c_str(), &maxflow_dual_objective_term<Scalar>, nb::call_guard<nb::gil_scoped_release>());
 }
 
 NB_MODULE(_path_kernels, m) {

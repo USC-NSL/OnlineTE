@@ -191,7 +191,7 @@ class PDLPPathBasedTE(TELP[PDLPPathBasedSolverParams]):
         vec = np.zeros(shape=(self._NUM_VARIABLES,))
         match self.objective:
             case TEObjective.MLU: vec[-1] = 1.0
-            case TEObjective.MAX_FLOW: vec[:-1] = 1.0
+            case TEObjective.MAX_FLOW: vec[:-1] = -1.0 / self.number_of_commodities
             case _: raise NotImplementedError
         return 0, vec
     

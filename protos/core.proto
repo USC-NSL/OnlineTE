@@ -55,7 +55,7 @@ message NetworkUpdateRequest {
     // objective bound.
     SerializedNumpyArrayMessage sharing_gap = 1;
     SerializedNumpyArrayMessage sharing_dual = 2;
-    float sharing_rho = 3;
+    double sharing_rho = 3;
     // Field for checking transactions IDs in case a message got
     // lost. This is with our unreliable backends (particularly,
     // the IP Multicast backend) in mind.
@@ -82,7 +82,7 @@ message NetworkUpdateResponse {
     //   Needed to calculate dual ADMM infeasibilities
     // - Switch-side dual objective term
     //   Necessary for the stopping criterion
-    map<string, float> data = 5;
+    map<string, double> data = 5;
 }
 
 // Trivial state keep-alive message
