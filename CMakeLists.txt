@@ -9,7 +9,17 @@ find_package(Python 3.13 REQUIRED COMPONENTS Interpreter Development.Module)
 find_package(nanobind CONFIG REQUIRED)
 find_package(OpenMP REQUIRED COMPONENTS CXX)
 
-nanobind_add_module(_path_kernels STABLE_ABI native/path_kernels.cpp)
+# nanobind_add_module(_path_kernels STABLE_ABI native/path_kernels.cpp)
+nanobind_add_module(
+  _path_kernels
+  STABLE_ABI
+  native/dual_objective_kernels.cpp
+  native/gram_kernels.cpp
+  native/lipschitz_kernels.cpp
+  native/pgd_kernels.cpp
+  native/util_kernels.cpp
+  native/path_kernels.cpp
+)
 target_compile_features(_path_kernels PRIVATE cxx_std_17)
 if (MINGW)
   # MinGW's OpenMP runtime is dynamic. Bundle its small runtime closure next

@@ -176,10 +176,7 @@ def _do_packed_path_based_nesterov_pgd(
             unconverged=unconverged,
             output=candidate,
         )
-        # np.less_equal(relative_gaps, optimality_tolerance, out=converged)
-        # if np.all(converged):
         unconverged = unconverged[relative_gaps[unconverged] > optimality_tolerance]
-        # if np.all(relative_gaps < optimality_tolerance):
         if len(unconverged) == 0:
             return candidate
         t_acc = cpu_cast_float(0.5 * (1.0 + np.sqrt(1.0 + 4.0 * t * t)))
