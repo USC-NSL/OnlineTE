@@ -39,12 +39,12 @@ endif()
 
 install(
   TARGETS _path_kernels
-  LIBRARY DESTINATION te/algorithms/formulations/path_based/distributed
-  RUNTIME DESTINATION te/algorithms/formulations/path_based/distributed
+  LIBRARY DESTINATION te/path_providers
+  RUNTIME DESTINATION te/path_providers
 )
 if (MINGW)
   install(
     FILES ${MINGW_OPENMP_DLLS}
-    DESTINATION te/algorithms/formulations/path_based/distributed
+    DESTINATION te/path_providers
   )
 endif()

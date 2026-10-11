@@ -11,8 +11,8 @@ from te.algorithms.sub_algorithms.pgd import (
     do_packed_path_based_nesterov_pgd,
 )
 from te.path_providers import *
+from te.path_providers.packed_paths import PackedPathBatch
 from utils.logging import as_warning
-from .packed_paths import PackedPathBatch
 from .solver_params import PathBasedOnlineTEParameters
 
 
@@ -24,7 +24,8 @@ class DenseSolver:
         eta: float,
         adjust_step_size: bool,
         capacities: CPUArray,
-        objective: TEObjective
+        objective: TEObjective,
+        optimality_tolerance: Optional[float] = None,
     ):
         self._paths = path_batch
         self._demands: CPUArray = cpu_array(demands)
@@ -33,6 +34,7 @@ class DenseSolver:
         self._eta = eta
         self._capacities = cpu_array(capacities)
         self._objective = objective
+        self._optimality_tolerance = optimality_tolerance
 
         self._pgd_step_0 = pgd_step
         self._K = path_batch.num_commodities
@@ -43,7 +45,7 @@ class DenseSolver:
         self._update_step_sizes()
     
     def _initialize_splits(self):
-        self._Y_tk = self._paths.initialize_splits(self._capacities)
+        self._Y_tk = self._paths.initialize_splits(self._capacities, self._objective)
 
     def _update_step_sizes(self):
         if self._adjust_step_size:
@@ -82,6 +84,7 @@ class DenseSolver:
                 demand_block=self._demands,
                 step_sizes=self._pgd_steps,
                 n_iter=self._pgd_iters,
+                optimality_tolerance=self._optimality_tolerance,
             )
         elif self._objective == TEObjective.MAX_FLOW:
             linear_term = self._paths.linear_term(
@@ -97,6 +100,7 @@ class DenseSolver:
                 demand_block=self._demands,
                 step_sizes=self._pgd_steps,
                 n_iter=self._pgd_iters,
+                optimality_tolerance=self._optimality_tolerance,
             )
         else:
             raise ValueError
@@ -217,7 +221,8 @@ class OnlineTEWorkerNode(DistributedSolverNodeBase):
             eta=self._solver_params.Eta,
             adjust_step_size=self._solver_params.AdjustGamma,
             capacities=self._capacities,
-            objective=self._objective
+            objective=self._objective,
+            optimality_tolerance=self._solver_params.SwitchOptimalityTolerance,
         )
 
     def do_inner_loop_pgd_update(self, epoch: int) -> Tuple[int, CPUArray, Optional[float]]:

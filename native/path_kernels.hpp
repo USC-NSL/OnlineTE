@@ -116,6 +116,13 @@ template <typename Scalar> void build_gram(
  * Implements multiplication between a ragged vector and ragged
  * Gram matrix.
  * 
+ * The Gram matrix per commodity `k` is:
+ * ```
+ * G_k := (alpha^{(k)})^T alpha^{(k)}
+ * ```
+ * And this function calculates `d_k^2 G_k v` for an input vector `v` for
+ * all `k`.
+ * 
  * @param output The 1D output vector to write the product result.
  */
 template <typename Scalar> void block_gram_matvec(
@@ -132,10 +139,10 @@ template <typename Scalar> void block_gram_matvec(
  * Implements a linear term that can be added directly to the flat
  * representation of a ragged array.
  * This function computes:
- * 
+ * ```
  *      -maxflow_shift + d_k . (alpha^{(k)}^T sharing_bias) .* edge_scale
- * 
- * This is the linear term that constant term that we get for computing
+ * ```
+ * This linear term is the constant term that we get for computing
  * the gradient of the switch-side objective.
  * 
  * @param sharing_bias The sharing problem bias. A vector with one etnry
@@ -174,20 +181,20 @@ template <typename Scalar> static void project_simplex(
  * A single, fused kernel for all PGD operations for solving
  * the switch-side QP.
  * 
- * PGD OPERATION
- * -------------
+ * ## PGD Operation
+ * 
  * In parallel, we solve the quadratic program:
- * 
+ * ```
  *      minimize 1/2 d_k^2 (Y_k - Y_k^{(old)})^T G (Y_k - Y_k^{(old)}) + Y_k^T L
- * 
+ * ```
  * This admits the gradient:
- * 
+ * ```
  *      d_k^2 G (Y_k - Y_k^{(old)}) + L
- * 
+ * ```
  * And we get the next candidate as:
- * 
+ * ```
  *      Z_k - step_k (d_k^2 G (Y_k - Y_k^{(old)}) + L)
- * 
+ * ```
  * Here, `Z` is the current iterate vector (which is often a Nesterov extrapolated
  * vector, and hence not ncessarily primal feasible).
  * 
@@ -195,24 +202,24 @@ template <typename Scalar> static void project_simplex(
  * projection is just a plain simplex projection if `orthant` is false, or will be
  * skipped if the candidate already lies inside the simplex and `orthant` is true.
  * 
- * OBJECTIVE GAP CERTIFICATE
- * -------------------------
+ * ## Objective Gap Certificate
+ * 
  * To certify optimality, we use a Frank-Wolfe gap on the current iterate.
  * Note that we cannot pre-compute this, as `Z` is not necessarily primal feasible
  * in case it is Nesterov extrapolated.
  * Now, assume that the gradient evaluated on `out` is `g`. Then the gap is:
- * 
- *      minimum g^T (out - y)
- * 
+ * ```
+ *      maximum g^T (out - y)
+ * ```
  * Over all feasible `y`. For the case of the simplex, `min g^T y` is just the
  * element-wise minimum of `g` (or 0 if the interior is allowed). This gives the
  * relation:
- * 
+ * ```
  *      gap = g^T out - min_i g_i            (if `orthant` is false)
  *      gap = g^T out - min(min_i g_i, 0)    (if `orthant` is true )
- * 
+ * ```
  * The relative gap is then calculated by evaluating the primal objective and then
- * reporting `gap / obj`.
+ * reporting `gap / max(1, abs(obj), abs(obj - gap))`.
  * 
  * @param z The current iterate (and often accelerated).
  * @param y_old The previous iterate. This is an artifact of the ADMM sharing form,
@@ -249,10 +256,12 @@ template <typename Scalar> void projected_qp_step(
 /**
  * Estimate the Lipschitz constant of the each commodity. This is quite
  * simply the dominant eigenvalue of the matrix:
- * 
+ * ```
  *      d_k^2 G_k
- * 
- * We estimate this with a few power method iterations.
+ * ```
+ * For ThroughputProximal, the matrix is d_k^2 (G_k + 1 1^T).
+ * We estimate this with a few power method iterations. The estimate is not
+ * a certified upper bound on the dominant eigenvalue.
  * 
  * @param iterations Number of power method iterations.
  * @param output The output buffer that holds the Lipschitz constant for
@@ -332,9 +341,9 @@ template <typename Scalar> Scalar total_flow(
 
 /**
  * Returns the sum of squared norm for:
- * 
+ * ```
  *      d_k alpha^{(k)} (current - previous)
- * 
+ * ```
  * This is used to calculate ADMM infeasibilities and is basically
  * just the Forbenius norm of a ragged array.
  * 
@@ -354,9 +363,9 @@ template <typename Scalar> double assignment_delta_norm_squared(
 
 /**
  * Given a vector `edge_duals`, returns for each `k`:
- * 
+ * ```
  *      min_t alpha^{(k)}_t^T (edge_duals * edge_scale)
- * 
+ * ```
  * This is needed for calculating the dual objective.
  * 
  * @param edge_duals The dual vector for edge prices.

@@ -96,7 +96,8 @@ class SimpleOnlineTECoordinator(TELP[PathBasedSimplifiedOnlineTEParameters], Dis
                 infeasibility_bound=5,
                 multiplicative_factor=2,
                 strike_count=3
-            )
+            ),
+            # acceleration=NesterovAccelerationParams(restart_threshold=0.9)
         )
 
     def _get_Z_value(self) -> CPUArray:
@@ -192,8 +193,6 @@ class SimpleOnlineTECoordinator(TELP[PathBasedSimplifiedOnlineTEParameters], Dis
             abs(float(np.max(
                 self._sharing_wrapper.X_mean * self.number_of_commodities
             )) - self._mlu_solver.current_u)
-        # congestion_vec = np.clip((self._sharing_wrapper.X_mean * self.number_of_commodities) - self._mlu_solver.current_u, a_min=0, a_max=None)
-        # congestion = np.max(congestion_vec)
         return self._primal_objective, gap, self._sharing_wrapper.step_size, admm_primal_feasible, congestion
 
     def _cold_start(self) -> bool:

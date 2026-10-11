@@ -12,7 +12,7 @@ from te.algorithms.sub_algorithms.pgd import (
 )
 from te.path_providers import *
 from utils.logging import as_warning
-from .packed_paths import PackedPathBatch
+from te.path_providers.packed_paths import PackedPathBatch
 from .solver_params import PathBasedSimplifiedOnlineTEParameters, WorkerUpdateData
 
 
