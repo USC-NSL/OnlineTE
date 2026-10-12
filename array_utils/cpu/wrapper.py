@@ -22,7 +22,7 @@ cpu_int_fill: Callable[[Tuple[int], int], IntegerCPUArray] = lambda shape, fill:
 cpu_bool_zeros: Callable[[Tuple[int]], BooleanCPUArray] = lambda shape: np.zeros(shape=shape, dtype=bool)
 """Always returns zero array with Boolean values, regardless of global data type"""
 
-cpu_copyto: Callable[[CPUArray, CPUArray]] = lambda src, dst: np.copyto(dst, src)
+cpu_copyto: Callable[[CPUArray, CPUArray], None] = lambda src, dst: np.copyto(dst, src)
 
 
 def cpu_mmap(path: str, shape: Tuple[int], mode: str, dtype: Optional[DTypeLike] = None):
