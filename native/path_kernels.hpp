@@ -259,7 +259,6 @@ template <typename Scalar> void projected_qp_step(
  * ```
  *      d_k^2 G_k
  * ```
- * For ThroughputProximal, the matrix is d_k^2 (G_k + 1 1^T).
  * We estimate this with a few power method iterations. The estimate is not
  * a certified upper bound on the dominant eigenvalue.
  * 

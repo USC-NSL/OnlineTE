@@ -166,7 +166,24 @@ class AsynchronousgRPCCoordinatorBackend[P: SolverParams](CoordinatorBackendBase
         return self._event_loop.run_until_complete(self._get_X_ek())
 
     async def _stub_net_update(self, node_id: int, request: core_messages.NetworkUpdateRequest):
+        if getattr(self, "require_full_barrier", False):
+            return await self._worker_stubs[node_id].DoNetworkUpdate(request, timeout=self._rpc_params.Timeout)
         return await self._worker_stubs[node_id].DoNetworkUpdate(request)
+
+    async def _full_network_update(self, message):
+        """One fresh response per worker; drain pending calls before propagating failure."""
+        tasks = [asyncio.create_task(self._stub_net_update(i, message))
+                 for i in range(self.number_of_workers)]
+        try:
+            responses = await asyncio.gather(*tasks)
+            if any(response is None for response in responses):
+                raise RuntimeError("Missing worker response in full-barrier round")
+            return [self._deserialize_update_response(response) for response in responses]
+        except BaseException:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
 
     def _deserialize_update_response(self, message: core_messages.NetworkUpdateResponse) -> Tuple[int, CPUArray, Dict[str, float]]:
         return message.runtime_us, serialized_message_to_array(message.means), message.data
@@ -182,11 +199,16 @@ class AsynchronousgRPCCoordinatorBackend[P: SolverParams](CoordinatorBackendBase
             sharing_dual=array_to_serialized_message(sharing_dual),
             sharing_rho=sharing_rho
         )
-        updates = self._barrier.scatter_gather(
-            message=message,
-            node_coroutine=self._stub_net_update,
-            store_operation=self._deserialize_update_response 
-        )
+        if getattr(self, "require_full_barrier", False):
+            if self._barrier.min_arrival != self.number_of_workers:
+                raise ValueError("Double-loop path solving requires a full worker barrier")
+            updates = self._event_loop.run_until_complete(self._full_network_update(message))
+        else:
+            updates = self._barrier.scatter_gather(
+                message=message,
+                node_coroutine=self._stub_net_update,
+                store_operation=self._deserialize_update_response
+            )
         runtimes, means, data = zip(*updates)
         combined_data = defaultdict(float)
         for d in data:

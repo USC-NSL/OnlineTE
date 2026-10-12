@@ -10,7 +10,7 @@ from array_utils import set_global_precision
 from array_utils.cpu.types import *
 from te.algorithms.sub_algorithms.admm import DistributedSharingWrapper, AdaptiveStepSizeParams, NesterovAccelerationParams
 from te.algorithms.communication import *
-from te.algorithms.sub_algorithms.capacity_qp import CapacityQP
+from te.algorithms.sub_algorithms.capacity_qp import CapacityQP, CapacityQPMode
 from .solver_params import PathBasedSimplifiedOnlineTEParameters, WorkerUpdateData
 
 
@@ -19,8 +19,7 @@ class SimpleOnlineTECoordinator(TELP[PathBasedSimplifiedOnlineTEParameters], Dis
         self, 
         problem_description: TEProblemDescription,
         solver_params: PathBasedSimplifiedOnlineTEParameters,
-        node_params: DistributedSolverNodeParams,
-        *args, **kwargs
+        node_params: DistributedSolverNodeParams
     ) -> None:
         super().__init__(
             problem_description=problem_description,
@@ -29,13 +28,15 @@ class SimpleOnlineTECoordinator(TELP[PathBasedSimplifiedOnlineTEParameters], Dis
         )
         # MLU QP solver
         self._mlu_solver: CapacityQP = CapacityQP(
+            mode=CapacityQPMode.SHARING,
             rho=solver_params.Rho,
             num_edges=self.num_edges,
             num_commodities=self.number_of_commodities,
             feasibility_tolerance=0.01 * self.feasibility_tolerance,
             optimality_tolerance=0.01 * self.optimality_tolerance,
             objective=self.objective,
-            capacities=None
+            capacities=None,
+            scratch=self.optimality_tolerance
         )
         # ADMM
         self._sharing_wrapper: Optional[DistributedSharingWrapper] = None
@@ -92,12 +93,12 @@ class SimpleOnlineTECoordinator(TELP[PathBasedSimplifiedOnlineTEParameters], Dis
         self._sharing_wrapper = DistributedSharingWrapper(
             (self.number_of_edges, self.number_of_commodities),
             self._solver_params.Rho,
-            adaptation=AdaptiveStepSizeParams(
-                infeasibility_bound=5,
-                multiplicative_factor=2,
-                strike_count=3
-            ),
-            # acceleration=NesterovAccelerationParams(restart_threshold=0.9)
+            # adaptation=AdaptiveStepSizeParams(
+            #     infeasibility_bound=5,
+            #     multiplicative_factor=2,
+            #     strike_count=3
+            # ),
+            acceleration=NesterovAccelerationParams(restart_threshold=0.9)
         )
 
     def _get_Z_value(self) -> CPUArray:
@@ -133,7 +134,7 @@ class SimpleOnlineTECoordinator(TELP[PathBasedSimplifiedOnlineTEParameters], Dis
         )
         if self.objective == TEObjective.MAX_FLOW:
             self._total_flow = data[WorkerUpdateData.DEMANDS]
-        self._sharing_wrapper.record_mean_X_update(
+        SHARING.record_mean_X_update(
             next_X_mean=X_bar,
             delta_X_frobenius=data[WorkerUpdateData.NORM_F_DELTA_X]
         )
@@ -142,7 +143,7 @@ class SimpleOnlineTECoordinator(TELP[PathBasedSimplifiedOnlineTEParameters], Dis
                 self._dual_objective = data[WorkerUpdateData.DUAL_OBJ]
             case TEObjective.MAX_FLOW:
                 self._dual_objective = - data[WorkerUpdateData.DUAL_OBJ] - np.sum(
-                    self._sharing_wrapper.dual_var * self._sharing_wrapper.step_size
+                    SHARING.dual_var * SHARING.step_size
                 )
             case _: raise NotImplementedError
     
@@ -175,7 +176,7 @@ class SimpleOnlineTECoordinator(TELP[PathBasedSimplifiedOnlineTEParameters], Dis
         if self._mlu_solver is not None:
             self._mlu_solver.close()
 
-    def _single_solve_step(self) -> Tuple[float, float, float, bool, float]:
+    def _single_solve_step(self) -> Tuple[float, float, float, float]:
         self._do_network_update()
         self._do_coordinator_update()
 
@@ -185,20 +186,17 @@ class SimpleOnlineTECoordinator(TELP[PathBasedSimplifiedOnlineTEParameters], Dis
             gap = abs(d - p) / abs(p)
         else:
             gap = np.inf
-        admm_primal_feasible = self._sharing_wrapper.is_primal_feasible(
-            eps_abs=self.feasibility_tolerance,
-            eps_rel=self.optimality_tolerance
-        )
         congestion = \
-            abs(float(np.max(
-                self._sharing_wrapper.X_mean * self.number_of_commodities
-            )) - self._mlu_solver.current_u)
-        return self._primal_objective, gap, self._sharing_wrapper.step_size, admm_primal_feasible, congestion
+            float(np.clip(
+                np.max(self._sharing_wrapper.X_mean * self.number_of_commodities) - self._mlu_solver.current_u,
+                a_min=0, a_max=None
+            ))
+        return p, gap, self._sharing_wrapper.step_size, congestion
 
     def _cold_start(self) -> bool:
         with TQDMSpinner('Cold Start.') as progress_bar:
             while self.backend.is_alive:
-                val, gap, step, admm_primal_feasible, congestion = self._single_solve_step()
+                val, gap, step, congestion = self._single_solve_step()
                 progress_bar.set_postfix({
                     'Obj. Val.': f'{val:.4f}',
                     'Obj. Gap': f'{gap*100:.2f}%',
@@ -206,8 +204,7 @@ class SimpleOnlineTECoordinator(TELP[PathBasedSimplifiedOnlineTEParameters], Dis
                     'Congestion': f'{congestion*100:.2f}%'
                 })
                 if (gap < self.optimality_tolerance and \
-                    admm_primal_feasible and \
-                    congestion < self.optimality_tolerance):
+                    congestion < self.feasibility_tolerance):
                     return True
                 progress_bar.update()
         return False
@@ -215,7 +212,7 @@ class SimpleOnlineTECoordinator(TELP[PathBasedSimplifiedOnlineTEParameters], Dis
     def _warm_start(self) -> bool:
         with TQDMTimer(timeout=self._solver_params.Timeout, desc="Warm Start.") as progress_bar:
             while self.backend.is_alive and progress_bar.update():
-                val, gap, step, admm_primal_feasible, congestion = self._single_solve_step()
+                val, gap, step, congestion = self._single_solve_step()
                 progress_bar.set_postfix({
                     'Obj. Val.': f'{val:.4f}',
                     'Obj. Gap': f'{gap*100:.2f}%',
@@ -223,8 +220,7 @@ class SimpleOnlineTECoordinator(TELP[PathBasedSimplifiedOnlineTEParameters], Dis
                     'Congestion': f'{congestion*100:.2f}%'
                 })
                 if (gap < self.optimality_tolerance and \
-                    admm_primal_feasible and \
-                    congestion < self.optimality_tolerance):
+                    congestion < self.feasibility_tolerance):
                     return True
         return not progress_bar.timed_out
 
@@ -262,11 +258,8 @@ class SimpleOnlineTECoordinator(TELP[PathBasedSimplifiedOnlineTEParameters], Dis
             # time, so we should initialize the outer ADMM wrapper
             self._sharing_wrapper.initialize(X_bar)
         else:
-            # On subsequent iterations, only record an X-update
-            # Use `np.inf` as the frobenius norm here (essentially,
-            # meaning that the infeasibility is infinite). This is a
-            # deliberate conservative choice.
-            self._sharing_wrapper.record_mean_X_update(X_bar, np.inf)
+            # Demand changes occur between ADMM rounds, before the next X-step.
+            self._sharing_wrapper.refresh_mean_X(X_bar)
 
     def _update_objective(self, tm: np.ndarray):
         pass

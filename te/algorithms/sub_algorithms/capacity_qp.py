@@ -1,4 +1,5 @@
 import numpy as np
+from enum import StrEnum
 from typing import Optional
 from ortools.pdlp import solve_log_pb2
 from ortools.pdlp import solvers_pb2
@@ -8,17 +9,26 @@ from array_utils.cpu.types import *
 from utils.pdlp_utils import *
 
 
+
+class CapacityQPMode(StrEnum):
+    CONSENSUS = "Consensus"
+    SHARING = "Sharing"
+
+
 class CapacityQP:
     def __init__(
         self,
+        mode: CapacityQPMode,
         rho: float,         
         num_edges: int,
         num_commodities: int,
         feasibility_tolerance: float,
         optimality_tolerance: float,
         objective: TEObjective = TEObjective.MLU,
-        capacities: Optional[CPUArray] = None
+        capacities: Optional[CPUArray] = None,
+        scratch: float = 0.0
     ):
+        self._mode: float = mode
         self._rho: float = rho
         self._num_edges: int = num_edges
         self._num_commodities: int = num_commodities
@@ -27,6 +37,7 @@ class CapacityQP:
         self._optimality_tolerance = optimality_tolerance
         self._capacities = np.array(capacities, dtype=np.float64)\
             if capacities is not None else np.ones((num_edges,))
+        self._scratch = scratch
 
         self._current_F: np.ndarray = None
         self._solved: bool = False
@@ -93,24 +104,39 @@ class CapacityQP:
     def _get_capacity_constraint(self) -> ConstraintVector:
         constraints = ConstraintVector.allocate(self._NUM_VARIABLES, self._NUM_CONSTRAINTS)
         caps = self._capacities
+        scratch = self._scratch
+
+        match self._mode:
+            case CapacityQPMode.SHARING: coeff = self._num_commodities
+            case CapacityQPMode.CONSENSUS: coeff = 1.0
+            case _: raise ValueError
 
         N = self.num_edges
         for e in range(N):
-            constraints.coeffs[e, e] = self._num_commodities
-            constraints.coeffs[e, -1] = -caps[e]
+            constraints.coeffs[e, e] = coeff
+            constraints.coeffs[e, -1] = -caps[e] * (1 - scratch)
         constraints.lowers.fill(-np.inf)
         return constraints
     
     def _get_objective_matrix_diagonal(self) -> np.ndarray:
-        d = np.full((self._NUM_VARIABLES,), fill_value=self._rho * self._num_commodities)
-        # d = np.full((self._NUM_VARIABLES,), fill_value=self._rho)
+        match self._mode:
+            case CapacityQPMode.SHARING: coeff = self._rho * self._num_commodities
+            case CapacityQPMode.CONSENSUS: coeff = self._rho
+            case _: raise ValueError
+
+        d = np.full((self._NUM_VARIABLES,), fill_value=coeff)
         d[-1] = 0
         return d
     
     def _get_objective_vector(self) -> np.ndarray:
         out = np.zeros((self._NUM_VARIABLES,))
-        out[:-1] = -self._current_F * self._rho * self._num_commodities
-        # out[:-1] = -self._current_F * self._rho
+
+        match self._mode:
+            case CapacityQPMode.SHARING: coeff = self._rho * self._num_commodities
+            case CapacityQPMode.CONSENSUS: coeff = self._rho
+            case _: raise ValueError
+
+        out[:-1] = -self._current_F * coeff
         if self.is_mlu:
             out[-1] = 1
         return out

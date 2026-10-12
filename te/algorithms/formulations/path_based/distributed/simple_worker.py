@@ -1,4 +1,3 @@
-import time
 import networkx as nx
 from typing import Optional, Tuple, Dict
 from array_utils import set_global_precision
@@ -255,19 +254,20 @@ class SimpleOnlineTEWorkerNode(DistributedSolverNodeBase):
         # self._sharing_dual_cached = sharing_dual * sharing_rho / self.total_commodity_count
         # X-step
         DENSE = self._dense_solver
-        start = time.perf_counter_ns()
         mean = DENSE.update(self._sharing_bias_cached, self._sharing_rho_cached)
-        total_routed_flow = DENSE.total_flow
         norm_F_delta_X = DENSE.norm_F_delta_X
         dual_objective = DENSE.dual_objective_term(
             self._sharing_dual_cached
         )
         DENSE.update_Y_tk_old()
-        return (time.perf_counter_ns() - start) // 1000, mean, {
-            WorkerUpdateData.DEMANDS: total_routed_flow,
+        data = {
             WorkerUpdateData.NORM_F_DELTA_X: norm_F_delta_X,
             WorkerUpdateData.DUAL_OBJ: dual_objective
         }
+        if self._objective == TEObjective.MAX_FLOW:
+            data[WorkerUpdateData.DEMANDS] = DENSE.total_flow
+        # Preserve the backend tuple interface; zero runtime is omitted on the wire.
+        return 0, mean, data
     
     def report_chunk(self) -> CPUArray:
         return self._dense_solver.X_ek

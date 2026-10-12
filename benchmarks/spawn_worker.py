@@ -80,7 +80,7 @@ if __name__ == '__main__':
     
     print(f'RPC Parameters:\n{rpc_params.str_all()}')
     worker_node_cls =\
-        path_based_solver.OnlineTEWorkerNode\
+        path_based_solver.SimpleOnlineTEWorkerNode\
         if solver_type == 'path'\
         else edge_based_solver.OnlineTEWorkerNode
     print(f'Node Class: {worker_node_cls}')

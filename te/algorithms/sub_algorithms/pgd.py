@@ -117,7 +117,6 @@ def do_path_based_maxflow_pgd(
 ) -> CPUArray:
     t = 1
     z_block = np.copy(y_block)
-    active = np.arange(num_paths)[:, None] < beta_block
     for _ in range(n_iter):
         grad_block = \
             path_based_projection_nnz(
@@ -129,11 +128,6 @@ def do_path_based_maxflow_pgd(
                 num_paths, demand_block, capacities
             ) - \
             demand_block / eta
-        # Sum only active paths; padded entries are not throughput variables.
-        throughput_delta = np.sum(
-            np.where(active, z_block - y_block_old, 0), axis=0
-        )
-        grad_block += demand_block ** 2 * throughput_delta
         candidate = project_onto_probability_orthant(z_block - step_sizes * grad_block, beta_block)
         t_acc = cpu_cast_float(0.5 * (1.0 + np.sqrt(1.0 + 4.0 * t * t)))
         z_block = candidate + cpu_cast_float((t - 1.0)/t_acc) * (candidate - y_block)
@@ -180,7 +174,7 @@ def _do_packed_path_based_nesterov_pgd(
             step_sizes=step_sizes,
             orthant=orthant,
             unconverged=unconverged,
-            output=candidate
+            output=candidate,
         )
         still_unconverged = relative_gaps[unconverged] > optimality_tolerance
         converged = unconverged[~still_unconverged]

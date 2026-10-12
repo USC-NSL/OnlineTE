@@ -9,7 +9,7 @@ from numba import set_num_threads
 from numba.typed import List as NumbaList
 
 from array_utils import SINGLE_PRECISION, set_global_precision
-from te.algorithms.formulations.path_based.distributed.packed_paths import PackedPathBatch
+from te.path_providers.packed_paths import PackedPathBatch
 from te.algorithms.sub_algorithms.pgd import (
     do_packed_path_based_nesterov_pgd,
     do_path_based_nesterov_pgd,

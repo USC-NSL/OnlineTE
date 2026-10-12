@@ -300,7 +300,7 @@ class PackedPathBatch:
         step_sizes: np.ndarray,
         orthant: bool,
         unconverged: np.ndarray,
-        output: np.ndarray
+        output: np.ndarray,
     ) -> np.ndarray:
         kernels = require_native_kernels()
         for name, array in (("z", z), ("y_old", y_old), ("linear", linear), ("output", output)):
@@ -328,9 +328,9 @@ class PackedPathBatch:
         return relative_gaps
 
     def estimate_lipschitz(
-        self, demands: np.ndarray, iterations: int = 20
+        self, demands: np.ndarray, iterations: int = 20,
     ) -> np.ndarray:
-        """Estimate d_k^2 lambda_max(G_k), or G_k + 1 1^T for Max-Flow.
+        """Estimate d_k^2 lambda_max(G_k).
 
         Uses the existing power iteration; this is an eigenvalue estimate,
         rather than a certified upper bound. No extra Gram storage is needed.

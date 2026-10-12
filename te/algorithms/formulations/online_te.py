@@ -2,7 +2,6 @@
 A helper sript for spawning a distributed solver using our
 nested ADMM backbone. It parses and stores:
 - Algorithm Parameters
-- MLU solver backend parameters
 - Communication backend parameters
 """
 
@@ -17,7 +16,6 @@ from te.algorithms.base import *
 from te.algorithms.communication.base import *
 from te.algorithms.communication.helper import *
 from te.algorithms.formulations.helper import *
-from te.algorithms.sub_algorithms.mlu_backends.aggregate import *
 
 
 @dataclass
@@ -32,8 +30,6 @@ class OnlineTESolverDescription:
     MasterCLS: type[TELP]
     MasterBackendCLS: type[CommunicationBackendBase]
     MasterRPCParams: RPCParams
-    MLUCLS: Optional[type[ControllerMLUSolver]]
-    MLUParams: Optional[SolverParams]
     WorkerCLS: type[DistributedSolverNodeBase]
     WorkerBackendCLS: type[CommunicationBackendBase]
     WorkerRPCParamList: List[RPCParams]
@@ -41,13 +37,10 @@ class OnlineTESolverDescription:
 
 def online_te_parser(
     name: str,
-    solver_param_cls: type[SolverParams],
-    simple: bool = False
+    solver_param_cls: type[SolverParams]
 ) -> jsonargparse.ArgumentParser:
     parser = jsonargparse.ArgumentParser(name)
     parser.add_class_arguments(solver_param_cls, 'SolverParams', help='Algorithm parameters')
-    if not simple:
-        add_mlu_backend_parser(parser)
     single_controller_topology_address_parser(parser)
     add_communication_backend_params_parser(parser)
     return parser
@@ -57,14 +50,9 @@ def parse_online_te_config(
     args: jsonargparse.Namespace,
     solver_param_cls: type[SolverParams],
     coordinator_cls: type[TELP],
-    worker_cls: type[DistributedSolverNodeBase],
-    simplified: bool = False
+    worker_cls: type[DistributedSolverNodeBase]
 ) -> OnlineTESolverDescription:
     solver_params = solver_param_cls.make_from_args(args.SolverParams)
-    if not simplified:
-        mlu_backend_params, mlu_backend_cls = parse_mlu_backend_params(args)
-    else:
-        mlu_backend_params, mlu_backend_cls = None, None
     master_addr, worker_addr_list = parse_single_controller_topology_address_parser(args)
     comm_backend_description = parse_communication_backend_params(master_addr, worker_addr_list, args)
     return OnlineTESolverDescription(
@@ -72,8 +60,6 @@ def parse_online_te_config(
         MasterCLS=coordinator_cls,
         MasterBackendCLS=comm_backend_description.ControllerBackendCLS,
         MasterRPCParams=comm_backend_description.ControllerBackendParams,
-        MLUCLS=mlu_backend_cls,
-        MLUParams=mlu_backend_params,
         WorkerCLS=worker_cls,
         WorkerBackendCLS=comm_backend_description.WorkerBackendCLS,
         WorkerRPCParamList=comm_backend_description.WorkerBackendParams
@@ -98,9 +84,7 @@ def spawn_online_te_solver(
             problem, 
             solver.MasterCLS,
             solver.AlgorithmParams,
-            node_params,
-            solver.MLUCLS,
-            solver.MLUParams
+            node_params
         )
 
     num_workers = len(solver.MasterRPCParams.Workers)

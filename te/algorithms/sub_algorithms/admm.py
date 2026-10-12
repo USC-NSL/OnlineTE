@@ -562,6 +562,55 @@ class ADMMWrapper:
         return p_inf + d_inf
 
 
+class VectorConsensusWrapper(ADMMWrapper):
+    """
+    The wrapper for an ADMM consensus problem, which means that `A = I`,
+    `B = -I` and `C = 0`.
+    """
+    def __init__(
+        self,
+        num_elems: int,
+        rho: float,
+        alpha: Optional[float] = None,
+        acceleration: Optional[NesterovAccelerationParams] = None,
+        adaptation: Optional[AdaptiveStepSizeParams] = None
+    ):
+        super().__init__(
+            rho=rho,
+            alpha=alpha,
+            acceleration=acceleration,
+            adaptation=adaptation
+        )
+        self._set_shapes(
+            (num_elems, num_elems),
+            (num_elems, num_elems),
+            (num_elems,)
+        )
+        # Sentinels satisfy the base initialization contract without E^2 storage.
+        self._A = self._B = True
+        self._C = 0
+
+    def set_matrices(self, *args, **kwargs):
+        raise ValueError('You should never need this!')
+
+    def _mul_A(self, value):
+        return value
+
+    def _mul_B(self, value):
+        return -value
+
+    def _mul_rho_A_t(self, value):
+        return self.step_size * value
+
+    def is_primal_feasible(self, eps_abs: float, eps_rel: float) -> bool:
+        N, = self._X_shape
+        eps_primal = eps_abs * np.sqrt(N) + eps_rel * max([
+            np.linalg.norm(self._X),
+            np.linalg.norm(self._Z)
+        ])
+        return self.primal_infeasibility <= eps_primal
+
+
 """
 The wrapper for an ADMM sharing problem:
 
@@ -735,10 +784,10 @@ class DistributedSharingWrapper:
 
     def _require_stage(self, expected: str):
         self._require_initialized()
-        # if self._round_stage != expected:
-        #     raise RuntimeError(
-        #         f"Expected sharing round stage '{expected}', got '{self._round_stage}'"
-        #     )
+        if self._round_stage != expected:
+            raise RuntimeError(
+                f"Expected sharing round stage '{expected}', got '{self._round_stage}'"
+            )
 
     @property
     def mode(self) -> ADMMMode:
@@ -835,6 +884,18 @@ class DistributedSharingWrapper:
         self._X_mean = cpu_array(next_X_mean)
         self._delta_X_frobenius = float(delta_X_frobenius)
         self._round_stage = "x_recorded"
+
+    def refresh_mean_X(self, next_X_mean: CPUArray):
+        """Refresh externally changed demands between rounds, preserving Z and duals."""
+        self._require_stage("finalized")
+        if next_X_mean.shape != self._dual_shape or not np.all(np.isfinite(next_X_mean)):
+            raise ValueError("Invalid refreshed sharing mean")
+        self._X_mean = cpu_array(next_X_mean)
+        self._X_mean_old = cpu_array(next_X_mean)
+        self._delta_X_frobenius = None
+        self._pinf_list.clear()
+        self._dinf_list.clear()
+        self._momentum_inf_list.clear()
 
     def record_mean_Z_update(self, next_Z_mean: CPUArray):
         """Record the Z-update step output through the mean"""

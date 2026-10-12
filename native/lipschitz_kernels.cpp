@@ -23,6 +23,10 @@ void estimate_lipschitz(
         const int64_t beta = commodity_offsets[k + 1] - commodity_offsets[k];
         const Scalar *block = q + q_offsets[k];
         const Scalar demand_sq = d[k] * d[k];
+        if (demand_sq == Scalar(0)) {
+            out[k] = Scalar(0);
+            continue;
+        }
         std::vector<Scalar> v(static_cast<size_t>(beta), Scalar(1));
         std::vector<Scalar> result(static_cast<size_t>(beta), Scalar(0));
 

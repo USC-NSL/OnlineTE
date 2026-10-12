@@ -584,7 +584,7 @@ class PackedPathKernelTests(unittest.TestCase):
                 expected.append(np.dot(result, vector) / np.dot(vector, vector))
             np.testing.assert_allclose(actual, np.asarray(expected), rtol=2e-6, atol=1e-7)
 
-    def test_maxflow_proximal_step_and_gap_match_dense_objective(self):
+    def test_maxflow_edge_step_and_gap_match_dense_objective(self):
         rng = np.random.default_rng(20261009)
         for dtype in (np.float32, np.float64):
             for scaled in (False, True):
@@ -600,11 +600,10 @@ class PackedPathKernelTests(unittest.TestCase):
                     gaps = batch.projected_qp_step(
                         z, old, linear, demands, steps, True,
                         np.arange(batch.num_commodities, dtype=np.int64), output,
-                        throughput_proximal=True,
                     )
                     for k, gram in enumerate(unpack_blocks(batch)):
                         start, end = batch.commodity_path_offsets[k:k + 2]
-                        hessian = float(demands[k]) ** 2 * (gram.astype(np.float64) + 1)
+                        hessian = float(demands[k]) ** 2 * gram.astype(np.float64)
                         delta = z[start:end].astype(np.float64) - old[start:end]
                         trial = z[start:end] - steps[k] * (hessian @ delta + linear[start:end])
                         trial = np.maximum(trial, 0)
@@ -621,21 +620,21 @@ class PackedPathKernelTests(unittest.TestCase):
                     # Edge-load residuals and dual reporting must keep the edge-only Gram.
                     np.testing.assert_array_equal(batch.gram_values, stored_gram)
 
-    def test_maxflow_lipschitz_matches_augmented_hessian_eigenvalues(self):
+    def test_maxflow_lipschitz_matches_edge_hessian_eigenvalues(self):
         for dtype in (np.float32, np.float64):
             for scaled in (False, True):
                 with self.subTest(dtype=dtype, scaled=scaled):
                     batch, _ = self._make_batch(dtype, scaled)
                     demands = np.asarray([0.7, 1.5, 2.0], dtype=dtype)
-                    actual = batch.estimate_lipschitz(demands, throughput_proximal=True)
+                    actual = batch.estimate_lipschitz(demands)
                     expected = [
-                        float(demands[k]) ** 2 * np.linalg.eigvalsh(gram.astype(np.float64) + 1)[-1]
+                        float(demands[k]) ** 2 * np.linalg.eigvalsh(gram.astype(np.float64))[-1]
                         for k, gram in enumerate(unpack_blocks(batch))
                     ]
                     np.testing.assert_allclose(actual, expected, rtol=2e-6, atol=1e-7)
-                    self.assertTrue(np.all(actual > batch.estimate_lipschitz(demands)))
+                    np.testing.assert_array_equal(batch.estimate_lipschitz(np.zeros_like(demands)), 0)
 
-    def test_maxflow_proximal_pgd_reaches_known_interior_optimum(self):
+    def test_maxflow_edge_pgd_reaches_known_interior_optimum(self):
         for dtype in (np.float32, np.float64):
             for scaled in (False, True):
                 with self.subTest(dtype=dtype, scaled=scaled):
@@ -648,8 +647,8 @@ class PackedPathKernelTests(unittest.TestCase):
                         start, end = batch.commodity_path_offsets[k:k + 2]
                         old[start:end] = (0.1 + 0.1 * k) / (end - start)
                         optimum[start:end] = (0.2 + 0.3 * k) / (end - start)
-                        linear[start:end] = -demands[k] ** 2 * (gram + 1) @ (optimum[start:end] - old[start:end])
-                    steps = 1 / batch.estimate_lipschitz(demands, throughput_proximal=True)
+                        linear[start:end] = -demands[k] ** 2 * gram @ (optimum[start:end] - old[start:end])
+                    steps = 1 / batch.estimate_lipschitz(demands)
                     tolerance = 1e-6 if dtype == np.float32 else 1e-10
                     result = do_packed_path_based_maxflow_pgd(
                         old.copy(), old, batch, linear, demands, steps, 500,
@@ -660,12 +659,11 @@ class PackedPathKernelTests(unittest.TestCase):
                     gaps = batch.projected_qp_step(
                         optimum, old, linear, demands, steps, True,
                         np.arange(batch.num_commodities, dtype=np.int64), output,
-                        throughput_proximal=True,
                     )
                     np.testing.assert_allclose(output, optimum, rtol=2e-6, atol=2e-7)
                     np.testing.assert_allclose(gaps, 0.0, atol=tolerance)
 
-    def test_maxflow_proximal_step_respects_active_commodities(self):
+    def test_maxflow_edge_step_respects_active_commodities(self):
         batch, _ = self._make_batch(np.float64, scaled=True)
         demands = np.ones(batch.num_commodities)
         old = np.zeros(batch.num_paths)
@@ -673,11 +671,11 @@ class PackedPathKernelTests(unittest.TestCase):
         output = np.full(batch.num_paths, -123.0)
         batch.projected_qp_step(
             old, old, linear, demands, np.full(batch.num_commodities, 0.1), True,
-            np.asarray([1], dtype=np.int64), output, throughput_proximal=True,
+            np.asarray([1], dtype=np.int64), output,
         )
         np.testing.assert_array_equal(output, [-123.0, 0.1, 0.1, -123.0, -123.0, -123.0])
 
-    def test_workers_use_maxflow_curvature_on_demand_updates(self):
+    def test_workers_use_edge_curvature_on_demand_updates(self):
         batch, capacities = self._make_batch(np.float64, scaled=True)
         demands = np.asarray([1.0, 1.5, 2.0])
         for objective in (TEObjective.MLU, TEObjective.MAX_FLOW):
@@ -697,7 +695,7 @@ class PackedPathKernelTests(unittest.TestCase):
                         solver.set_demands(next_demands)
                         expected = np.asarray([
                             float(next_demands[k]) ** 2 * np.linalg.eigvalsh(
-                                gram + (1 if objective == TEObjective.MAX_FLOW else 0)
+                                gram
                             )[-1]
                             for k, gram in enumerate(unpack_blocks(batch))
                         ])

@@ -20,7 +20,7 @@ message PathBasedOnlineTEParameters {
     optional float Rho = 3;
     optional float Eta = 4;
     optional float Gamma = 5;
-    optional int32 SwitchIterations = 6;
+    optional int32 MaxSwitchIterations = 6;
     optional string Precision = 7;
     optional bool ScaleWithCapacity = 8;
     optional int32 NumberOfPathsPerCommodity = 9;
@@ -28,6 +28,7 @@ message PathBasedOnlineTEParameters {
     optional bool AdjustGamma = 11;
     optional int32 KernelThreads = 12;
     optional float SwitchOptimalityTolerance = 13;
+    optional float Timeout = 14;
 }
 
 
