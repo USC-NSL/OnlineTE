@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import os
-import enum
 import time
 import json
 import numpy as np
 import networkx as nx
 import te.constants
 import dataclasses
+from enum import StrEnum
 from collections import defaultdict
 from typing import List, Optional, Tuple, Dict, Callable, Any, Union
 from abc import ABC, abstractmethod
@@ -20,7 +20,7 @@ from te.algorithms.objective_evaluators import *
 from te.algorithms.sub_algorithms.constraint_sanity_checks import *
 
 
-class TEObjective(str, enum.Enum):
+class TEObjective(StrEnum):
     """Describes the objective that we want to solve for"""
     MLU = "MLU"
     MAX_FLOW = "Max-Flow"
@@ -161,7 +161,7 @@ class TECcheckSummary(TableDataclass):
         )
 
 
-class SolverCallbackType(str, enum.Enum):
+class SolverCallbackType(StrEnum):
     PreMake = "Pre-Make"
     "Called at the top of the body of `make_lp`"
     PostMake = "Post-Make"

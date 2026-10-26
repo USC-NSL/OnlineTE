@@ -190,14 +190,16 @@ class AsynchronousgRPCCoordinatorBackend[P: SolverParams](CoordinatorBackendBase
 
     def do_network_update(
         self,
-        sharing_gap: CPUArray,
-        sharing_dual: CPUArray,
-        sharing_rho: float
+        sharing_bias: CPUArray,
+        edge_dual: CPUArray,
+        sharing_rho: float,
+        nested: bool
     ) -> Tuple[int, CPUArray, Dict[str, float]]:
         message = core_messages.NetworkUpdateRequest(
-            sharing_gap=array_to_serialized_message(sharing_gap),
-            sharing_dual=array_to_serialized_message(sharing_dual),
-            sharing_rho=sharing_rho
+            sharing_bias=array_to_serialized_message(sharing_bias),
+            edge_dual=array_to_serialized_message(edge_dual),
+            sharing_rho=sharing_rho,
+            nested=nested
         )
         if getattr(self, "require_full_barrier", False):
             if self._barrier.min_arrival != self.number_of_workers:
@@ -231,6 +233,9 @@ class AsynchronousgRPCCoordinatorBackend[P: SolverParams](CoordinatorBackendBase
     def close(self):
         if not self.killed:
             self._event_loop.run_until_complete(self.aclose())
+
+    def reset_barrier(self):
+        self._barrier.reset_barrier()
 
 
 __all__ = ['AsynchronousgRPCCoordinatorBackendParams', 'AsynchronousgRPCCoordinatorBackend']

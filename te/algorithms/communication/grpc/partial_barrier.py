@@ -88,6 +88,19 @@ class PartialBarrier[ScatterType, GatherType, StoreType]:
     def max_lag(self) -> int:
         return self._max_lag
 
+    def reset_barrier(self):
+        n = self.number_of_endpoints
+        self._clock: int = 0
+        for v in self._gather_tasks.values():
+            v[0].cancel()
+        self._gather_tasks.clear()
+        for t in self._scatter_tasks:
+            t.cancel()
+        self._scatter_tasks.clear()
+        self._arrival_set = set([i for i in range(n)])
+        self._storage = [None] * n
+        self._initial_response_set = {i for i in range(n)}
+
     def start_barrier(self):
         self._active = True
         if self._min_arrival == self._number_of_endpoints:
@@ -137,7 +150,7 @@ class PartialBarrier[ScatterType, GatherType, StoreType]:
             ]
 
             if (
-                len(self._arrival_set) >= self._min_arrival and \
+                len(current_batch_responses) >= self._min_arrival and \
                 not stale_nodes and \
                 len(self._initial_response_set) == 0
             ):

@@ -1,9 +1,8 @@
-import numpy as np
 import networkx as nx
-from typing import Optional
+from typing import Optional, Tuple, Dict
 from array_utils import set_global_precision
 from array_utils.cpu.types import *
-from array_utils.cpu.wrapper import cpu_fill
+from array_utils.cpu.wrapper import cpu_fill, cpu_copyto
 from te.algorithms.communication import *
 from te.algorithms.base import TEObjective
 from te.algorithms.sub_algorithms.pgd import (
@@ -11,8 +10,8 @@ from te.algorithms.sub_algorithms.pgd import (
     do_packed_path_based_nesterov_pgd,
 )
 from te.path_providers import *
-from te.path_providers.packed_paths import PackedPathBatch
 from utils.logging import as_warning
+from te.path_providers.packed_paths import PackedPathBatch
 from .solver_params import PathBasedOnlineTEParameters, WorkerUpdateData
 
 
@@ -21,25 +20,20 @@ class DenseSolver:
         demands: CPUArray,
         path_batch: PackedPathBatch,
         pgd_step: float, pgd_iters: int,
-        eta: float,
-        adjust_step_size: bool,
         capacities: CPUArray,
         objective: TEObjective,
         total_numbar_of_commodities: int,
-        optimality_tolerance: float = 1e-4,
+        optimality_tolerance: float = 1e-4
     ):
         self._paths = path_batch
         self._demands: CPUArray = cpu_array(demands)
-        self._adjust_step_size = adjust_step_size
         self._pgd_iters = pgd_iters
-        self._eta = eta
         self._capacities = cpu_array(capacities)
         self._objective = objective
         self._optimality_tolerance = optimality_tolerance
 
         self._pgd_step_0 = pgd_step
         self._total_numbar_of_commodities = total_numbar_of_commodities
-        self._K = path_batch.num_commodities
         self._N = path_batch.num_edges
         self._Y_tk = cpu_zeros((path_batch.num_paths,))
         self._initialize_splits()
@@ -50,15 +44,9 @@ class DenseSolver:
         self._Y_tk = self._paths.initialize_splits(self._capacities, self._objective)
 
     def _update_step_sizes(self):
-        if self._adjust_step_size:
-            lipschitz = self._paths.estimate_lipschitz(
-                self._demands,
-            )
-            # A zero-demand commodity has zero gradient and needs no scaling.
-            self._pgd_steps = cpu_array(np.full(self._K, self._pgd_step_0))
-            np.divide(self._pgd_step_0, lipschitz, out=self._pgd_steps, where=lipschitz > 0)
-        else:
-            self._pgd_steps = cpu_fill((self._K,), self._pgd_step_0)
+        self._pgd_steps = cpu_array(
+            self._pgd_step_0 / self._paths.estimate_lipschitz(self._demands)
+        )
 
     @property
     def X_ek(self) -> CPUArray:
@@ -80,15 +68,19 @@ class DenseSolver:
             demands=self._demands
         )
 
+    def dual_objective_term(self, edge_duals: CPUArray) -> float:
+        return self._paths.dual_objective_term(
+            edge_duals=edge_duals,
+            demands=self._demands,
+            objective=self._objective,
+            total_num_commodities=self._total_numbar_of_commodities
+        )
+
     def set_demands(self, demands: CPUArray):
-        if not np.all(np.isfinite(demands)) or np.any(demands < 0):
-            raise ValueError("Demands must be finite and nonnegative")
         self._demands = cpu_array(demands)
         self._update_step_sizes()
-        self._Y_tk_old = cpu_array(self._Y_tk)
     
-    def update(self, sharing_bias: CPUArray) -> CPUArray:
-        self._Y_tk_old = cpu_array(self._Y_tk)
+    def update(self, sharing_bias: CPUArray, sharing_rho: float, nested: bool) -> CPUArray:
         sharing_bias = cpu_array(sharing_bias)
         if self._objective == TEObjective.MLU:
             linear_term = self._paths.linear_term(sharing_bias, self._demands)
@@ -106,7 +98,7 @@ class DenseSolver:
             linear_term = self._paths.linear_term(
                 sharing_bias,
                 self._demands,
-                maxflow_shift=1.0 / self._eta,
+                maxflow_shift=1 / sharing_rho if nested else 1 / (sharing_rho*self._total_numbar_of_commodities)
             )
             self._Y_tk = do_packed_path_based_maxflow_pgd(
                 y_block=self._Y_tk,
@@ -122,13 +114,8 @@ class DenseSolver:
             raise ValueError
         return self._paths.paths_to_edge_mean(self._Y_tk, self._demands)
 
-    def dual_objective_term(self, edge_duals: CPUArray) -> float:
-        return self._paths.dual_objective_term(
-            edge_duals=edge_duals,
-            demands=self._demands,
-            objective=self._objective,
-            total_num_commodities=self._total_numbar_of_commodities
-        )
+    def update_Y_tk_old(self):
+        cpu_copyto(self._Y_tk, self._Y_tk_old)
 
 
 class OnlineTEWorkerNode(DistributedSolverNodeBase):
@@ -226,6 +213,7 @@ class OnlineTEWorkerNode(DistributedSolverNodeBase):
                 self._create_local_path_object()
                 # Save it for future use!
                 self._path_object.save(path)
+
         path_batch = PackedPathBatch.from_path_provider(
             provider=self._path_object,
             capacities=self._capacities,
@@ -237,25 +225,25 @@ class OnlineTEWorkerNode(DistributedSolverNodeBase):
             path_batch=path_batch,
             pgd_step=self._solver_params.Gamma,
             pgd_iters=self._solver_params.MaxSwitchIterations,
-            eta=self._solver_params.Eta,
-            adjust_step_size=self._solver_params.AdjustGamma,
             capacities=self._capacities,
             objective=self._objective,
             optimality_tolerance=self._solver_params.SwitchOptimalityTolerance,
             total_numbar_of_commodities=self.total_commodity_count
         )
 
-    def do_inner_loop_pgd_update(self, sharing_gap: CPUArray, sharing_dual: CPUArray, sharing_rho: float):
+    def do_inner_loop_pgd_update(
+        self,
+        sharing_bias: CPUArray,
+        edge_dual: CPUArray,
+        sharing_rho: float,
+        nested: bool
+    ) -> Tuple[int, CPUArray, Dict[str, float]]:
+        # X-step
         DENSE = self._dense_solver
-        # TODO: This one is very confusingly written right now ...
-        #       The coordinator passes `X_bar - Y_bar + u`, the inner sharing bias, as
-        #       the `sharing_gap`, and passes outer ADMM dual and rho in `sharinh_dual`
-        #       and `sharing_rho`. This is techncially correct as only the outer loop
-        #       certifies optimality, but it is still a confusing naming convention for
-        #       this function. Remember to change it!
-        mean = DENSE.update(sharing_gap)
+        mean = DENSE.update(sharing_bias, sharing_rho, nested)
         norm_F_delta_X = DENSE.norm_F_delta_X
-        dual_objective = DENSE.dual_objective_term(sharing_dual * sharing_rho)
+        dual_objective = DENSE.dual_objective_term(edge_dual)
+        DENSE.update_Y_tk_old()
         data = {
             WorkerUpdateData.NORM_F_DELTA_X: norm_F_delta_X,
             WorkerUpdateData.DUAL_OBJ: dual_objective
@@ -267,9 +255,6 @@ class OnlineTEWorkerNode(DistributedSolverNodeBase):
     
     def report_chunk(self) -> CPUArray:
         return self._dense_solver.X_ek
-    
-    def report_aggregate(self) -> CPUArray:
-        raise ValueError("This should NOT be used!")
 
     def update_demands(self, demands: CPUArray) -> CPUArray:
         self._dense_solver.set_demands(demands)

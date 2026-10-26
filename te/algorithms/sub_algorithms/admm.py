@@ -3,6 +3,7 @@ from enum import StrEnum
 from dataclasses import dataclass
 from typing import Optional, Callable, Iterator, Sequence, Tuple, List
 from array_utils.cpu.types import *
+from array_utils.cpu.wrapper import cpu_copyto
 from .nesterov import NesterovExtrapolationWrapper, default_nesterov_step_size
 
 
@@ -50,7 +51,7 @@ class SimpleStepSizeAdapter:
             return -1
         return 0
 
-    def adapt_step_size(self, p_inf: float, d_inf: float, dual_var: CPUArray) -> Optional[float]:
+    def adapt_step_size(self, p_inf: float, d_inf: float, scaled_dual_var: CPUArray) -> Optional[float]:
         if self._params is None:
             return
         adapt = self._how_adapt(p_inf, d_inf)
@@ -71,19 +72,19 @@ class SimpleStepSizeAdapter:
             TAU = self._params.multiplicative_factor
             if adapt > 0:
                 self._rho *= TAU
-                dual_var /= TAU
+                scaled_dual_var /= TAU
                 return self._rho
             elif adapt < 0:
                 self._rho /= TAU
-                dual_var *= TAU
+                scaled_dual_var *= TAU
                 return self._rho
 
-    def reset(self, new_rho: float, dual_var: CPUArray):
+    def reset(self, new_rho: float, scaled_dual_var: CPUArray):
         if not np.isfinite(new_rho) or new_rho <= 0:
             raise ValueError("new_rho must be positive and finite")
         self._tokens = 0
         self._adapt_direction = 0
-        dual_var *= (self._rho / new_rho)
+        scaled_dual_var *= (self._rho / new_rho)
         self._rho = new_rho
 
 
@@ -211,7 +212,7 @@ class ADMMWrapper:
         - When there is acceleration, this is the previous _extrapolated_ second
           state variable.
         """
-        self._dual_var: Optional[CPUArray] = None
+        self._scaled_dual_var: Optional[CPUArray] = None
         """The ADMM dual variable"""
         self._A: Optional[CPUArray] = None
         self._B: Optional[CPUArray] = None
@@ -328,8 +329,8 @@ class ADMMWrapper:
             if self._X_shape != self._Z_shape:
                 raise ValueError("Z_start is required when X and Z have different shapes")
             self._Z = cpu_array(X_start)
-        self._dual_var = cpu_zeros(self._dual_shape)
-        self._step_adapter.reset(self._initial_rho, self._dual_var)
+        self._scaled_dual_var = cpu_zeros(self._dual_shape)
+        self._step_adapter.reset(self._initial_rho, self._scaled_dual_var)
         self._iterate = 0
         self._Z_old = cpu_array(self._Z)
         self._pinf_list.clear()
@@ -338,10 +339,10 @@ class ADMMWrapper:
         # Set the mode specific properties
         match self._mode:
             case ADMMMode.ACCELERATED | ADMMMode.ACCELERATED_RESTART:
-                self._dual_nesterov = NesterovExtrapolationWrapper(self._dual_var, self._acceleration.step_sizes)
+                self._dual_nesterov = NesterovExtrapolationWrapper(self._scaled_dual_var, self._acceleration.step_sizes)
                 self._Z_nesterov = NesterovExtrapolationWrapper(self._Z, self._acceleration.step_sizes)
             case ADMMMode.OVER_RELAXED:
-                self._relaxed_state = np.empty_like(self._dual_var)
+                self._relaxed_state = np.empty_like(self._scaled_dual_var)
             case _: pass
         self._finalized = True
         self._initialized = True
@@ -361,11 +362,15 @@ class ADMMWrapper:
     @property
     def mode(self) -> ADMMMode:
         return self._mode
-    
+
     @property
-    def dual_var(self) -> CPUArray:
+    def unscaled_dual_var(self) -> CPUArray:
         self._require_initialized()
-        return self._dual_var
+        return self._scaled_dual_var * self._step_adapter._rho
+    @property
+    def scaled_dual_var(self) -> CPUArray:
+        self._require_initialized()
+        return self._scaled_dual_var
     @property
     def X(self) -> CPUArray:
         self._require_initialized()
@@ -412,7 +417,7 @@ class ADMMWrapper:
                 dual_term = self._dual_nesterov.extrapolated_state
             case _:
                 Z_term = self._mul_B(self._Z)
-                dual_term = self._dual_var
+                dual_term = self._scaled_dual_var
         return self._sub_C(Z_term + dual_term)
 
     def get_Z_step_bias(self) -> CPUArray:
@@ -427,10 +432,10 @@ class ADMMWrapper:
                 dual_term = self._dual_nesterov.extrapolated_state
             case ADMMMode.OVER_RELAXED:
                 X_term = self._relaxed_state
-                dual_term = self._dual_var
+                dual_term = self._scaled_dual_var
             case _:
                 X_term = self._mul_A(self._X)
-                dual_term = self._dual_var
+                dual_term = self._scaled_dual_var
         return self._sub_C(X_term + dual_term)
     
     def record_X_update(self, next_X: CPUArray):
@@ -463,15 +468,15 @@ class ADMMWrapper:
         self._require_stage("z_recorded")
         match self._mode:
             case ADMMMode.ACCELERATED | ADMMMode.ACCELERATED_RESTART:
-                self._dual_var = \
+                self._scaled_dual_var = \
                     self._dual_nesterov.extrapolated_state + \
                     self._sub_C(self._mul_A(self._X) + self._mul_B(self._Z))
             case ADMMMode.OVER_RELAXED:
-                self._dual_var += \
+                self._scaled_dual_var += \
                     self._relaxed_state + \
                     self._sub_C(self._mul_B(self._Z))
             case _:
-                self._dual_var += \
+                self._scaled_dual_var += \
                     self._sub_C(self._mul_A(self._X) + self._mul_B(self._Z))
         self._round_stage = "dual_updated"
 
@@ -490,18 +495,18 @@ class ADMMWrapper:
         match self._mode:
             case ADMMMode.ACCELERATED:
                 self._Z_nesterov.update(self._Z)
-                self._dual_nesterov.update(self._dual_var)
+                self._dual_nesterov.update(self._scaled_dual_var)
             case ADMMMode.ACCELERATED_RESTART:
                 if len(self._momentum_inf_list) >= 2:
                     last_inf = self._momentum_inf_list[-2]
                     current_inf = self._momentum_inf_list[-1]
                     if current_inf > self._acceleration.restart_threshold * last_inf:
-                        self._dual_nesterov.restart(self._dual_var)
+                        self._dual_nesterov.restart(self._scaled_dual_var)
                         self._Z_nesterov.restart(self._Z)
                         self._momentum_inf_list.clear()
                         return
                 self._Z_nesterov.update(self._Z)
-                self._dual_nesterov.update(self._dual_var)
+                self._dual_nesterov.update(self._scaled_dual_var)
             case _: pass
 
     def finalize_round(self) -> Optional[float]:
@@ -526,7 +531,7 @@ class ADMMWrapper:
         new_rho = self._step_adapter.adapt_step_size(
             self.primal_infeasibility,
             self.dual_infeasibility,
-            self._dual_var
+            self._scaled_dual_var
         )
         if new_rho is not None and self._dual_nesterov is not None:
             self._dual_nesterov.rescale(old_rho / new_rho)
@@ -602,6 +607,12 @@ class VectorConsensusWrapper(ADMMWrapper):
     def _mul_rho_A_t(self, value):
         return self.step_size * value
 
+    def _add_C(self, thing):
+        return thing
+
+    def _sub_C(self, thing):
+        return thing
+
     def is_primal_feasible(self, eps_abs: float, eps_rel: float) -> bool:
         N, = self._X_shape
         eps_primal = eps_abs * np.sqrt(N) + eps_rel * max([
@@ -609,6 +620,25 @@ class VectorConsensusWrapper(ADMMWrapper):
             np.linalg.norm(self._Z)
         ])
         return self.primal_infeasibility <= eps_primal
+
+    def warm_start(self, X: CPUArray, Z: CPUArray, D_unscaled: CPUArray):
+        cpu_copyto(X, self._X)
+        cpu_copyto(Z, self._Z)
+        cpu_copyto(D_unscaled / self._initial_rho, self._scaled_dual_var)
+        self._step_adapter.reset(self._initial_rho, self._scaled_dual_var)
+        self._iterate = 0
+        cpu_copyto(Z, self._Z_old)
+        self._pinf_list.clear()
+        self._dinf_list.clear()
+        self._momentum_inf_list.clear()
+        match self._mode:
+            case ADMMMode.ACCELERATED | ADMMMode.ACCELERATED_RESTART:
+                self._dual_nesterov.restart(self._scaled_dual_var)
+                self._Z_nesterov.restart(self._Z)
+            case _: pass
+        self._finalized = True
+        self._initialized = True
+        self._round_stage = "finalized"
 
 
 """
@@ -761,7 +791,7 @@ class DistributedSharingWrapper:
         self._delta_X_frobenius: Optional[float] = None
         self._Z_mean: Optional[CPUArray] = None
         self._Z_mean_old: Optional[CPUArray] = None
-        self._dual_var: Optional[CPUArray] = None
+        self._scaled_dual_var: Optional[CPUArray] = None
         self._Z_mean_nesterov: Optional[NesterovExtrapolationWrapper] = None
         self._dual_nesterov: Optional[NesterovExtrapolationWrapper] = None
 
@@ -793,9 +823,13 @@ class DistributedSharingWrapper:
     def mode(self) -> ADMMMode:
         return self._mode
     @property
-    def dual_var(self) -> CPUArray:
+    def unscaled_dual_var(self) -> CPUArray:
         self._require_initialized()
-        return self._dual_var
+        return self._scaled_dual_var * self._step_adapter._rho
+    @property
+    def scaled_dual_var(self) -> CPUArray:
+        self._require_initialized()
+        return self._scaled_dual_var
     @property
     def X_mean(self) -> CPUArray:
         self._require_initialized()
@@ -830,8 +864,8 @@ class DistributedSharingWrapper:
         self._X_mean_old = cpu_array(X_mean)
         self._Z_mean = cpu_array(X_mean)
         self._Z_mean_old = cpu_array(X_mean)
-        self._dual_var = cpu_zeros(self._dual_shape)
-        self._step_adapter.reset(self._initial_rho, self._dual_var)
+        self._scaled_dual_var = cpu_zeros(self._dual_shape)
+        self._step_adapter.reset(self._initial_rho, self._scaled_dual_var)
         self._delta_X_frobenius = None
         self._pinf_list.clear()
         self._dinf_list.clear()
@@ -841,7 +875,7 @@ class DistributedSharingWrapper:
                 self._Z_mean, self._acceleration.step_sizes
             )
             self._dual_nesterov = NesterovExtrapolationWrapper(
-                self._dual_var, self._acceleration.step_sizes
+                self._scaled_dual_var, self._acceleration.step_sizes
             )
         else:
             self._Z_mean_nesterov = None
@@ -853,15 +887,16 @@ class DistributedSharingWrapper:
         """
         Return `b` such that the ADMM penalty is:
             || X - X^{m} + b ||_2^2
+        We often refer to this quantity as the `sharing_bias`.
         """
         self._require_stage("finalized")
         if self._acceleration is None:
             Z_mean = self._Z_mean
-            dual_var = self._dual_var
+            scaled_dual_var = self._scaled_dual_var
         else:
             Z_mean = self._Z_mean_nesterov.extrapolated_state
-            dual_var = self._dual_nesterov.extrapolated_state
-        return self._X_mean - Z_mean + dual_var
+            scaled_dual_var = self._dual_nesterov.extrapolated_state
+        return self._X_mean - Z_mean + scaled_dual_var
 
     def get_Z_step_bias(self) -> CPUArray:
         """
@@ -869,9 +904,9 @@ class DistributedSharingWrapper:
             || -Z_bar + b ||_2^2
         """
         self._require_stage("x_recorded")
-        dual_var = self._dual_var if self._acceleration is None \
+        scaled_dual_var = self._scaled_dual_var if self._acceleration is None \
             else self._dual_nesterov.extrapolated_state
-        return self._X_mean + dual_var
+        return self._X_mean + scaled_dual_var
 
     def record_mean_X_update(self, next_X_mean: CPUArray, delta_X_frobenius: float):
         """Record the X update and its squared full-matrix Frobenius change."""
@@ -916,9 +951,9 @@ class DistributedSharingWrapper:
         """Update the dual variable"""
         self._require_stage("z_recorded")
         if self._acceleration is None:
-            self._dual_var += (self._X_mean - self._Z_mean)
+            self._scaled_dual_var += (self._X_mean - self._Z_mean)
         else:
-            self._dual_var = \
+            self._scaled_dual_var = \
                 self._dual_nesterov.extrapolated_state + \
                 (self._X_mean - self._Z_mean)
         self._round_stage = "dual_updated"
@@ -952,11 +987,11 @@ class DistributedSharingWrapper:
             current = self._momentum_inf_list[-1]
             if current > self._acceleration.restart_threshold * previous:
                 self._Z_mean_nesterov.restart(self._Z_mean)
-                self._dual_nesterov.restart(self._dual_var)
+                self._dual_nesterov.restart(self._scaled_dual_var)
                 self._momentum_inf_list.clear()
                 return
         self._Z_mean_nesterov.update(self._Z_mean)
-        self._dual_nesterov.update(self._dual_var)
+        self._dual_nesterov.update(self._scaled_dual_var)
 
     def finalize_round(self) -> Optional[float]:
         """Finalize the ADMM round"""
@@ -968,7 +1003,7 @@ class DistributedSharingWrapper:
         new_rho = self._step_adapter.adapt_step_size(
             p_inf=self.primal_infeasibility,
             d_inf=self.dual_infeasibility,
-            dual_var=self._dual_var
+            scaled_dual_var=self._scaled_dual_var
         )
         if new_rho is not None and self._dual_nesterov is not None:
             self._dual_nesterov.rescale(old_rho / new_rho)
@@ -985,7 +1020,7 @@ class DistributedSharingWrapper:
 
     def is_dual_feasible(self, eps_abs: float, eps_rel: float) -> bool:
         N, K = self._X_shape
-        eps_dual = eps_abs * np.sqrt(N) + eps_rel * np.linalg.norm(self._dual_var) * np.sqrt(K)
+        eps_dual = eps_abs * np.sqrt(N) + eps_rel * np.linalg.norm(self._scaled_dual_var) * np.sqrt(K)
         return self.dual_infeasibility <= eps_dual
 
     def is_feasible(self, eps_abs: float, eps_rel: float) -> bool:

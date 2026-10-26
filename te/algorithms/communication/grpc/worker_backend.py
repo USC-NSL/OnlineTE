@@ -102,9 +102,10 @@ class OnlineTEWorkerNodeListener(OnlineTECoreServicer):
     
     def DoNetworkUpdate(self, request: core_messages.NetworkUpdateRequest, context):
         runtime, means, data = self._backend.do_inner_loop_update(
-            serialized_message_to_array(request.sharing_gap),
-            serialized_message_to_array(request.sharing_dual),
-            request.sharing_rho
+            serialized_message_to_array(request.sharing_bias),
+            serialized_message_to_array(request.edge_dual),
+            request.sharing_rho,
+            request.nested
         )
         return core_messages.NetworkUpdateResponse(
             runtime_us=runtime,

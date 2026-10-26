@@ -36,7 +36,7 @@ class SimpleOnlineTECoordinator(TELP[PathBasedSimplifiedOnlineTEParameters], Dis
             optimality_tolerance=0.01 * self.optimality_tolerance,
             objective=self.objective,
             capacities=None,
-            scratch=self.optimality_tolerance
+            scratch=0
         )
         # ADMM
         self._sharing_wrapper: Optional[DistributedSharingWrapper] = None
@@ -93,12 +93,12 @@ class SimpleOnlineTECoordinator(TELP[PathBasedSimplifiedOnlineTEParameters], Dis
         self._sharing_wrapper = DistributedSharingWrapper(
             (self.number_of_edges, self.number_of_commodities),
             self._solver_params.Rho,
-            # adaptation=AdaptiveStepSizeParams(
-            #     infeasibility_bound=5,
-            #     multiplicative_factor=2,
-            #     strike_count=3
-            # ),
-            acceleration=NesterovAccelerationParams(restart_threshold=0.9)
+            adaptation=AdaptiveStepSizeParams(
+                infeasibility_bound=5,
+                multiplicative_factor=2,
+                strike_count=3
+            ),
+            # acceleration=NesterovAccelerationParams(restart_threshold=0.9)
         )
 
     def _get_Z_value(self) -> CPUArray:
@@ -128,9 +128,10 @@ class SimpleOnlineTECoordinator(TELP[PathBasedSimplifiedOnlineTEParameters], Dis
     def _do_network_update(self):
         SHARING = self._sharing_wrapper
         _, X_bar, data = self.backend.do_network_update(
-            sharing_gap=SHARING.X_mean - SHARING.Z_mean,
-            sharing_dual=SHARING.dual_var,
-            sharing_rho=SHARING.step_size
+            sharing_bias=SHARING.get_X_step_bias(),
+            edge_dual=SHARING.unscaled_dual_var,
+            sharing_rho=SHARING.step_size,
+            nested=False
         )
         if self.objective == TEObjective.MAX_FLOW:
             self._total_flow = data[WorkerUpdateData.DEMANDS]
@@ -142,9 +143,7 @@ class SimpleOnlineTECoordinator(TELP[PathBasedSimplifiedOnlineTEParameters], Dis
             case TEObjective.MLU:
                 self._dual_objective = data[WorkerUpdateData.DUAL_OBJ]
             case TEObjective.MAX_FLOW:
-                self._dual_objective = - data[WorkerUpdateData.DUAL_OBJ] - np.sum(
-                    SHARING.dual_var * SHARING.step_size
-                )
+                self._dual_objective = - data[WorkerUpdateData.DUAL_OBJ] - np.sum(SHARING.unscaled_dual_var)
             case _: raise NotImplementedError
     
     def _do_coordinator_update(self):
@@ -203,6 +202,7 @@ class SimpleOnlineTECoordinator(TELP[PathBasedSimplifiedOnlineTEParameters], Dis
                     'ADMM Penalty.': f'{step:.2f}',
                     'Congestion': f'{congestion*100:.2f}%'
                 })
+                self._tracer.execute_callbacks(self, SolverCallbackType.PostIteration)
                 if (gap < self.optimality_tolerance and \
                     congestion < self.feasibility_tolerance):
                     return True
@@ -219,6 +219,7 @@ class SimpleOnlineTECoordinator(TELP[PathBasedSimplifiedOnlineTEParameters], Dis
                     'ADMM Penalty.': f'{step:.2f}',
                     'Congestion': f'{congestion*100:.2f}%'
                 })
+                self._tracer.execute_callbacks(self, SolverCallbackType.PostIteration)
                 if (gap < self.optimality_tolerance and \
                     congestion < self.feasibility_tolerance):
                     return True
@@ -260,6 +261,9 @@ class SimpleOnlineTECoordinator(TELP[PathBasedSimplifiedOnlineTEParameters], Dis
         else:
             # Demand changes occur between ADMM rounds, before the next X-step.
             self._sharing_wrapper.refresh_mean_X(X_bar)
+
+        # Reset the barrier
+        self.backend.reset_barrier()
 
     def _update_objective(self, tm: np.ndarray):
         pass

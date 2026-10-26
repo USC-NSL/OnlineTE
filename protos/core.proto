@@ -17,7 +17,11 @@ service OnlineTECore {
     // the topology to the switch nodes so that they can recalculate initial state
     // independently.
     rpc SetTopology(Topology) returns (google.protobuf.Empty) {}
-    // TODO: Comment!
+    // A coordinator-initiated update of a subset of nodes in the topology. The
+    // coordinator sends an update request to every node (a multicast) and each
+    // worker node then responds. This RPC is the unicast instance of this and
+    // the communication backends are responsible for invoking it in parallel over
+    // the desired set of worker nodes when needed.
     rpc DoNetworkUpdate(NetworkUpdateRequest) returns (NetworkUpdateResponse) {}
     // When a new traffic matrix is revealed by the controller, the switches
     // can be informed by this RPC. This is a debugging RPC as in practice,
@@ -44,22 +48,27 @@ service OnlineTECore {
 
 // The coordinator side update message to the switches.
 message NetworkUpdateRequest {
-    // The coordinator only needs to reveal the `sharing_bias`,
+    // The coordinator needs to reveal the `sharing_bias`,
     // which is defined as the expression `X_bar - P_bar + u` as
     // it appears in the appendix of the paper. This is a vector
     // with one entry per link.
-    // In practice, we break it into two parts. One part is the
-    // `sharing gap` which is `X_bar - P_bar`. The second part
-    // is the sharing dual `u` itself. We need to reveal this to
-    // the switches as it is needed for calculating the dual
-    // objective bound.
-    SerializedNumpyArrayMessage sharing_gap = 1;
-    SerializedNumpyArrayMessage sharing_dual = 2;
+    SerializedNumpyArrayMessage sharing_bias = 1;
+    // To certify optimality at each iteration, a feasible dual
+    // vector for the capacity constraint needs to be made known
+    // on the worker nodes.
+    SerializedNumpyArrayMessage edge_dual = 2;
+    // The penalty parameter for the sharing problem. The coordinator
+    // may change this via residual balancing, and hence needs to be
+    // reported to the worker nodes participating in each sharing
+    // update.
     double sharing_rho = 3;
+    // If true, then this is a nested update. This changes the scaling
+    // for certain objectives (in particular, for Max-Flow).
+    bool nested = 4;
     // Field for checking transactions IDs in case a message got
     // lost. This is with our unreliable backends (particularly,
     // the IP Multicast backend) in mind.
-    int32 xid = 4;
+    int32 xid = 5;
 }
 
 // Response from switches upon completing the an inner loop iteration.

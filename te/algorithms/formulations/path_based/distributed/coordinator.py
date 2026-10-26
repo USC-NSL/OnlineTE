@@ -28,14 +28,16 @@ class OnlineTECoordinator(TELP[PathBasedOnlineTEParameters], DistributedSolverNo
         )
         # MLU QP solver
         self._mlu_solver: CapacityQP = CapacityQP(
-            mode=CapacityQPMode.CONSENSUS,
+            # mode=CapacityQPMode.CONSENSUS,
+            mode=CapacityQPMode.SHARING,
             rho=solver_params.Rho,
             num_edges=self.num_edges,
             num_commodities=self.number_of_commodities,
             feasibility_tolerance=0.01 * self.feasibility_tolerance,
             optimality_tolerance=0.01 * self.optimality_tolerance,
             objective=self.objective,
-            capacities=None
+            capacities=None,
+            scratch=0
         )
         # Outer ADMM
         self._outer_admm_wrapper: Optional[VectorConsensusWrapper] = None
@@ -55,6 +57,7 @@ class OnlineTECoordinator(TELP[PathBasedOnlineTEParameters], DistributedSolverNo
 
         self._primal_objective = 0
         self._dual_objective = 0
+        self._nested = True
 
         self.initialize()
     
@@ -93,16 +96,21 @@ class OnlineTECoordinator(TELP[PathBasedOnlineTEParameters], DistributedSolverNo
         # Initialize the consensus wrapper
         self._outer_admm_wrapper = VectorConsensusWrapper(
             self.number_of_edges, self._solver_params.Rho,
-            # adaptation=AdaptiveStepSizeParams(
-            #     infeasibility_bound=5,
-            #     multiplicative_factor=2,
-            #     strike_count=3
-            # ),
+            adaptation=AdaptiveStepSizeParams(
+                infeasibility_bound=5,
+                multiplicative_factor=2,
+                strike_count=3
+            )
         )
         # Initialize the sharing wrapper
         self._sharing_wrapper = DistributedSharingWrapper(
             (self.number_of_edges, self.number_of_commodities),
-            self._solver_params.Eta
+            self._solver_params.Eta,
+            adaptation=AdaptiveStepSizeParams(
+                infeasibility_bound=5,
+                multiplicative_factor=2,
+                strike_count=3
+            )
         )
 
     def _get_Z_value(self) -> CPUArray:
@@ -133,7 +141,28 @@ class OnlineTECoordinator(TELP[PathBasedOnlineTEParameters], DistributedSolverNo
         """
         self._X_ek = self.backend.get_X_ek() * self._capacities[:, None]
 
-    def _do_network_update(self):
+    def _do_single_loop_network_update(self):
+        SHARING = self._sharing_wrapper
+        _, X_bar, data = self.backend.do_network_update(
+            sharing_bias=SHARING.get_X_step_bias(),
+            edge_dual=SHARING.unscaled_dual_var,
+            sharing_rho=SHARING.step_size,
+            nested=False
+        )
+        if self.objective == TEObjective.MAX_FLOW:
+            self._total_flow = data[WorkerUpdateData.DEMANDS]
+        SHARING.record_mean_X_update(
+            next_X_mean=X_bar,
+            delta_X_frobenius=data[WorkerUpdateData.NORM_F_DELTA_X]
+        )
+        match self.objective:
+            case TEObjective.MLU:
+                self._dual_objective = data[WorkerUpdateData.DUAL_OBJ]
+            case TEObjective.MAX_FLOW:
+                self._dual_objective = - data[WorkerUpdateData.DUAL_OBJ] - np.sum(SHARING.unscaled_dual_var)
+            case _: raise NotImplementedError
+
+    def _do_double_loop_network_update(self):
         SHARING = self._sharing_wrapper
         CONSENSUS = self._outer_admm_wrapper
         K = self.number_of_commodities
@@ -142,16 +171,19 @@ class OnlineTECoordinator(TELP[PathBasedOnlineTEParameters], DistributedSolverNo
         ETA = SHARING.step_size
         for _ in range(self._solver_params.InnerLoopRounds):
             _, X_bar, data = self.backend.do_network_update(
-                sharing_gap=SHARING.X_mean - SHARING.Z_mean + SHARING.dual_var,
-                sharing_dual=CONSENSUS.dual_var,
-                sharing_rho=CONSENSUS.step_size
+                sharing_bias=SHARING.get_X_step_bias(),
+                # edge_dual=CONSENSUS.unscaled_dual_var,
+                edge_dual=SHARING.unscaled_dual_var / self.number_of_commodities,
+                sharing_rho=SHARING.step_size,
+                nested=True
             )
             if self.objective == TEObjective.MAX_FLOW:
                 self._total_flow = data[WorkerUpdateData.DEMANDS]
             SHARING.record_mean_X_update(X_bar, data[WorkerUpdateData.NORM_F_DELTA_X])
             # Changed for sharing scaling factor
             SHARING.record_mean_Z_update(
-                (F_E / K + (ETA / (RHO * K)) * (SHARING.dual_var + SHARING.X_mean)) / (1 + (ETA / (RHO * K)))
+                (F_E + (ETA / RHO) * (SHARING.scaled_dual_var + SHARING.X_mean)) / (K + (ETA / RHO))
+                # (F_E / K + (ETA / RHO) * (SHARING.scaled_dual_var + SHARING.X_mean)) / (1 + (ETA / RHO))
             )
             SHARING.update_dual_var()
             SHARING.finalize_round()
@@ -159,12 +191,71 @@ class OnlineTECoordinator(TELP[PathBasedOnlineTEParameters], DistributedSolverNo
             case TEObjective.MLU:
                 self._dual_objective = data[WorkerUpdateData.DUAL_OBJ]
             case TEObjective.MAX_FLOW:
-                self._dual_objective = - data[WorkerUpdateData.DUAL_OBJ] - np.sum(
-                    SHARING.dual_var * SHARING.step_size
-                )
+                self._dual_objective = - data[WorkerUpdateData.DUAL_OBJ] - np.sum(SHARING.unscaled_dual_var)
             case _: raise NotImplementedError
 
-    def _do_coordinator_update(self):
+    def _do_network_update(self):
+        if self._nested:
+            self._do_double_loop_network_update()
+        else:
+            self._do_single_loop_network_update()
+
+    # def _do_network_update(self):
+    #     SHARING = self._sharing_wrapper
+    #     CONSENSUS = self._outer_admm_wrapper
+    #     K = self.number_of_commodities
+    #     F_E = self._get_F()
+    #     RHO = CONSENSUS.step_size
+    #     ETA = SHARING.step_size
+    #     for _ in range(self._solver_params.InnerLoopRounds):
+    #         _, X_bar, data = self.backend.do_network_update(
+    #             sharing_bias=SHARING.get_X_step_bias(),
+    #             edge_dual=CONSENSUS.unscaled_dual_var,
+    #             sharing_rho=SHARING.step_size,
+    #             nested=True
+    #         )
+    #         if self.objective == TEObjective.MAX_FLOW:
+    #             self._total_flow = data[WorkerUpdateData.DEMANDS]
+    #         SHARING.record_mean_X_update(X_bar, data[WorkerUpdateData.NORM_F_DELTA_X])
+    #         # Changed for sharing scaling factor
+    #         SHARING.record_mean_Z_update(
+    #             (F_E / K + (ETA / RHO) * (SHARING.scaled_dual_var + SHARING.X_mean)) / (1 + (ETA / RHO))
+    #         )
+    #         SHARING.update_dual_var()
+    #         SHARING.finalize_round()
+    #     match self.objective:
+    #         case TEObjective.MLU:
+    #             self._dual_objective = data[WorkerUpdateData.DUAL_OBJ]
+    #         case TEObjective.MAX_FLOW:
+    #             self._dual_objective = - data[WorkerUpdateData.DUAL_OBJ] - np.sum(SHARING.unscaled_dual_var)
+    #         case _: raise NotImplementedError
+
+    def _do_single_loop_coordinator_update(self):
+        MLU = self._mlu_solver
+        SHARING = self._sharing_wrapper
+        # Update `Z_bar`
+        MLU.update_F_m(
+            SHARING.get_Z_step_bias(),
+            SHARING.step_size
+        )
+        # Z-step and its update
+        MLU.solve()
+        # SHARING.record_mean_Z_update(next_Z_mean=MLU.current_Z / self.number_of_commodities)
+        SHARING.record_mean_Z_update(next_Z_mean=MLU.current_Z)
+        # Dual update and round finalization
+        SHARING.update_dual_var()
+        SHARING.finalize_round()
+        # Set primal objective
+        match self.objective:
+            case TEObjective.MLU:
+                total_assignment = self.number_of_commodities * SHARING.X_mean
+                self._primal_objective = float(np.max(total_assignment))
+            case TEObjective.MAX_FLOW:
+                # The Max-Flow objective is scaled by number of commodities.
+                self._primal_objective = -self._total_flow / self.number_of_commodities
+            case _: raise NotImplementedError
+
+    def _do_double_loop_coordinator_update(self):
         MLU = self._mlu_solver
         CONSENSUS = self._outer_admm_wrapper
         CONSENSUS.record_X_update(
@@ -172,11 +263,11 @@ class OnlineTECoordinator(TELP[PathBasedOnlineTEParameters], DistributedSolverNo
         )
         MLU.update_F_m(
             # Changed for sharing scaling factor
-            CONSENSUS.get_Z_step_bias(),
+            CONSENSUS.get_Z_step_bias() / self.number_of_commodities,
             CONSENSUS.step_size
         )
         MLU.solve()
-        CONSENSUS.record_Z_update(next_Z=MLU.current_Z)
+        CONSENSUS.record_Z_update(next_Z=MLU.current_Z * self.number_of_commodities)
         CONSENSUS.update_dual_var()
         CONSENSUS.finalize_round()
         # Set primal objective
@@ -188,12 +279,74 @@ class OnlineTECoordinator(TELP[PathBasedOnlineTEParameters], DistributedSolverNo
                 self._primal_objective = -self._total_flow / self.number_of_commodities
             case _: raise NotImplementedError
 
+    # def _do_coordinator_update(self):
+    #     MLU = self._mlu_solver
+    #     CONSENSUS = self._outer_admm_wrapper
+    #     CONSENSUS.record_X_update(
+    #         self.number_of_commodities * self._sharing_wrapper.X_mean
+    #     )
+    #     MLU.update_F_m(
+    #         # Changed for sharing scaling factor
+    #         CONSENSUS.get_Z_step_bias(),
+    #         CONSENSUS.step_size
+    #     )
+    #     MLU.solve()
+    #     CONSENSUS.record_Z_update(next_Z=MLU.current_Z)
+    #     CONSENSUS.update_dual_var()
+    #     CONSENSUS.finalize_round()
+    #     # Set primal objective
+    #     match self.objective:
+    #         case TEObjective.MLU:
+    #             self._primal_objective = float(np.max(CONSENSUS.X))
+    #         case TEObjective.MAX_FLOW:
+    #             # The Max-Flow objective is scaled by number of commodities.
+    #             self._primal_objective = -self._total_flow / self.number_of_commodities
+    #         case _: raise NotImplementedError
+
+    def _do_coordinator_update(self):
+        if self._nested:
+            self._do_double_loop_coordinator_update()
+        else:
+            self._do_single_loop_coordinator_update()
+
+    def switch_to_nested(self):
+        assert not self._nested
+        # Warm-start the consensus wrapper
+        self._outer_admm_wrapper.warm_start(
+            self._sharing_wrapper.X_mean * self.number_of_commodities,
+            self._sharing_wrapper.Z_mean * self.number_of_commodities,
+            self._sharing_wrapper.unscaled_dual_var * self.number_of_commodities
+        )
+        self._nested = True
+
+    def switch_from_nested(self):
+        # assert self._nested
+        self._nested = False
+
     def close(self):
         self.backend.close()
         if self._mlu_solver is not None:
             self._mlu_solver.close()
 
+    def check_admm_parimal_feasibility(self) -> bool:
+        if self._nested:
+            return self._outer_admm_wrapper.is_primal_feasible(
+                eps_abs=self.feasibility_tolerance,
+                eps_rel=self.optimality_tolerance
+            )
+        else:
+            return self._sharing_wrapper.is_primal_feasible(
+                eps_abs=self.feasibility_tolerance,
+                eps_rel=self.optimality_tolerance
+            )
+
+    def check_congestion(self) -> float:
+        target = self._mlu_solver.current_u
+        actual = float(np.max(self._sharing_wrapper.X_mean) * self.number_of_commodities)
+        return actual - target
+
     def _single_solve_step(self) -> Tuple[float, float, float, bool, float]:
+        # time.sleep(0.1)
         CONSENSUS = self._outer_admm_wrapper
         self._do_network_update()
         self._do_coordinator_update()
@@ -204,11 +357,11 @@ class OnlineTECoordinator(TELP[PathBasedOnlineTEParameters], DistributedSolverNo
             gap = abs(d - p) / abs(p)
         else:
             gap = np.inf
-        admm_primal_feasible = CONSENSUS.is_primal_feasible(
-            eps_abs=self.feasibility_tolerance,
-            eps_rel=self.optimality_tolerance
-        )
-        congestion = abs(float(np.max(CONSENSUS.X)) - self._mlu_solver.current_u)
+        admm_primal_feasible = self.check_admm_parimal_feasibility()
+        congestion = self.check_congestion()
+        # if gap <= self.optimality_tolerance and admm_primal_feasible and not self._nested:
+        #     print(as_success(f'Objective within tolerance! Polishing ...'))
+        #     self.switch_to_nested()
         return p, gap, CONSENSUS.step_size, admm_primal_feasible, congestion
 
     def _cold_start(self) -> bool:
@@ -219,11 +372,12 @@ class OnlineTECoordinator(TELP[PathBasedOnlineTEParameters], DistributedSolverNo
                     'Obj. Val.': f'{val:.4f}',
                     'Obj. Gap': f'{gap*100:.2f}%',
                     'ADMM Penalty.': f'{step:.2f}',
-                    'Congestion': f'{congestion*100:.2f}%'
+                    'Congestion': f'{congestion*100:.2f}%',
+                    'NESTED': self._nested
                 })
                 if (gap < self.optimality_tolerance and \
                     admm_primal_feasible and \
-                    congestion < self.optimality_tolerance):
+                    congestion < self.feasibility_tolerance):
                     return True
                 progress_bar.update()
         return False
@@ -240,7 +394,7 @@ class OnlineTECoordinator(TELP[PathBasedOnlineTEParameters], DistributedSolverNo
                 })
                 if (gap < self.optimality_tolerance and \
                     admm_primal_feasible and \
-                    congestion < self.optimality_tolerance):
+                    congestion < self.feasibility_tolerance):
                     return True
         return not progress_bar.timed_out
 
@@ -282,6 +436,11 @@ class OnlineTECoordinator(TELP[PathBasedOnlineTEParameters], DistributedSolverNo
             # Demand changes are external to ADMM: refresh the X reference without
             # resetting the accumulated Z means or either dual variable.
             self._sharing_wrapper.refresh_mean_X(X_bar)
+
+        # Switch to the single-loop solver
+        self.switch_from_nested()
+        # Reset the barrier
+        self.backend.reset_barrier()
 
     def _update_objective(self, tm: np.ndarray):
         pass

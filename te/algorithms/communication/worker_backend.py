@@ -28,10 +28,10 @@ class WorkerBackendBase[P: SolverParams](CommunicationBackendBase[P]):
         self._set_topology = f
     
     @property
-    def do_inner_loop_update(self) -> Callable[[CPUArray, CPUArray, float], Tuple[int, CPUArray, Dict[str, float]]]:
+    def do_inner_loop_update(self) -> Callable[[CPUArray, CPUArray, float, bool], Tuple[int, CPUArray, Dict[str, float]]]:
         return self._do_inner_loop_update
     @do_inner_loop_update.setter
-    def do_inner_loop_update(self, f: Callable[[CPUArray, CPUArray, float], Tuple[int, CPUArray, Dict[str, float]]]):
+    def do_inner_loop_update(self, f: Callable[[CPUArray, CPUArray, float, bool], Tuple[int, CPUArray, Dict[str, float]]]):
         self._do_inner_loop_update = f
     
     @property

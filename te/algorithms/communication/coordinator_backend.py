@@ -38,9 +38,10 @@ class CoordinatorBackendBase[P: SolverParams](CommunicationBackendBase[P]):
     @abstractmethod
     def do_network_update(
         self,
-        sharing_gap: CPUArray,
-        sharing_dual: CPUArray,
-        sharing_rho: float
+        sharing_bias: CPUArray,
+        edge_dual: CPUArray,
+        sharing_rho: float,
+        nested: bool
     ) -> Tuple[int, CPUArray, Dict[str, float]]:
         """
         Do network update for a given epoch.
@@ -54,4 +55,12 @@ class CoordinatorBackendBase[P: SolverParams](CommunicationBackendBase[P]):
         that we can just sum up the value of each key to create
         the new values and return a dict object with those values
         instead.
+        """
+
+    @abstractmethod
+    def reset_barrier(self):
+        """
+        Reset the asynchronous barrier object. We usually call this
+        after a warm-start, as the first set of messages after a warm
+        start often need to be collected synchronously.
         """
