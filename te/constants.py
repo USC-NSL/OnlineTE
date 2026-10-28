@@ -127,3 +127,17 @@ GRPC_ARRAY_STREAM_MAX_LEN = 2**20
 """
 Maximum length of an array to be transfered at once over a gRPC stream.
 """
+
+MAX_OPENMP_NATIVE_KERNEL_THREADS = 4
+"""
+The maximum number of native threads invoked for each path-based operation
+using OpenMP.
+Since these operations are supposed to be invoked on switch hardware, we
+cannot expect extreme parallelism. For topologies of reasonable size, 4
+threads seems to be enough.
+
+When running locally, you may want to increase this number depending on
+how many threads are available on your machine, but note that this applies
+to _every single_ worker node (hence 4 worker nodes here would use up to
+16 threads at once ...).
+"""

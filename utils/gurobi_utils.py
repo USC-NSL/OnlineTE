@@ -10,8 +10,36 @@ from .exceptions import SolutionInterrupted
 
 class GurobiMethod(enum.Enum):
     BARRIER = gurobipy.GRB.METHOD_BARRIER
+    """
+    Barrier is an interior point method. It fully takes advantage of
+    all the cores in the system, but cannot be warm-started. You will
+    pay the cost of a full solve, even if the problem didn't change
+    at all.
+    """
     SIM_PRIMAL = gurobipy.GRB.METHOD_PRIMAL
+    """
+    Primal Simplex solver. Can actually run into numerical issues for
+    the max-flow problem. We recommend Dual Simplex the most. Regardless,
+    it warm-starts easily, but for large problems will take a long time
+    to solve on cold start.
+    """
     SIM_DUAL = gurobipy.GRB.METHOD_DUAL
+    """
+    Dual Simplex solver. It warm-starts beutifully and generates very nice
+    and sparse solutions. Similar to Primal Simplex, it can take a very long
+    time to solve cold start.
+    """
+    COMPOSITE = gurobipy.GRB.METHOD_BARRIER
+    """
+    Probably the best scheme for our setting. The composite solver instructs
+    our code to:
+    - On the first run, use Barrier with Crossover enabled. This runs
+      Dual Simplex iterations in the end to obtain a basic solution.
+      The hope is that generating a feasible solution using the Barrier
+      solution skips the majority of the Simplex iterations that we would
+      have to do for cold start.
+    - On every subsequent call, use Dual Simplex to warm-start.
+    """
 
     def __str__(self) -> str:
         return self.name
@@ -52,13 +80,16 @@ class GurobiSolverParams(SolverParams):
     Threads: int = min(te.constants.NUM_PROCS, 8)
     LogFile: str = te.constants.DEFAULT_GUROBI_LOG_FILE
 
+    def __post_init__(self):
+        if self.Method == GurobiMethod.COMPOSITE:
+            assert self.Crossover > 0, "When using the composite solver, crossover _MUST_ be enabled!"
+
 
 def make_model(
-    name: str, params: SolverParams, feasibility_tolerance: float,
+    name: str, params: GurobiSolverParams, feasibility_tolerance: float,
     optimality_tolerance: float , env: Optional[gurobipy.Env], 
     verbose: bool = True, **kwargs
 ):
-    assert issubclass(params.__class__, GurobiSolverParams)
     model = gurobipy.Model(name=name, env=env)
     model.Params.Method = params.Method.value
     model.Params.Crossover = params.Crossover
@@ -94,11 +125,19 @@ def make_model(
     if model.Params.OptimalityTol != model.Params.BarConvTol:
         print(as_warning(f'Simplex and Barrier have different convergence tolerances. Make sure this is actualy intended to be!!'))
 
+    if params.Method == GurobiMethod.COMPOSITE:
+        print(as_info('COMPOSITE solver: First call with use barrier with crossover.'))
+
     return model
 
 
-def optimize_or_scream(model: gurobipy.Model):
+def optimize_or_scream(model: gurobipy.Model, warm_start: bool = False):
     """Solve a Gurobi model. Throw an error if the model ends up in any non-optimal state"""
+    if warm_start:
+        if model.Params.Method == gurobipy.GRB.METHOD_BARRIER:
+            print(as_info('Switching the solver from BARRIER to DUAL SIMPLEX for warm-start.'))
+            model.Params.Method = gurobipy.GRB.METHOD_DUAL
+            model.update()
     model.optimize()
     if model.Status != gurobipy.GRB.OPTIMAL:
         if model.Status == gurobipy.GRB.INTERRUPTED:

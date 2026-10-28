@@ -1,8 +1,18 @@
+"""
+The original OnlineTE implementation used `Numba` for sparse path
+operations. We have now migrated to a native C++ kernel implementation
+for all path-based operations using `nanobind`, doing away with the
+overhead of JIT compilation and also achieving better performance.
+"""
+
+
 from __future__ import annotations
 
 import os
+import te.constants
 from dataclasses import dataclass
 from typing import Optional, TYPE_CHECKING
+from te.algorithms.base import TEObjective
 
 import numpy as np
 
@@ -19,6 +29,7 @@ except ImportError as exc:  # Keep unrelated solver imports working.
 
 
 def require_native_kernels():
+    """Check for availability of native C++ kernels."""
     if _native is None:
         raise RuntimeError(
             "The distributed path solver requires the native path kernels. "
@@ -30,6 +41,7 @@ def require_native_kernels():
 
 
 def resolve_kernel_threads(requested: Optional[int]) -> int:
+    """Return the number of usable threads for kernel operations."""
     if requested is not None:
         if requested <= 0:
             raise ValueError("KernelThreads must be a positive integer or None")
@@ -38,10 +50,11 @@ def resolve_kernel_threads(requested: Optional[int]) -> int:
         available = len(os.sched_getaffinity(0))
     except AttributeError:
         available = os.cpu_count() or 1
-    return max(1, min(4, available))
+    return max(1, min(te.constants.MAX_OPENMP_NATIVE_KERNEL_THREADS, available))
 
 
 def _require_float_array(array: np.ndarray, name: str, length: int, dtype: np.dtype) -> np.ndarray:
+    """Utility for checking array formats before passing to kernels."""
     if not isinstance(array, np.ndarray):
         raise TypeError(f"{name} must be a NumPy array")
     if array.ndim != 1 or len(array) != length:
@@ -54,6 +67,13 @@ def _require_float_array(array: np.ndarray, name: str, length: int, dtype: np.dt
 
 
 def _typed_kernel(kernels, name: str, dtype: np.dtype):
+    """
+    Native kernels are named as:
+    ```
+    <kernel name>_<dtype>
+    ```
+    Where `dtype` is currently _only_ single or double.
+    """
     return getattr(kernels, f"{name}_{dtype.name}")
 
 
@@ -134,6 +154,11 @@ class PackedPathBatch:
         scale_with_capacity: bool,
         kernel_threads: Optional[int] = None,
     ) -> "PackedPathBatch":
+        """
+        Build a packed path provider from a simple `PathProvider` object.
+        This format allows data to be passed to native kernels without making
+        path generation complicated.
+        """
         kernels = require_native_kernels()
         if capacities.dtype not in (np.dtype(np.float32), np.dtype(np.float64)):
             raise TypeError("The native path solver supports only float32 and float64")
@@ -145,6 +170,12 @@ class PackedPathBatch:
             raise ValueError("PathProvider commodity metadata is inconsistent")
         if num_edges != len(capacities):
             raise ValueError("PathProvider edge count does not match capacities")
+        if scale_with_capacity and (
+            not np.all(np.isfinite(capacities)) or np.any(capacities <= 0)
+        ):
+            raise ValueError(
+                "capacity scaling requires finite, strictly positive capacities"
+            )
 
         betas = np.asarray(provider.beta, dtype=np.int64)
         if betas.shape != (commodity_count,) or np.any(betas <= 0):
@@ -220,6 +251,13 @@ class PackedPathBatch:
         demands: np.ndarray,
         maxflow_shift: float = 0.0,
     ) -> np.ndarray:
+        """
+        Generate a linear term, a vector for each commodity that
+        is defined as
+        ```
+        -maxflow_shift + d_k . (alpha^{(k)}^T sharing_bias) .* edge_scale
+        ```
+        """
         kernels = require_native_kernels()
         _require_float_array(sharing_bias, "sharing_bias", self.num_edges, self.dtype)
         _require_float_array(demands, "demands", self.num_commodities, self.dtype)
@@ -261,13 +299,15 @@ class PackedPathBatch:
         demands: np.ndarray,
         step_sizes: np.ndarray,
         orthant: bool,
+        unconverged: np.ndarray,
         output: np.ndarray,
-    ) -> None:
+    ) -> np.ndarray:
         kernels = require_native_kernels()
         for name, array in (("z", z), ("y_old", y_old), ("linear", linear), ("output", output)):
             _require_float_array(array, name, self.num_paths, self.dtype)
         _require_float_array(demands, "demands", self.num_commodities, self.dtype)
         _require_float_array(step_sizes, "step_sizes", self.num_commodities, self.dtype)
+        relative_gaps = np.empty(self.num_commodities, dtype=np.float64)
         _typed_kernel(kernels, "projected_qp_step", self.dtype)(
             self.commodity_path_offsets,
             self.gram_offsets,
@@ -279,10 +319,22 @@ class PackedPathBatch:
             step_sizes,
             orthant,
             output,
+            relative_gaps,
+            unconverged,
             self.kernel_threads,
         )
+        if not np.all(np.isfinite(relative_gaps[unconverged])):
+            raise FloatingPointError("Projected QP step produced a non-finite Wolfe gap")
+        return relative_gaps
 
-    def estimate_lipschitz(self, demands: np.ndarray, iterations: int = 20) -> np.ndarray:
+    def estimate_lipschitz(
+        self, demands: np.ndarray, iterations: int = 20,
+    ) -> np.ndarray:
+        """Estimate d_k^2 lambda_max(G_k).
+
+        Uses the existing power iteration; this is an eigenvalue estimate,
+        rather than a certified upper bound. No extra Gram storage is needed.
+        """
         kernels = require_native_kernels()
         _require_float_array(demands, "demands", self.num_commodities, self.dtype)
         output = np.empty(self.num_commodities, dtype=self.dtype)
@@ -297,18 +349,25 @@ class PackedPathBatch:
         )
         return output
 
-    def initialize_splits(self, capacities: np.ndarray) -> np.ndarray:
+    def initialize_splits(self, capacities: np.ndarray, objective: TEObjective) -> np.ndarray:
         kernels = require_native_kernels()
         _require_float_array(capacities, "capacities", self.num_edges, self.dtype)
-        output = np.empty(self.num_paths, dtype=self.dtype)
-        _typed_kernel(kernels, "initialize_splits", self.dtype)(
-            self.commodity_path_offsets,
-            self.path_edge_offsets,
-            self.path_edges,
-            capacities,
-            output,
-            self.kernel_threads,
-        )
+        match objective:
+            case TEObjective.MLU:
+                # Start with all demands satisfied, then handle congestion
+                output = np.empty(self.num_paths, dtype=self.dtype)
+                _typed_kernel(kernels, "initialize_splits", self.dtype)(
+                    self.commodity_path_offsets,
+                    self.path_edge_offsets,
+                    self.path_edges,
+                    capacities,
+                    output,
+                    self.kernel_threads,
+                )
+            case TEObjective.MAX_FLOW:
+                # Just start from 0
+                output = np.zeros(self.num_paths, dtype=self.dtype)
+            case _: raise NotImplementedError
         return output
 
     def paths_to_edge(self, values: np.ndarray, demands: np.ndarray) -> np.ndarray:
@@ -345,6 +404,33 @@ class PackedPathBatch:
         )
         return output
 
+    def capacity_feasible_splits(
+        self, values: np.ndarray, edge_factors: np.ndarray,
+    ) -> np.ndarray:
+        """Return a fresh solution scaled by the minimum factor on each path.
+
+        ``edge_factors`` must describe global overload of the same iterate:
+        min(1, capacity / load), with factor one on unloaded edges. They are
+        independent of this batch's capacity-normalization ``edge_scale``.
+        The caller must ensure other primal constraints already hold; scaling
+        preserves nonnegativity, flow conservation, and demand upper bounds.
+        Neither input is modified. Use ``total_flow`` on the returned solution
+        to evaluate its feasible throughput.
+        """
+        kernels = require_native_kernels()
+        _require_float_array(values, "values", self.num_paths, self.dtype)
+        _require_float_array(edge_factors, "edge_factors", self.num_edges, self.dtype)
+        output = np.empty_like(values)
+        _typed_kernel(kernels, "capacity_feasible_splits", self.dtype)(
+            self.path_edge_offsets,
+            self.path_edges,
+            values,
+            edge_factors,
+            output,
+            self.kernel_threads,
+        )
+        return output
+
     def total_flow(self, values: np.ndarray, demands: np.ndarray) -> float:
         kernels = require_native_kernels()
         _require_float_array(values, "values", self.num_paths, self.dtype)
@@ -357,6 +443,68 @@ class PackedPathBatch:
                 self.kernel_threads,
             )
         )
+
+    def assignment_delta_norm_squared(
+        self,
+        current: np.ndarray,
+        previous: np.ndarray,
+        demands: np.ndarray,
+    ) -> float:
+        """Return the local squared Frobenius norm of an assignment update."""
+        kernels = require_native_kernels()
+        _require_float_array(current, "current", self.num_paths, self.dtype)
+        _require_float_array(previous, "previous", self.num_paths, self.dtype)
+        _require_float_array(demands, "demands", self.num_commodities, self.dtype)
+        return float(
+            _typed_kernel(kernels, "assignment_delta_norm_squared", self.dtype)(
+                self.commodity_path_offsets,
+                self.gram_offsets,
+                self.gram_values,
+                current,
+                previous,
+                demands,
+                self.kernel_threads,
+            )
+        )
+
+    def dual_objective_term(
+        self,
+        edge_duals: np.ndarray,
+        demands: np.ndarray,
+        objective: TEObjective,
+        total_num_commodities: int
+    ) -> float:
+        """Return this batch's path-minimization term in the dual objective."""
+        kernels = require_native_kernels()
+        _require_float_array(edge_duals, "edge_duals", self.num_edges, self.dtype)
+        _require_float_array(demands, "demands", self.num_commodities, self.dtype)
+        match objective:
+            case TEObjective.MLU:
+                return float(
+                    _typed_kernel(kernels, "mlu_dual_objective_term", self.dtype)(
+                        self.commodity_path_offsets,
+                        self.path_edge_offsets,
+                        self.path_edges,
+                        self.edge_scale,
+                        edge_duals,
+                        demands,
+                        self.kernel_threads,
+                    )
+                )
+            case TEObjective.MAX_FLOW:
+                return float(
+                    _typed_kernel(kernels, "maxflow_dual_objective_term", self.dtype)(
+                        self.commodity_path_offsets,
+                        self.path_edge_offsets,
+                        self.path_edges,
+                        self.edge_scale,
+                        edge_duals,
+                        demands,
+                        total_num_commodities,
+                        self.kernel_threads,
+                    )
+                )
+            case _: raise NotImplementedError
 
 
 __all__ = ["PackedPathBatch", "require_native_kernels", "resolve_kernel_threads"]

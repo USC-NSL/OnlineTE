@@ -12,8 +12,9 @@ import grpc
 import asyncio
 import numpy as np
 import networkx as nx
+from collections import defaultdict
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict
 from array_utils.cpu.types import *
 from array_utils.cpu.grpc_utils import *
 from te.algorithms.base import SolverParams, TEObjective
@@ -53,8 +54,7 @@ class AsynchronousgRPCCoordinatorBackend[P: SolverParams](CoordinatorBackendBase
         self._barrier = PartialBarrier[
             core_messages.NetworkUpdateRequest,
             core_messages.NetworkUpdateResponse,
-            Tuple[int, CPUArray],
-            core_messages.UpdateMessage
+            Tuple[int, CPUArray, Dict[str, float]],
         ](
             number_of_endpoints=self.number_of_workers,
             min_arrival=rpc_params.BarrierSize,
@@ -164,69 +164,61 @@ class AsynchronousgRPCCoordinatorBackend[P: SolverParams](CoordinatorBackendBase
 
     def get_X_ek(self):
         return self._event_loop.run_until_complete(self._get_X_ek())
-    
-    async def _get_X_ek_sum(self):
-        serialized_chunks = await asyncio.gather(*[
-            stub.RequestAggregate(Empty()) for stub in self._worker_stubs
-        ])
-        return np.sum([serialized_message_to_array(chunk) for chunk in serialized_chunks], axis=0)
-    
-    def get_X_ek_sum(self):
-        return self._event_loop.run_until_complete(self._get_X_ek_sum())
-    
-    # async def _do_network_update(self, message: core_messages.NetworkUpdateRequest):
-    #     responses = await asyncio.gather(*[
-    #         stub.DoNetworkUpdate(message) for stub in self._worker_stubs
-    #     ])
-    #     runtimes, serialized_x_bar_chunks = zip(*list([(res.runtime_ns, res.means) for res in responses]))
-    #     return max(runtimes), np.mean([serialized_message_to_array(chunk) for chunk in serialized_x_bar_chunks], axis=0)
-    
-    # def do_network_update(self, epoch: int):
-    #     message = core_messages.NetworkUpdateRequest(epoch=epoch)
-    #     return self._event_loop.run_until_complete(self._do_network_update(message))
 
     async def _stub_net_update(self, node_id: int, request: core_messages.NetworkUpdateRequest):
+        if getattr(self, "require_full_barrier", False):
+            return await self._worker_stubs[node_id].DoNetworkUpdate(request, timeout=self._rpc_params.Timeout)
         return await self._worker_stubs[node_id].DoNetworkUpdate(request)
 
-    def _deserialize_update_response(self, message: core_messages.NetworkUpdateResponse) -> Tuple[int, CPUArray, Optional[float]]:
-        return message.runtime_ns, serialized_message_to_array(message.means), message.demand
+    async def _full_network_update(self, message):
+        """One fresh response per worker; drain pending calls before propagating failure."""
+        tasks = [asyncio.create_task(self._stub_net_update(i, message))
+                 for i in range(self.number_of_workers)]
+        try:
+            responses = await asyncio.gather(*tasks)
+            if any(response is None for response in responses):
+                raise RuntimeError("Missing worker response in full-barrier round")
+            return [self._deserialize_update_response(response) for response in responses]
+        except BaseException:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            raise
 
-    def do_network_update(self, epoch: int) -> Tuple[int, CPUArray, Optional[float]]:
-        message = core_messages.NetworkUpdateRequest(epoch=epoch)
-        updates = self._barrier.gather(
-            message=message,
-            node_coroutine=self._stub_net_update,
-            store_operation=self._deserialize_update_response 
+    def _deserialize_update_response(self, message: core_messages.NetworkUpdateResponse) -> Tuple[int, CPUArray, Dict[str, float]]:
+        return message.runtime_us, serialized_message_to_array(message.means), message.data
+
+    def do_network_update(
+        self,
+        sharing_bias: CPUArray,
+        edge_dual: CPUArray,
+        sharing_rho: float,
+        nested: bool,
+        load_factor: CPUArray
+    ) -> Tuple[int, CPUArray, Dict[str, float]]:
+        message = core_messages.NetworkUpdateRequest(
+            sharing_bias=array_to_serialized_message(sharing_bias),
+            edge_dual=array_to_serialized_message(edge_dual),
+            sharing_rho=sharing_rho,
+            nested=nested,
+            load_factor=array_to_serialized_message(load_factor)
         )
-        runtimes, means, demands = zip(*updates)
-        return max(runtimes), np.mean(means, axis=0), sum(demands) if all(demands) else None
-    
-    # async def _reconvene_network_updates(self, message: core_messages.UpdateMessage):
-    #     await asyncio.gather(*[
-    #         stub.UpdateWorkerNode(message) for stub in self._worker_stubs
-    #     ])
-    
-    # def reconvene_network_updates(self, sharing_mean_1: CPUArray, sharing_mean_2: CPUArray, sharing_dual: CPUArray):
-    #     message = core_messages.UpdateMessage(
-    #         sharing_bias=array_to_serialized_message(
-    #             sharing_mean_1 - sharing_mean_2 + sharing_dual
-    #         )
-    #     )
-    #     self._event_loop.run_until_complete(self._reconvene_network_updates(message))
-
-    async def _stub_net_reconvene(self, node_id: int, request: core_messages.UpdateMessage):
-        return await self._worker_stubs[node_id].UpdateWorkerNode(request)
-
-    def reconvene_network_updates(self, sharing_mean_1: CPUArray, sharing_mean_2: CPUArray, sharing_dual: CPUArray):
-        message = core_messages.UpdateMessage(
-            sharing_bias=array_to_serialized_message(
-                sharing_mean_1 - sharing_mean_2 + sharing_dual
+        if getattr(self, "require_full_barrier", False):
+            if self._barrier.min_arrival != self.number_of_workers:
+                raise ValueError("Double-loop path solving requires a full worker barrier")
+            updates = self._event_loop.run_until_complete(self._full_network_update(message))
+        else:
+            updates = self._barrier.scatter_gather(
+                message=message,
+                node_coroutine=self._stub_net_update,
+                store_operation=self._deserialize_update_response
             )
-        )
-        self._barrier.scatter(
-            message=message,
-            node_coroutine=self._stub_net_reconvene
-        )
+        runtimes, means, data = zip(*updates)
+        combined_data = defaultdict(float)
+        for d in data:
+            for k, v in d.items():
+                combined_data[k] += v
+        return max(runtimes), np.mean(means, axis=0), combined_data
 
     async def _close_node(self, worker_id: int):
         try:
@@ -243,6 +235,9 @@ class AsynchronousgRPCCoordinatorBackend[P: SolverParams](CoordinatorBackendBase
     def close(self):
         if not self.killed:
             self._event_loop.run_until_complete(self.aclose())
+
+    def reset_barrier(self):
+        self._barrier.reset_barrier()
 
 
 __all__ = ['AsynchronousgRPCCoordinatorBackendParams', 'AsynchronousgRPCCoordinatorBackend']

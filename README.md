@@ -1,22 +1,23 @@
 > **Note To The SIGCOMM AE Committee:** The branch `sigcomm-ae` has been prepared for you. This main branch will undergo changes in the coming weeks (including things that are not directly related to the paper).
 
-# Distributed TE Problems
+# OnlineTE
 
-A (hoperfully generic, in time) framrwork for implementation of Traffic Engineering (TE) problems (mostly MLU) over a cluster of workers. The framework handles both the problem formulation, and its solver procedure, alongside code to check each solution.
+OnlineTE is a framework for solving Traffic Engineering problems (essentially, classes of Linear Programs) at very large scale and in a distributed manner.
 
-At times when we see no need to implement a solver for a specific problem, we let Gurobi handle it.
+The problems are split and solved concurrently over multiple nodes (which are supposed to be individual network switches), with OnlineTE handling the communication and algorithmic work transparently.
 
-## Native extension setup
+# Environment Requirements
 
-The distributed path-based worker requires a C++17 compiler with OpenMP support.
-After installing `requirements.txt` in `.onlinete-venv`, build the native kernels
-from the repository root:
+OnlineTE requires a C++17 compiler with OpenMP support. Most scripts (in particular those under the `ansible` directory) expect Python use through a virtual environment named `.onlinete-venv`.
 
+After installing `requirements.txt` in `.onlinete-venv`, build the native kernels from the repository root:
 ```sh
 python -m pip install -e .
 ```
 
 Docker and SPHERE/Ansible provisioning perform this build automatically.
+
+# Structure
 
 ```
 DistributedTE
@@ -25,13 +26,13 @@ DistributedTE
   |
   +---- benchmarks          Benchmarks for different formulations over arbirary networks
   |
-  +---- notebooks           Some interactive notebooks (mostly for playing around with things)
+  +---- native              C++ kernels for path-based operations
   |
   +---- protos              ProtoBuff definitions
   |
-  +---- results             (In time!) Important results and solution outputs
+  +---- te                  All TE problem formulations and algorithm definitions
   |
-  +---- te                  All TE problem formulations and abstract definitions
+  +---- tests               Tests
   |
   +---- topologies          Utilities for working with topologies
   |

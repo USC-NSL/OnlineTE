@@ -11,7 +11,7 @@ from te.algorithms.sub_algorithms.simplex_projection import project_onto_probabi
 from te.path_providers.sparse_ops import path_based_projection_nnz, path_based_transpose_vector_product_nnz
 
 if TYPE_CHECKING:
-    from te.algorithms.formulations.path_based.distributed.packed_paths import PackedPathBatch
+    from te.path_providers.packed_paths import PackedPathBatch
 
 
 # TODO: We no longer need the input/output mask. Remove it ....
@@ -146,24 +146,44 @@ def _do_packed_path_based_nesterov_pgd(
     step_sizes: CPUArray,
     n_iter: int,
     orthant: bool,
+    optimality_tolerance: float,
 ) -> CPUArray:
     """Run the existing Nesterov PGD recurrence on unpadded path segments."""
+    if n_iter <= 0:
+        raise ValueError("n_iter must be positive")
+    if optimality_tolerance is None:
+        raise ValueError("optimality_tolerance is mandatory")
+    if (
+        not np.isfinite(optimality_tolerance) or
+        not 0 < optimality_tolerance < 1
+    ):
+        raise ValueError("optimality_tolerance must be finite and strictly between zero and one")
     t = cpu_cast_float(1.0)
     current = np.copy(y_block)
     candidate = np.empty_like(current)
     z_block = np.copy(current)
     next_z = np.empty_like(current)
+    unconverged = np.arange(path_batch.num_commodities, dtype=np.int64)
 
     for _ in range(n_iter):
-        path_batch.projected_qp_step(
+        relative_gaps = path_batch.projected_qp_step(
             z=z_block,
             y_old=y_block_old,
             linear=linear_term,
             demands=demand_block,
             step_sizes=step_sizes,
             orthant=orthant,
+            unconverged=unconverged,
             output=candidate,
         )
+        still_unconverged = relative_gaps[unconverged] > optimality_tolerance
+        converged = unconverged[~still_unconverged]
+        unconverged = unconverged[still_unconverged]
+        if len(unconverged) == 0:
+            return candidate
+        for k in converged:
+            start, end = path_batch.commodity_path_offsets[k:k + 2]
+            np.copyto(current[start:end], candidate[start:end])
         t_acc = cpu_cast_float(0.5 * (1.0 + np.sqrt(1.0 + 4.0 * t * t)))
         np.subtract(candidate, current, out=next_z)
         next_z *= cpu_cast_float((t - 1.0) / t_acc)
@@ -184,6 +204,7 @@ def do_packed_path_based_nesterov_pgd(
     demand_block: CPUArray,
     step_sizes: CPUArray,
     n_iter: int,
+    optimality_tolerance: Optional[float] = None,
 ) -> CPUArray:
     return _do_packed_path_based_nesterov_pgd(
         y_block=y_block,
@@ -194,6 +215,7 @@ def do_packed_path_based_nesterov_pgd(
         step_sizes=step_sizes,
         n_iter=n_iter,
         orthant=False,
+        optimality_tolerance=optimality_tolerance,
     )
 
 
@@ -205,6 +227,7 @@ def do_packed_path_based_maxflow_pgd(
     demand_block: CPUArray,
     step_sizes: CPUArray,
     n_iter: int,
+    optimality_tolerance: Optional[float] = None,
 ) -> CPUArray:
     return _do_packed_path_based_nesterov_pgd(
         y_block=y_block,
@@ -215,6 +238,7 @@ def do_packed_path_based_maxflow_pgd(
         step_sizes=step_sizes,
         n_iter=n_iter,
         orthant=True,
+        optimality_tolerance=optimality_tolerance,
     )
 
 try:

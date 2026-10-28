@@ -26,14 +26,15 @@ to be this way)
 
 def set_global_precision(precision: str):
     global _GLOBAL_PRECISION
-    if _GLOBAL_PRECISION == precision:
-        return
-    assert _GLOBAL_PRECISION is None
-    _GLOBAL_PRECISION =  ({
+    dtype = ({
         DOUBLE_PRECISION: np.float64,
         SINGLE_PRECISION: np.float32,
         HALF_PRECISION: np.float16
     })[precision]
+    if _GLOBAL_PRECISION == dtype:
+        return
+    assert _GLOBAL_PRECISION is None
+    _GLOBAL_PRECISION = dtype
 
 
 def get_global_precision():

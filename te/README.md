@@ -1,8 +1,9 @@
-# TE Problem Definitions
+# TE Problem Definitions and Implementation
 
-The main two components of the TE problem are:
-- The algorithm that we run
-- The topology and traffic matrix that it receives as input
+The main three components of the TE problem are:
+- The problem formulation and objective
+- The inputs (topology and traffic matrix)
+- The solver algorithm
 
 Here, we define these elements (the topolgy definitions are in `topologies`).
 ```
@@ -10,11 +11,10 @@ Here, we define these elements (the topolgy definitions are in `topologies`).
   |
   +---- algorithms          Contains different TE formulations and solver algorithms
   |
-  +---- solutions           Contains any solution (i.e. flow assignment matrix) that
-  |                         we want to save and keep (note that this can get big)
+  +---- path_providers      Utilities for working and generating network paths
   |
-  +---- traffic_models      Different Traffic Matrix (TM) definitions
+  +---- traffic_models      Different Traffic Matrix (TM) generators and definitions
   |
   +---- constants.py        Contains the definitions of global constants that we'll
-                            be using throughout all formulations.
+                            be using throughout all formulations
 ```

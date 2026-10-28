@@ -6,13 +6,13 @@ from te.algorithms.base import *
 from te.traffic_models.base import traffic_to_demands
 from topologies.utils import get_graph_null_space_basis
 from utils.exceptions import SolutionInterrupted
-from utils.logging import as_info, as_fail, as_success, as_warning, ShortTQDM
+from utils.logging import as_info, as_success, as_warning, ShortTQDM
 from array_utils import set_global_precision
 from array_utils.cpu.types import *
 # TODO: Finish the `SharingWrapper` for the inner loop
 from te.algorithms.sub_algorithms.admm import ADMMWrapper
 from te.algorithms.communication import *
-from te.algorithms.sub_algorithms.mlu_backends.base import ControllerMLUSolver, ControllerMLUException
+from te.algorithms.sub_algorithms.capacity_qp import CapacityQPMode, CapacityQP
 from .solver_params import EdgeBasedOnlineTEParameters
 
 
@@ -21,9 +21,7 @@ class OnlineTECoordinator(TELP[EdgeBasedOnlineTEParameters], DistributedSolverNo
         self, 
         problem_description: TEProblemDescription,
         solver_params: EdgeBasedOnlineTEParameters,
-        node_params: DistributedSolverNodeParams, 
-        mlu_cls: type[ControllerMLUSolver], 
-        mlu_params: SolverParams
+        node_params: DistributedSolverNodeParams
     ) -> None:
         super().__init__(
             problem_description=problem_description,
@@ -34,10 +32,16 @@ class OnlineTECoordinator(TELP[EdgeBasedOnlineTEParameters], DistributedSolverNo
         self._NULL_M: Optional[CPUArray] = None
         self._T: Optional[int] = None
         # MLU backend solver
-        self._alpha: Optional[float] = None
-        self._mlu_solver_cls: type[ControllerMLUSolver] = mlu_cls
-        self._mlu_params: SolverParams = mlu_params
-        self._mlu_solver: Optional[ControllerMLUSolver] = None
+        self._mlu_solver: CapacityQP = CapacityQP(
+            mode=CapacityQPMode.CONSENSUS,
+            rho=solver_params.Rho,
+            num_edges=self.num_edges,
+            num_commodities=self.number_of_commodities,
+            feasibility_tolerance=0.01 * self.feasibility_tolerance,
+            optimality_tolerance=0.01 * self.optimality_tolerance,
+            objective=self.objective,
+            capacities=None if self._solver_params.ScaleWithCapacity else self.capacities
+        )
         # Outer ADMM
         self._X_ek_sum_e: Optional[CPUArray] = None
         self._outer_admm_wrapper: Optional[ADMMWrapper] = None
@@ -101,20 +105,7 @@ class OnlineTECoordinator(TELP[EdgeBasedOnlineTEParameters], DistributedSolverNo
 
     def _initialize_variables_and_residuals(self):
         N = self.number_of_edges
-        self._alpha = 1 if self._solver_params.ScaleWithCapacity else np.linalg.norm(self._capacities)**2 / np.sqrt(N)
-        self._mlu_solver = self._mlu_solver_cls(
-            N, 
-            np.ones_like(self._capacities) \
-            if self._solver_params.ScaleWithCapacity else \
-            self._capacities,
-            self._mlu_params,
-            # The feasibility and optimality tolerances for the inner MLU problem
-            # most be tighter!
-            self._problem_description.eval_params.feasibility_tolerance * 0.1,
-            self._problem_description.eval_params.optimality_tolerance * 0.1
-        )
-        self._mlu_solver.rho = self._solver_params.Rho
-        self._mlu_solver.alpha = self._alpha
+        self._mlu_solver.build()
         # Initialize the consensus wrapper
         self._outer_admm_wrapper = ADMMWrapper(
             N, self._solver_params.Rho,
@@ -127,40 +118,31 @@ class OnlineTECoordinator(TELP[EdgeBasedOnlineTEParameters], DistributedSolverNo
         return self._mlu_solver.current_Z
         
     def _make_variables(self):
-        assert self._mlu_solver is not None
-        self._mlu_solver._make_variables()
+        pass
+    def _add_constraints(self):
+        pass
+    def _add_objective(self):
+        pass
         
     def _get_F(self) -> np.ndarray:
         return self._outer_admm_wrapper.get_X_step_bias()
     
     def _set_X_ek(self):
         self._X_ek = self.backend.get_X_ek()
-    
-    def _add_constraints(self):
-        assert self._mlu_solver is not None
-        self._mlu_solver._add_constraints()
-    
-    # @record_cpu_runtime('Controller-Update')
+
     def _update_controller_objective(self):
         assert self._mlu_solver is not None
         self._mlu_solver.update_F_m(
             -self._outer_admm_wrapper.get_Z_step_bias(),
             self._outer_admm_wrapper.step_size
         )
-    
-    def _add_objective(self):
-        assert self._mlu_solver is not None
-        self._mlu_solver._add_objective()
 
-    # @record_return_value('PGD-Runtime')
-    # @record_cpu_runtime('Network-Update')
     def _do_network_update(self, epoch: int):
         # TODO: Try to make the workers return aggregate flows as well
         # max_run, self._Y_bar_t = self.backend.do_network_update(epoch)
         max_run, self._sharing_mean_1 = self.backend.do_network_update(epoch)
         return max_run * 1000
 
-    # @record_cpu_runtime('Sharing-Mean')
     def _update_sharing_mean(self):
         assert self._mlu_solver is not None
 
@@ -177,7 +159,6 @@ class OnlineTECoordinator(TELP[EdgeBasedOnlineTEParameters], DistributedSolverNo
 
         self._sharing_dual += (self._sharing_mean_1 - self._sharing_mean_2)
 
-    # @record_cpu_runtime('Update-Reconvene')
     def _reconvene_network_updates(self) -> bool:
         self._update_sharing_mean()
         self._update_sharing_dual()
@@ -188,12 +169,10 @@ class OnlineTECoordinator(TELP[EdgeBasedOnlineTEParameters], DistributedSolverNo
         )
         return False
     
-    # @record_cpu_runtime('Update-X-EK-SUM')
     def _update_X_ek_sum(self):
         self._X_ek_sum_e = self.number_of_commodities * self._sharing_mean_1
         self._outer_admm_wrapper.record_X_update(self._X_ek_sum_e)
     
-    # @record_cpu_runtime('Update-Re')
     def _update_r_e(self):
         assert self._mlu_solver is not None
 
@@ -250,8 +229,6 @@ class OnlineTECoordinator(TELP[EdgeBasedOnlineTEParameters], DistributedSolverNo
                     break
             if not self._problem_description.eval_params.skip_checks:
                 self._set_X_ek()
-        except ControllerMLUException as e:
-            raise RuntimeError(as_fail(f'MLU solver failed: {e}'))
         except SolutionInterrupted:
             if not self._problem_description.eval_params.skip_checks:
                 self._set_X_ek()

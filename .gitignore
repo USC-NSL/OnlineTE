@@ -68,3 +68,5 @@ build/
 
 # VSCODE
 .vscode
+
+CMakeFiles

@@ -1,19 +1,34 @@
 syntax = "proto3";
 
 
+message PathBasedSimplifiedOnlineTEParameters {
+    optional float Timeout = 1;
+    optional float Rho = 2;
+    optional float Gamma = 3;
+    optional int32 MaxSwitchIterations = 4;
+    optional string Precision = 5;
+    optional int32 NumberOfPathsPerCommodity = 6;
+    optional string PathFile = 7;
+    optional int32 KernelThreads = 8;
+    optional float SwitchOptimalityTolerance = 9;
+}
+
+
 message PathBasedOnlineTEParameters {
     optional int32 OuterLoopRounds = 1;
     optional int32 InnerLoopRounds = 2;
     optional float Rho = 3;
     optional float Eta = 4;
     optional float Gamma = 5;
-    optional int32 SwitchIterations = 6;
+    optional int32 MaxSwitchIterations = 6;
     optional string Precision = 7;
     optional bool ScaleWithCapacity = 8;
     optional int32 NumberOfPathsPerCommodity = 9;
     optional string PathFile = 10;
     optional bool AdjustGamma = 11;
     optional int32 KernelThreads = 12;
+    optional float SwitchOptimalityTolerance = 13;
+    optional float Timeout = 14;
 }
 
 

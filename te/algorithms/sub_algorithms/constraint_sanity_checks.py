@@ -23,7 +23,7 @@ def check_capacity_constraint(
     edge_based_assignment: np.ndarray,
     graph: nx.DiGraph,
     feasibility_tolerance: float
-) -> List[Tuple[int, int, int, float, float]]:
+) -> Tuple[float, List[Tuple[int, int, int, float, float]]]:
     """
     Check if solution honors link capacity constraints.
     Returns a list of violators as 5-tuple:
@@ -33,11 +33,15 @@ def check_capacity_constraint(
     N, _ = edge_based_assignment.shape
     X_O_E = np.sum(edge_based_assignment, axis=1)
     congested_edges: List[Tuple[int, int, int, float, float]] = []
+    max_ratio = 0
     for e, (s, d, c_e) in enumerate(graph.edges(data='capacity')):
         demand = X_O_E[e]
         if is_leq(c_e, demand, feasibility_tol=feasibility_tolerance):
             congested_edges.append((e, s, d, demand, c_e))
-    return len(congested_edges)/N, congested_edges
+            ratio = demand/c_e - 1
+            if ratio > max_ratio:
+                max_ratio = ratio
+    return max_ratio, congested_edges
 
 
 def vector_consensus_test(
@@ -98,7 +102,7 @@ def check_flow_leaks(
     commodities: List[Commodity],
     feasibility_tolerance: float,
     edge_indexing: Dict[Tuple[int, int], int]
-) -> List[Tuple[int, int, int, float]]:
+) -> Tuple[float, List[Tuple[int, int, int, float]]]:
     """
     Checks for demand leaks at the source by reporting:
 
@@ -131,7 +135,7 @@ def check_flow_leaks(
                 commodities[i].destination,
                 source_in_demand[i]
             ))
-    return violations
+    return len(violations)/len(commodities), violations
 
 
 def check_flow_satisfaction(
@@ -140,7 +144,7 @@ def check_flow_satisfaction(
     commodities: List[Commodity],
     feasibility_tolerance: float,
     edge_indexing: Dict[Tuple[int, int], int]
-) -> List[Tuple[int, int, int, float, float]]:
+) -> Tuple[float, List[Tuple[int, int, int, float, float]]]:
     """
     Checks for unsatisfied demand in the source by reporting:
 
@@ -173,7 +177,7 @@ def check_flow_satisfaction(
                 i, commodities[i].source, commodities[i].destination,
                 source_out_demand[i], demands[i]
             ))
-    return violations
+    return np.sum(source_out_demand)/np.sum(demands), violations
 
 
 __all__ = [

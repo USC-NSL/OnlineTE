@@ -14,6 +14,12 @@
       update_cache: true
       name: git
     when: '"git" not in ansible_facts.packages'
+
+  - name: Ensure g++
+    ansible.builtin.apt:
+      update_cache: true
+      name: g++
+    when: '"g++" not in ansible_facts.packages'
   
   - name: Install python-dev/venv
     ansible.builtin.apt:

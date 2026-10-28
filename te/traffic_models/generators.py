@@ -315,6 +315,64 @@ class SampledTMGenerator(TMGenerator):
             yield arr
 
 
+#### NOISY SAMPLED ####
+
+@dataclass(frozen=True)
+class NoisySampledTMGeneratorParams(TMGeneratorParams):
+    delta_max: float = 1.0
+    delta_min: float = 0.0
+    sample_rate: float = 0.05
+    noise: float = 0.1
+    # initial_tm: np.ndarray = field(default_factory=lambda: np.empty((1,)), metadata={'help': argparse.SUPPRESS})
+    initial_tm_params: Type[TMGeneratorParams] = field(
+        default_factory=lambda: None, metadata={'help': argparse.SUPPRESS})
+    _type: ClassVar[str] = 'noisy_sampled'
+
+    def __post_init__(self):
+        assert self.delta_max > self.delta_min
+        assert 0 <= self.sample_rate and self.sample_rate <= 1
+        assert self.initial_tm_params.scale_factor == self.scale_factor
+        assert 0 <= self.noise and self.noise <= 1
+
+
+class NoisySampledTMGenerator(TMGenerator):
+    """
+    Similar to `SampledTMGenerator`, but also adds extra noise to all
+    other demands with a controled variance.
+    """
+    _TYPE = NoisySampledTMGeneratorParams._type
+    def __init__(self, params: NoisySampledTMGeneratorParams):
+        super().__init__(params)
+        _param, gen = get_param_class_from_name(params.initial_tm_params._type)
+        assert isinstance(params.initial_tm_params, _param)
+        self._initial_tm = next(iter(gen(params.initial_tm_params)))
+        assert self.params.dtype == self._initial_tm.dtype
+        shape = self._initial_tm.shape
+        assert len(shape) == 2 and shape[0] == shape[1]
+        assert np.allclose(np.diag(self._initial_tm), 0)
+
+    def __iter__(self) -> Iterator[np.ndarray]:
+        PARAMS: NoisySampledTMGeneratorParams = self.params
+        INIT_TM = self._initial_tm
+        number_of_samples = int(INIT_TM.size * PARAMS.sample_rate)
+        RNG = self.get_rng()
+        arr = np.copy(INIT_TM)
+        m, _ = arr.shape
+        for _ in range(PARAMS.count):
+            sample = RNG.normal(0, PARAMS.noise, (m, m))
+            indices = [
+                (RNG.integers(0, m), RNG.integers(0, m))
+                    for _ in range(number_of_samples)
+            ]
+            shifts = [RNG.random() * (PARAMS.delta_max - PARAMS.delta_min) + PARAMS.delta_min 
+                    for _ in range(number_of_samples)]
+            for index, shift in zip(indices, shifts):
+                sample[index] = shift
+            np.multiply(sample, PARAMS.scale_factor, out=sample)
+            arr = np.clip(arr + sample, a_min=1e-3, a_max=None)
+            yield arr
+
+
 @dataclass(frozen=True)
 class NCFlowTrafficMatrixGeneratorParams(TMGeneratorParams):
     rel_mean: float = 0.0
@@ -461,7 +519,8 @@ def parse_and_get_TM(
     elif cls_name == ExponentialTMGenerator.type() or \
         cls_name == GravityTrafficMatrixGenerator.type():
         tm_class_args.graph = graph
-    elif cls_name == SampledTMGenerator.type():
+    elif cls_name == SampledTMGenerator.type() or \
+        cls_name == NoisySampledTMGenerator.type():
         assert args.initial_tm_class is not None,\
             f'You must provide an initial TM for {cls_name} matrix'
     else:
