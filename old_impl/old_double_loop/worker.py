@@ -12,7 +12,7 @@ from te.algorithms.sub_algorithms.pgd import (
 from te.path_providers import *
 from utils.logging import as_warning
 from te.path_providers.packed_paths import PackedPathBatch
-from .solver_params import PathBasedSimplifiedOnlineTEParameters, WorkerUpdateData
+from .solver_params import PathBasedOnlineTEParameters, WorkerUpdateData
 
 
 class DenseSolver:
@@ -118,10 +118,10 @@ class DenseSolver:
         cpu_copyto(self._Y_tk, self._Y_tk_old)
 
 
-class SimpleOnlineTEWorkerNode(DistributedSolverNodeBase):
+class OnlineTEWorkerNode(DistributedSolverNodeBase):
     def __init__(self, params: DistributedSolverNodeParams):
         super().__init__(params)
-        self._solver_params: Optional[PathBasedSimplifiedOnlineTEParameters] = None
+        self._solver_params: Optional[PathBasedOnlineTEParameters] = None
         self._objective: Optional[TEObjective] = None
         self._ready: bool = False
 
@@ -130,9 +130,9 @@ class SimpleOnlineTEWorkerNode(DistributedSolverNodeBase):
         assert issubclass(
             params.CommunicationBackendCLS, WorkerBackendBase)
         self.backend: WorkerBackendBase =\
-            params.CommunicationBackendCLS[PathBasedSimplifiedOnlineTEParameters](
+            params.CommunicationBackendCLS[PathBasedOnlineTEParameters](
                 rpc_params=params.RPCParams_,
-                solver_params_cls=PathBasedSimplifiedOnlineTEParameters
+                solver_params_cls=PathBasedOnlineTEParameters
             )
         self.backend.start()
 
@@ -147,7 +147,7 @@ class SimpleOnlineTEWorkerNode(DistributedSolverNodeBase):
         self.backend.wait()
 
     def set_solver_parameters(self,
-        new_params: PathBasedSimplifiedOnlineTEParameters,
+        new_params: PathBasedOnlineTEParameters,
         num_workers: int,
         objective: TEObjective
     ):

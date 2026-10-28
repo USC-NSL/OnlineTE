@@ -13,6 +13,11 @@ void bind_float_kernels(nb::module_ &m, const std::string &suffix) {
     m.def(("paths_to_edge_" + suffix).c_str(), &paths_to_edge<Scalar>, nb::call_guard<nb::gil_scoped_release>());
     m.def(("paths_to_edge_mean_" + suffix).c_str(), &paths_to_edge_mean<Scalar>, nb::call_guard<nb::gil_scoped_release>());
     m.def(("total_flow_" + suffix).c_str(), &total_flow<Scalar>, nb::call_guard<nb::gil_scoped_release>());
+    m.def(("capacity_feasible_splits_" + suffix).c_str(), &capacity_feasible_splits<Scalar>,
+          nb::arg("path_edge_offsets").noconvert(), nb::arg("path_edges").noconvert(),
+          nb::arg("values").noconvert(), nb::arg("edge_factors").noconvert(),
+          nb::arg("output").noconvert(), nb::arg("num_threads"),
+          nb::call_guard<nb::gil_scoped_release>());
     m.def(("assignment_delta_norm_squared_" + suffix).c_str(), &assignment_delta_norm_squared<Scalar>, nb::call_guard<nb::gil_scoped_release>());
     m.def(("mlu_dual_objective_term_" + suffix).c_str(), &mlu_dual_objective_term<Scalar>, nb::call_guard<nb::gil_scoped_release>());
     m.def(("maxflow_dual_objective_term_" + suffix).c_str(), &maxflow_dual_objective_term<Scalar>, nb::call_guard<nb::gil_scoped_release>());

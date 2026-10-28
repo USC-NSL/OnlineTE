@@ -69,6 +69,7 @@ message NetworkUpdateRequest {
     // lost. This is with our unreliable backends (particularly,
     // the IP Multicast backend) in mind.
     int32 xid = 5;
+    SerializedNumpyArrayMessage load_factor = 6;
 }
 
 // Response from switches upon completing the an inner loop iteration.

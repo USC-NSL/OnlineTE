@@ -5,7 +5,7 @@ from gurobipy import GRB
 from te.algorithms.base import *
 from te.traffic_models.base import *
 from utils.logging import as_info, ShortTQDM
-from utils.gurobi_utils import make_model
+from utils.gurobi_utils import make_model, optimize_or_scream
 from te.path_providers import *
 from te.path_providers.sparse_ops import path_based_to_edge_based_nnz
 from . import GurobiPathBasedSolverParams
@@ -199,11 +199,9 @@ class GurobiPathBasedTE(TELP[GurobiPathBasedSolverParams]):
         self._env.close()
     
     def _solve_for_tm(self, tm: np.ndarray):
+        optimize_or_scream(self._model, not self._first_solve)
         self._model.optimize()
-        if self._model.Status == gurobipy.GRB.OPTIMAL:
-            self._set_X_ek()
-        else:
-            raise RuntimeError(f"Problem when solving. Gurobi status: {self._model.Status}")
+        self._set_X_ek()
     
     def _update_constraits(self, tm: np.ndarray):
         assert self._demand_constraints is not None

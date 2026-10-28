@@ -257,7 +257,6 @@ class ADMMWrapper:
         self._iterate: int = 0
         """The current step iteration count"""
         self._initialized = False
-        self._round_stage = "uninitialized"
 
     def _set_shapes(
         self,
@@ -312,7 +311,6 @@ class ADMMWrapper:
         Constraint matrix.
         """
         self._initialized = False
-        self._round_stage = "uninitialized"
     
     def initialize(self, X_start: CPUArray, Z_start: Optional[CPUArray] = None):
         """Initialize the algorithm and its dual variable iterates"""
@@ -346,18 +344,10 @@ class ADMMWrapper:
             case _: pass
         self._finalized = True
         self._initialized = True
-        self._round_stage = "finalized"
 
     def _require_initialized(self):
         if not self._initialized:
             raise RuntimeError("ADMMWrapper has not been initialized")
-
-    def _require_stage(self, expected: str):
-        self._require_initialized()
-        if self._round_stage != expected:
-            raise RuntimeError(
-                f"Expected ADMM round stage '{expected}', got '{self._round_stage}'"
-            )
     
     @property
     def mode(self) -> ADMMMode:
@@ -410,7 +400,6 @@ class ADMMWrapper:
         Return `b` such that the ADMM penalty is:
             || AX + b ||_2^2
         """
-        self._require_stage("finalized")
         match self._mode:
             case ADMMMode.ACCELERATED | ADMMMode.ACCELERATED_RESTART:
                 Z_term = self._mul_B(self._Z_nesterov.extrapolated_state)
@@ -425,7 +414,6 @@ class ADMMWrapper:
         Return `b` such that the ADMM penalty is:
             || BZ + b ||_2^2
         """
-        self._require_stage("x_recorded")
         match self._mode:
             case ADMMMode.ACCELERATED | ADMMMode.ACCELERATED_RESTART:
                 X_term = self._mul_A(self._X)
@@ -440,18 +428,15 @@ class ADMMWrapper:
     
     def record_X_update(self, next_X: CPUArray):
         """Record the X-update step output"""
-        self._require_stage("finalized")
         if next_X.shape != self._X_shape:
             raise ValueError(f"next_X must have shape {self._X_shape}")
         self._X = cpu_array(next_X)
         if self._mode == ADMMMode.OVER_RELAXED:
             self._set_relaxed_state(next_X)
         self._finalized = False
-        self._round_stage = "x_recorded"
     
     def record_Z_update(self, next_Z: CPUArray):
         """Record the Z-update step output"""
-        self._require_stage("x_recorded")
         if next_Z.shape != self._Z_shape:
             raise ValueError(f"next_Z must have shape {self._Z_shape}")
         match self._mode:
@@ -459,13 +444,11 @@ class ADMMWrapper:
                 np.copyto(self._Z_old, self._Z_nesterov.extrapolated_state)
             case _: np.copyto(self._Z_old, self._Z)
         self._Z = cpu_array(next_Z)
-        self._round_stage = "z_recorded"
 
     def update_dual_var(self):
         """
         Update the dual variable.
         """
-        self._require_stage("z_recorded")
         match self._mode:
             case ADMMMode.ACCELERATED | ADMMMode.ACCELERATED_RESTART:
                 self._scaled_dual_var = \
@@ -478,7 +461,6 @@ class ADMMWrapper:
             case _:
                 self._scaled_dual_var += \
                     self._sub_C(self._mul_A(self._X) + self._mul_B(self._Z))
-        self._round_stage = "dual_updated"
 
     def _record_infeasibilities(self):
         rho = self.step_size
@@ -517,7 +499,6 @@ class ADMMWrapper:
         When the step size is modified, this function will return the
         new value.
         """
-        self._require_stage("dual_updated")
         self._record_infeasibilities()
         # Update momentum state or restart
         match self._mode:
@@ -526,7 +507,6 @@ class ADMMWrapper:
             case _: pass
         self._iterate += 1
         self._finalized = True
-        self._round_stage = "finalized"
         old_rho = self.step_size
         new_rho = self._step_adapter.adapt_step_size(
             self.primal_infeasibility,
@@ -638,7 +618,6 @@ class VectorConsensusWrapper(ADMMWrapper):
             case _: pass
         self._finalized = True
         self._initialized = True
-        self._round_stage = "finalized"
 
 
 """
@@ -806,18 +785,10 @@ class DistributedSharingWrapper:
                 params=adaptation
             )
         self._initialized = False
-        self._round_stage = "uninitialized"
 
     def _require_initialized(self):
         if not self._initialized:
             raise RuntimeError("DistributedSharingWrapper has not been initialized")
-
-    def _require_stage(self, expected: str):
-        self._require_initialized()
-        if self._round_stage != expected:
-            raise RuntimeError(
-                f"Expected sharing round stage '{expected}', got '{self._round_stage}'"
-            )
 
     @property
     def mode(self) -> ADMMMode:
@@ -881,7 +852,6 @@ class DistributedSharingWrapper:
             self._Z_mean_nesterov = None
             self._dual_nesterov = None
         self._initialized = True
-        self._round_stage = "finalized"
 
     def get_X_step_bias(self) -> CPUArray:
         """
@@ -889,7 +859,6 @@ class DistributedSharingWrapper:
             || X - X^{m} + b ||_2^2
         We often refer to this quantity as the `sharing_bias`.
         """
-        self._require_stage("finalized")
         if self._acceleration is None:
             Z_mean = self._Z_mean
             scaled_dual_var = self._scaled_dual_var
@@ -903,14 +872,12 @@ class DistributedSharingWrapper:
         Return `b` such that the ADMM penalty is:
             || -Z_bar + b ||_2^2
         """
-        self._require_stage("x_recorded")
         scaled_dual_var = self._scaled_dual_var if self._acceleration is None \
             else self._dual_nesterov.extrapolated_state
         return self._X_mean + scaled_dual_var
 
     def record_mean_X_update(self, next_X_mean: CPUArray, delta_X_frobenius: float):
         """Record the X update and its squared full-matrix Frobenius change."""
-        self._require_stage("finalized")
         if next_X_mean.shape != self._dual_shape:
             raise ValueError(f"next_X_mean must have shape {self._dual_shape}")
         if np.isnan(delta_X_frobenius) or delta_X_frobenius < 0:
@@ -918,11 +885,9 @@ class DistributedSharingWrapper:
         self._X_mean_old = self._X_mean
         self._X_mean = cpu_array(next_X_mean)
         self._delta_X_frobenius = float(delta_X_frobenius)
-        self._round_stage = "x_recorded"
 
     def refresh_mean_X(self, next_X_mean: CPUArray):
         """Refresh externally changed demands between rounds, preserving Z and duals."""
-        self._require_stage("finalized")
         if next_X_mean.shape != self._dual_shape or not np.all(np.isfinite(next_X_mean)):
             raise ValueError("Invalid refreshed sharing mean")
         self._X_mean = cpu_array(next_X_mean)
@@ -934,7 +899,6 @@ class DistributedSharingWrapper:
 
     def record_mean_Z_update(self, next_Z_mean: CPUArray):
         """Record the Z-update step output through the mean"""
-        self._require_stage("x_recorded")
         if next_Z_mean.shape != self._dual_shape:
             raise ValueError(f"next_Z_mean must have shape {self._dual_shape}")
         if self._acceleration is None:
@@ -945,18 +909,15 @@ class DistributedSharingWrapper:
                 self._Z_mean_nesterov.extrapolated_state
             )
         self._Z_mean = cpu_array(next_Z_mean)
-        self._round_stage = "z_recorded"
 
     def update_dual_var(self):
         """Update the dual variable"""
-        self._require_stage("z_recorded")
         if self._acceleration is None:
             self._scaled_dual_var += (self._X_mean - self._Z_mean)
         else:
             self._scaled_dual_var = \
                 self._dual_nesterov.extrapolated_state + \
                 (self._X_mean - self._Z_mean)
-        self._round_stage = "dual_updated"
 
     def _record_infeasibilities(self):
         p_inf = self._K**0.5 * float(np.linalg.norm(self._X_mean - self._Z_mean))
@@ -995,7 +956,6 @@ class DistributedSharingWrapper:
 
     def finalize_round(self) -> Optional[float]:
         """Finalize the ADMM round"""
-        self._require_stage("dual_updated")
         self._record_infeasibilities()
         if self._acceleration is not None:
             self._update_momentum_or_restart()
@@ -1007,7 +967,6 @@ class DistributedSharingWrapper:
         )
         if new_rho is not None and self._dual_nesterov is not None:
             self._dual_nesterov.rescale(old_rho / new_rho)
-        self._round_stage = "finalized"
         return new_rho
 
     def is_primal_feasible(self, eps_abs: float, eps_rel: float) -> bool:

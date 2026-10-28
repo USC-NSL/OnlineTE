@@ -105,7 +105,8 @@ class OnlineTEWorkerNodeListener(OnlineTECoreServicer):
             serialized_message_to_array(request.sharing_bias),
             serialized_message_to_array(request.edge_dual),
             request.sharing_rho,
-            request.nested
+            request.nested,
+            serialized_message_to_array(request.load_factor)
         )
         return core_messages.NetworkUpdateResponse(
             runtime_us=runtime,

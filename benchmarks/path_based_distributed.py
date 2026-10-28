@@ -13,10 +13,6 @@ if __name__ == '__main__':
         "online_te", online_te_parser('Path-based OnlineTE', PathBasedOnlineTEParameters),
         help='Options for OnlineTE solver'
     )
-    solver_subparser.add_subcommand(
-        "simple", online_te_parser('Simplified path-based OnlineTE', PathBasedSimplifiedOnlineTEParameters),
-        help='Options for simplified OnlineTE solver'
-    )
 
     # Get TE problem description
     problem, args = parse_te_problem_description_args(parser)
@@ -27,14 +23,6 @@ if __name__ == '__main__':
             solver_param_cls=PathBasedOnlineTEParameters,
             coordinator_cls=OnlineTECoordinator,
             worker_cls=OnlineTEWorkerNode
-        )
-        spawn_online_te_solver(problem, solver, solver_subparser_args.local)
-    elif args.solver == 'simple':
-        solver = parse_online_te_config(
-            args=solver_subparser_args,
-            solver_param_cls=PathBasedSimplifiedOnlineTEParameters,
-            coordinator_cls=SimpleOnlineTECoordinator,
-            worker_cls=SimpleOnlineTEWorkerNode
         )
         spawn_online_te_solver(problem, solver, solver_subparser_args.local)
     else:

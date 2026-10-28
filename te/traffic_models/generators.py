@@ -359,8 +359,7 @@ class NoisySampledTMGenerator(TMGenerator):
         arr = np.copy(INIT_TM)
         m, _ = arr.shape
         for _ in range(PARAMS.count):
-            # sample = np.zeros((m, m))
-            sample = RNG.random((m, m)) * PARAMS.noise * 2 - PARAMS.noise
+            sample = RNG.normal(0, PARAMS.noise, (m, m))
             indices = [
                 (RNG.integers(0, m), RNG.integers(0, m))
                     for _ in range(number_of_samples)

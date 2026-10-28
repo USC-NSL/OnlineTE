@@ -94,7 +94,7 @@ class ADMMWrapperTests(unittest.TestCase):
 
         residual = A @ X1 + B @ Z1 - C
         wrapper.update_dual_var()
-        np.testing.assert_allclose(wrapper.dual_var, residual)
+        np.testing.assert_allclose(wrapper.scaled_dual_var, residual)
         wrapper.finalize_round()
 
         self.assertAlmostEqual(wrapper.primal_infeasibility, np.linalg.norm(residual))
@@ -120,7 +120,7 @@ class ADMMWrapperTests(unittest.TestCase):
         wrapper.finalize_round()
 
         residual = A @ X1 + B @ Z1 - C
-        np.testing.assert_allclose(wrapper.dual_var, residual)
+        np.testing.assert_allclose(wrapper.scaled_dual_var, residual)
         self.assertAlmostEqual(wrapper.primal_infeasibility, np.linalg.norm(residual))
         self.assertAlmostEqual(
             wrapper.dual_infeasibility,
@@ -163,7 +163,7 @@ class ADMMWrapperTests(unittest.TestCase):
         np.testing.assert_allclose(wrapper.get_Z_step_bias(), relaxed - C)
         wrapper.record_Z_update(Z1)
         wrapper.update_dual_var()
-        np.testing.assert_allclose(wrapper.dual_var, relaxed + B @ Z1 - C)
+        np.testing.assert_allclose(wrapper.scaled_dual_var, relaxed + B @ Z1 - C)
 
     def test_acceleration_advances_extrapolated_states(self):
         acceleration = NesterovAccelerationParams(step_sizes=constant_half_steps)
@@ -192,7 +192,7 @@ class ADMMWrapperTests(unittest.TestCase):
         wrapper.record_Z_update(Z2)
         wrapper.update_dual_var()
         expected_dual2 = dual_hat1 + X2 - Z2
-        np.testing.assert_allclose(wrapper.dual_var, expected_dual2)
+        np.testing.assert_allclose(wrapper.scaled_dual_var, expected_dual2)
         wrapper.finalize_round()
         self.assertAlmostEqual(wrapper.dual_infeasibility, np.linalg.norm(Z2 - Z_hat1))
 
@@ -244,7 +244,7 @@ class ADMMWrapperTests(unittest.TestCase):
         wrapper.update_dual_var()
 
         self.assertEqual(wrapper.finalize_round(), 2.0)
-        np.testing.assert_allclose(wrapper.dual_var, [1.0])
+        np.testing.assert_allclose(wrapper.scaled_dual_var, [1.0])
         np.testing.assert_allclose(wrapper.get_X_step_bias(), [1.5])
 
         wrapper.record_X_update(np.array([0.0]))
@@ -268,22 +268,28 @@ class ADMMWrapperTests(unittest.TestCase):
 
         wrapper.initialize(np.array([3.0]))
         self.assertEqual(wrapper.step_size, 1.0)
-        np.testing.assert_allclose(wrapper.dual_var, [0.0])
+        np.testing.assert_allclose(wrapper.scaled_dual_var, [0.0])
         with self.assertRaises(RuntimeError):
             _ = wrapper.primal_infeasibility
 
-    def test_invalid_round_order_and_shapes_are_rejected(self):
+    def test_invalid_shapes_are_rejected_without_changing_round_state(self):
         wrapper = self.make_wrapper(np.eye(2), -np.eye(2), np.zeros(2), rho=1.0)
         with self.assertRaises(RuntimeError):
-            wrapper.get_X_step_bias()
+            _ = wrapper.scaled_dual_var
         wrapper.initialize(np.zeros(2))
-        with self.assertRaises(RuntimeError):
-            wrapper.record_Z_update(np.zeros(2))
         with self.assertRaises(ValueError):
             wrapper.record_X_update(np.zeros(3))
+        np.testing.assert_allclose(wrapper.get_X_step_bias(), np.zeros(2))
         wrapper.record_X_update(np.ones(2))
-        with self.assertRaises(RuntimeError):
-            wrapper.finalize_round()
+        with self.assertRaises(ValueError):
+            wrapper.record_Z_update(np.zeros(3))
+        np.testing.assert_allclose(wrapper.get_Z_step_bias(), np.ones(2))
+        wrapper.record_Z_update(np.zeros(2))
+        wrapper.update_dual_var()
+        wrapper.finalize_round()
+        np.testing.assert_allclose(wrapper.scaled_dual_var, np.ones(2))
+        self.assertAlmostEqual(wrapper.primal_infeasibility, np.sqrt(2))
+        self.assertEqual(wrapper.dual_infeasibility, 0.0)
 
 
 class DistributedSharingWrapperTests(unittest.TestCase):
@@ -326,7 +332,7 @@ class DistributedSharingWrapperTests(unittest.TestCase):
 
         Z0 = X0
         Z1 = Z_mean1[:, None] + X1 - X1.mean(axis=1)[:, None]
-        np.testing.assert_allclose(wrapper.dual_var, X1.mean(axis=1) - Z_mean1)
+        np.testing.assert_allclose(wrapper.scaled_dual_var, X1.mean(axis=1) - Z_mean1)
         self.assertAlmostEqual(wrapper.primal_infeasibility, np.linalg.norm(X1 - Z1))
         self.assertAlmostEqual(wrapper.dual_infeasibility, rho * np.linalg.norm(Z1 - Z0))
 
@@ -361,7 +367,7 @@ class DistributedSharingWrapperTests(unittest.TestCase):
         wrapper.record_mean_Z_update(Z_mean1)
         wrapper.update_dual_var()
         dual1 = X_mean1 - Z_mean1
-        np.testing.assert_allclose(wrapper.dual_var, dual1)
+        np.testing.assert_allclose(wrapper.scaled_dual_var, dual1)
         wrapper.finalize_round()
 
         Z_mean_hat1 = Z_mean1 + 0.5 * (Z_mean1 - X_mean0)
@@ -376,7 +382,7 @@ class DistributedSharingWrapperTests(unittest.TestCase):
         wrapper.record_mean_Z_update(Z_mean2)
         wrapper.update_dual_var()
         dual2 = dual_hat1 + X_mean2 - Z_mean2
-        np.testing.assert_allclose(wrapper.dual_var, dual2)
+        np.testing.assert_allclose(wrapper.scaled_dual_var, dual2)
         wrapper.finalize_round()
 
         Z_hat1 = Z_mean_hat1[:, None] + X1 - X_mean1[:, None]
@@ -438,7 +444,7 @@ class DistributedSharingWrapperTests(unittest.TestCase):
         wrapper.update_dual_var()
 
         self.assertEqual(wrapper.finalize_round(), 2.0)
-        np.testing.assert_allclose(wrapper.dual_var, [1.0])
+        np.testing.assert_allclose(wrapper.scaled_dual_var, [1.0])
         np.testing.assert_allclose(wrapper.get_X_step_bias(), [3.5])
 
         wrapper.record_mean_X_update(np.array([0.0]), 4.0)
@@ -464,7 +470,7 @@ class DistributedSharingWrapperTests(unittest.TestCase):
 
         wrapper.initialize(np.array([3.0]))
         np.testing.assert_allclose(wrapper.get_X_step_bias(), [0.0])
-        np.testing.assert_allclose(wrapper.dual_var, [0.0])
+        np.testing.assert_allclose(wrapper.scaled_dual_var, [0.0])
         with self.assertRaises(RuntimeError):
             _ = wrapper.primal_infeasibility
 
@@ -511,21 +517,33 @@ class DistributedSharingWrapperTests(unittest.TestCase):
 
         wrapper.initialize(np.array([3.0]))
         self.assertEqual(wrapper.step_size, 1.0)
-        np.testing.assert_allclose(wrapper.dual_var, [0.0])
+        np.testing.assert_allclose(wrapper.scaled_dual_var, [0.0])
         with self.assertRaises(RuntimeError):
             _ = wrapper.dual_infeasibility
 
-    def test_invalid_inputs_and_round_order_are_rejected(self):
+    def test_invalid_inputs_are_rejected_without_changing_round_state(self):
         with self.assertRaises(ValueError):
             DistributedSharingWrapper((2, 0), 1.0)
         wrapper = DistributedSharingWrapper((2, 3), 1.0)
         with self.assertRaises(ValueError):
             wrapper.initialize(np.zeros(3))
         wrapper.initialize(np.zeros(2))
-        with self.assertRaises(RuntimeError):
-            wrapper.record_mean_Z_update(np.zeros(2))
         with self.assertRaises(ValueError):
-            wrapper.record_mean_X_update(np.zeros(2), -1.0)
+            wrapper.record_mean_X_update(np.zeros(3), 0.0)
+        for invalid in (-1.0, np.nan):
+            with self.subTest(delta=invalid), self.assertRaises(ValueError):
+                wrapper.record_mean_X_update(np.zeros(2), invalid)
+        np.testing.assert_allclose(wrapper.X_mean, np.zeros(2))
+        wrapper.record_mean_X_update(np.ones(2), 6.0)
+        with self.assertRaises(ValueError):
+            wrapper.record_mean_Z_update(np.zeros(3))
+        np.testing.assert_allclose(wrapper.Z_mean, np.zeros(2))
+        wrapper.record_mean_Z_update(np.zeros(2))
+        wrapper.update_dual_var()
+        wrapper.finalize_round()
+        np.testing.assert_allclose(wrapper.scaled_dual_var, np.ones(2))
+        self.assertAlmostEqual(wrapper.primal_infeasibility, np.sqrt(6))
+        self.assertEqual(wrapper.dual_infeasibility, 0.0)
 
 
 if __name__ == "__main__":

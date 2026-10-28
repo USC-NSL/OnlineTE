@@ -404,6 +404,33 @@ class PackedPathBatch:
         )
         return output
 
+    def capacity_feasible_splits(
+        self, values: np.ndarray, edge_factors: np.ndarray,
+    ) -> np.ndarray:
+        """Return a fresh solution scaled by the minimum factor on each path.
+
+        ``edge_factors`` must describe global overload of the same iterate:
+        min(1, capacity / load), with factor one on unloaded edges. They are
+        independent of this batch's capacity-normalization ``edge_scale``.
+        The caller must ensure other primal constraints already hold; scaling
+        preserves nonnegativity, flow conservation, and demand upper bounds.
+        Neither input is modified. Use ``total_flow`` on the returned solution
+        to evaluate its feasible throughput.
+        """
+        kernels = require_native_kernels()
+        _require_float_array(values, "values", self.num_paths, self.dtype)
+        _require_float_array(edge_factors, "edge_factors", self.num_edges, self.dtype)
+        output = np.empty_like(values)
+        _typed_kernel(kernels, "capacity_feasible_splits", self.dtype)(
+            self.path_edge_offsets,
+            self.path_edges,
+            values,
+            edge_factors,
+            output,
+            self.kernel_threads,
+        )
+        return output
+
     def total_flow(self, values: np.ndarray, demands: np.ndarray) -> float:
         kernels = require_native_kernels()
         _require_float_array(values, "values", self.num_paths, self.dtype)

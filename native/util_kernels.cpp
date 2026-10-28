@@ -1,6 +1,76 @@
 #include "path_kernels.hpp"
 
 template <typename Scalar>
+void capacity_feasible_splits(
+    I64Array path_edge_offsets,
+    I32Array path_edges,
+    ConstArray1<Scalar> values,
+    ConstArray1<Scalar> edge_factors,
+    Array1<Scalar> output,
+    int num_threads
+) {
+    const size_t paths = values.shape(0);
+    if (path_edge_offsets.shape(0) != paths + 1 || output.shape(0) != paths) {
+        throw std::invalid_argument("path offsets and output must match the path count");
+    }
+    // All arrays are contiguous. Compare byte ranges, including partial views
+    // and integer topology buffers, before validating or writing any values.
+    const auto output_start = reinterpret_cast<uintptr_t>(output.data());
+    const size_t output_bytes = output.nbytes();
+    const auto reject_overlap = [&](const auto &input) {
+        const auto input_start = reinterpret_cast<uintptr_t>(input.data());
+        const size_t input_bytes = input.nbytes();
+        if (output_bytes && input_bytes &&
+            (output_start <= input_start ? input_start - output_start < output_bytes
+                                         : output_start - input_start < input_bytes)) {
+            throw std::invalid_argument("output must not overlap any input");
+        }
+    };
+    reject_overlap(path_edge_offsets);
+    reject_overlap(path_edges);
+    reject_overlap(values);
+    reject_overlap(edge_factors);
+
+    const auto *offsets = path_edge_offsets.data();
+    const auto *edges = path_edges.data();
+    const auto *y = values.data();
+    const auto *factors = edge_factors.data();
+    auto *out = output.data();
+    if (offsets[0] != 0 || offsets[paths] < 0 ||
+        static_cast<size_t>(offsets[paths]) != path_edges.shape(0)) {
+        throw std::invalid_argument("invalid path edge offsets");
+    }
+    for (size_t p = 0; p < paths; ++p) {
+        if (offsets[p] < 0 || offsets[p + 1] <= offsets[p] ||
+            offsets[p + 1] > offsets[paths]) {
+            throw std::invalid_argument("every path must contain valid edge offsets");
+        }
+        if (!std::isfinite(y[p]) || y[p] < Scalar(0)) {
+            throw std::invalid_argument("values must be finite and nonnegative");
+        }
+    }
+    for (size_t e = 0; e < edge_factors.shape(0); ++e) {
+        if (!std::isfinite(factors[e]) || factors[e] < Scalar(0) || factors[e] > Scalar(1)) {
+            throw std::invalid_argument("edge_factors must be finite and in [0, 1]");
+        }
+    }
+    for (size_t i = 0; i < path_edges.shape(0); ++i) {
+        if (edges[i] < 0 || static_cast<size_t>(edges[i]) >= edge_factors.shape(0)) {
+            throw std::invalid_argument("path edge index is outside edge_factors");
+        }
+    }
+    const int threads = effective_threads(num_threads);
+#pragma omp parallel for schedule(static) num_threads(threads) if(paths > 1)
+    for (int64_t p = 0; p < static_cast<int64_t>(paths); ++p) {
+        Scalar factor = Scalar(1);
+        for (int64_t i = offsets[p]; i < offsets[p + 1]; ++i) {
+            factor = std::min(factor, factors[edges[i]]);
+        }
+        out[p] = y[p] * factor;
+    }
+}
+
+template <typename Scalar>
 void initialize_splits(
     I64Array commodity_path_offsets,
     I64Array path_edge_offsets,
@@ -205,5 +275,22 @@ template double total_flow(
     I64Array commodity_path_offsets,
     ConstArray1<double> values,
     ConstArray1<double> demands,
+    int num_threads
+);
+
+template void capacity_feasible_splits<float>(
+    I64Array path_edge_offsets,
+    I32Array path_edges,
+    ConstArray1<float> values,
+    ConstArray1<float> edge_factors,
+    Array1<float> output,
+    int num_threads
+);
+template void capacity_feasible_splits<double>(
+    I64Array path_edge_offsets,
+    I32Array path_edges,
+    ConstArray1<double> values,
+    ConstArray1<double> edge_factors,
+    Array1<double> output,
     int num_threads
 );

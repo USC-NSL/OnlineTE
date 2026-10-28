@@ -41,7 +41,8 @@ class CoordinatorBackendBase[P: SolverParams](CommunicationBackendBase[P]):
         sharing_bias: CPUArray,
         edge_dual: CPUArray,
         sharing_rho: float,
-        nested: bool
+        nested: bool,
+        load_factor: CPUArray
     ) -> Tuple[int, CPUArray, Dict[str, float]]:
         """
         Do network update for a given epoch.

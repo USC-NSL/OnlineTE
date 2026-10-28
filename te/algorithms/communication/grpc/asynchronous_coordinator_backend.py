@@ -193,13 +193,15 @@ class AsynchronousgRPCCoordinatorBackend[P: SolverParams](CoordinatorBackendBase
         sharing_bias: CPUArray,
         edge_dual: CPUArray,
         sharing_rho: float,
-        nested: bool
+        nested: bool,
+        load_factor: CPUArray
     ) -> Tuple[int, CPUArray, Dict[str, float]]:
         message = core_messages.NetworkUpdateRequest(
             sharing_bias=array_to_serialized_message(sharing_bias),
             edge_dual=array_to_serialized_message(edge_dual),
             sharing_rho=sharing_rho,
-            nested=nested
+            nested=nested,
+            load_factor=array_to_serialized_message(load_factor)
         )
         if getattr(self, "require_full_barrier", False):
             if self._barrier.min_arrival != self.number_of_workers:

@@ -36,6 +36,7 @@ class DenseSolver:
         self._total_numbar_of_commodities = total_numbar_of_commodities
         self._N = path_batch.num_edges
         self._Y_tk = cpu_zeros((path_batch.num_paths,))
+        self._feasible_Y_tk = cpu_zeros((path_batch.num_paths,))
         self._initialize_splits()
         self._Y_tk_old = cpu_array(self._Y_tk)
         self._update_step_sizes()
@@ -50,7 +51,10 @@ class DenseSolver:
 
     @property
     def X_ek(self) -> CPUArray:
-        return self._paths.paths_to_edge(self._Y_tk, self._demands)
+        match self._objective:
+            case TEObjective.MLU: return self._paths.paths_to_edge(self._Y_tk, self._demands)
+            case TEObjective.MAX_FLOW: return self._paths.paths_to_edge(self._feasible_Y_tk, self._demands)
+            case _: raise ValueError
 
     @property
     def X_bar(self) -> CPUArray:
@@ -58,7 +62,10 @@ class DenseSolver:
 
     @property
     def total_flow(self) -> float:
-        return self._paths.total_flow(self._Y_tk, self._demands)
+        match self._objective:
+            case TEObjective.MLU: return self._paths.total_flow(self._Y_tk, self._demands)
+            case TEObjective.MAX_FLOW: return self._paths.total_flow(self._feasible_Y_tk, self._demands)
+            case _: raise ValueError
 
     @property
     def norm_F_delta_X(self) -> float:
@@ -80,7 +87,7 @@ class DenseSolver:
         self._demands = cpu_array(demands)
         self._update_step_sizes()
     
-    def update(self, sharing_bias: CPUArray, sharing_rho: float, nested: bool) -> CPUArray:
+    def update(self, sharing_bias: CPUArray, sharing_rho: float, nested: bool = False) -> CPUArray:
         sharing_bias = cpu_array(sharing_bias)
         if self._objective == TEObjective.MLU:
             linear_term = self._paths.linear_term(sharing_bias, self._demands)
@@ -114,7 +121,8 @@ class DenseSolver:
             raise ValueError
         return self._paths.paths_to_edge_mean(self._Y_tk, self._demands)
 
-    def update_Y_tk_old(self):
+    def update_Y_tk_old(self, load_factor: CPUArray):
+        self._feasible_Y_tk = self._paths.capacity_feasible_splits(self._Y_tk_old, load_factor)
         cpu_copyto(self._Y_tk, self._Y_tk_old)
 
 
@@ -236,14 +244,15 @@ class OnlineTEWorkerNode(DistributedSolverNodeBase):
         sharing_bias: CPUArray,
         edge_dual: CPUArray,
         sharing_rho: float,
-        nested: bool
+        nested: bool,
+        load_factor: CPUArray
     ) -> Tuple[int, CPUArray, Dict[str, float]]:
         # X-step
         DENSE = self._dense_solver
         mean = DENSE.update(sharing_bias, sharing_rho, nested)
         norm_F_delta_X = DENSE.norm_F_delta_X
         dual_objective = DENSE.dual_objective_term(edge_dual)
-        DENSE.update_Y_tk_old()
+        DENSE.update_Y_tk_old(load_factor)
         data = {
             WorkerUpdateData.NORM_F_DELTA_X: norm_F_delta_X,
             WorkerUpdateData.DUAL_OBJ: dual_objective

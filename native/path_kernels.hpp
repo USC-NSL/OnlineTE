@@ -327,8 +327,23 @@ template <typename Scalar> void paths_to_edge_mean(
 );
 
 /**
+ * Write values[p] * min(edge_factors[e] for e in path p) to output.
+ * Factors describe global overload of this same iterate, not inverse capacities.
+ * Inputs must be finite and nonnegative; factors must be at most one.
+ * Output must not overlap any input. All validation precedes output writes.
+ */
+template <typename Scalar> void capacity_feasible_splits(
+    I64Array path_edge_offsets,
+    I32Array path_edges,
+    ConstArray1<Scalar> values,
+    ConstArray1<Scalar> edge_factors,
+    Array1<Scalar> output,
+    int num_threads
+);
+
+/**
  * Returns the total flow of the current path-based assignment.
- * 
+ *
  * @returns Calculated total flow.
  */
 template <typename Scalar> Scalar total_flow(
