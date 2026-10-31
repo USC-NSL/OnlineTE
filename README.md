@@ -38,3 +38,24 @@ DistributedTE
   |
   +---- utils               Misc. utilities (logging, making things pretty, etc.)
 ```
+
+# Our Paper
+OnlineTE was submitted to SIGCOMM'26. The appendix of the paper describes in detail what the optimization model does. If this work helps your projects, the paper can be cited as follows:
+```bib
+@inproceedings{10.1145/3789240.3829123,
+  author = {Ghavidel, Arvin and Namyar, Pooria and Matni, Nikolai and Willinger, Walter and Govindan, Ramesh},
+  title = {Near-optimal Online Traffic Engineering},
+  year = {2026},
+  isbn = {9798400724671},
+  publisher = {Association for Computing Machinery},
+  address = {New York, NY, USA},
+  url = {https://doi.org/10.1145/3789240.3829123},
+  doi = {10.1145/3789240.3829123},
+  booktitle = {Proceedings of the ACM SIGCOMM 2026 Conference},
+  pages = {1024–1045},
+  numpages = {22},
+  keywords = {traffic engineering, wide-area networks, network optimization, distributed and parallel algorithms},
+  location = {Denver, CO, USA},
+  series = {SIGCOMM '26}
+}
+```
