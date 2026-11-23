@@ -1,5 +1,11 @@
 # OnlineTE
 
+> **Note To The SIGCOMM Artifact Evaluation Committee (November 23, 2026)**
+>
+> Thank you for your reviews. Changes shall be committed to this repository to address issues raised on HotCRP.
+> Each commit since initial submission (starting from November 23, 2026) will have a message describing exactly what it changes and in regards to which review comments the changes have been made (of course, we will also document these in our response later).
+> The only exception to this is the GPU implementation of OnlineTE, which was never in-scope for this AE submission and we have removed it as it was a leftover commit.
+
 > **Note To The SIGCOMM Artifact Evaluation Committee**
 >
 > Testing `OnlineTE` requries multiple machines and if possible, a Gruobi license to validate the results.
