@@ -47,6 +47,14 @@ class WorkerBackendBase[P: SolverParams](CommunicationBackendBase[P]):
     @report_chunk.setter
     def report_chunk(self, f: Callable[[None], CPUArray]):
         self._report_chunk = f
+
+    # TODO: Find a graceful way of adding this ...
+    @property
+    def report_splits(self) -> Callable[[None], CPUArray]:
+        return self._report_splits
+    @report_splits.setter
+    def report_splits(self, f: Callable[[None], CPUArray]):
+        self._report_splits = f
     
     @property
     def report_aggregate(self) -> Callable[[None], CPUArray]:

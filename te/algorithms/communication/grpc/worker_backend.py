@@ -115,6 +115,9 @@ class OnlineTEWorkerNodeListener(OnlineTECoreServicer):
     
     def RequestChunk(self, request, context):
         return chunk_big_array(self._backend.report_chunk(), te.constants.GRPC_ARRAY_STREAM_MAX_LEN)
+
+    def RequestSplit(self, request, context):
+        return chunk_big_array(self._backend.report_splits(), te.constants.GRPC_ARRAY_STREAM_MAX_LEN)
     
     def RequestAggregate(self, request, context):
         return array_to_serialized_message(self._backend.report_aggregate())

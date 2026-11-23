@@ -7,28 +7,49 @@ import numpy as np
 from typing import Union, Optional
 from numba.typed import List as NumbaList
 from array_utils.cpu.types import *
-from te.algorithms.sub_algorithms.simplex_projection import project_onto_probability_simplex, project_onto_probability_orthant
-from te.path_providers.sparse_ops import path_based_projection_nnz, path_based_transpose_vector_product_nnz
+from te.algorithms.sub_algorithms.simplex_projection import (
+    project_onto_probability_simplex, project_onto_probability_orthant
+)
+from te.path_providers.sparse_ops import (
+    path_based_projection_nnz, path_based_transpose_vector_product_nnz
+)
 
 
-# TODO: We no longer need the input/output mask. Remove it ....
 def do_memory_efficient_pgd(
     lambda_block: CPUArray, x_block: CPUArray, nnt: CPUArray,
     bias: CPUArray, x_block_0: CPUArray,
-    step_size: float, n_iter: int, mask: CPUArray
+    step_size: float, mask: CPUArray, *, max_iter: int = 1000,
+    optimality_tolerance: float = 1e-5, feasibility_tolerance: float = 1e-5
 ) -> CPUArray:
+    """Accelerate the dense dual with a mean gap and primal feasibility check.
+
+    Keep the incoming assignment and bias fixed throughout this subproblem.
+    Reuse its primal reconstruction as the gradient so accumulated roundoff in
+    ``P @ X + X_0 == X`` cannot make the update disagree with the stopping test.
     """
-    A variant of our plain PGD algorithm that does the bare minimum to handle
-    the sharing problem.
-    It is more memory efficient, as it gets away with calculating the null-space
-    bias (i.e. Y_tk) between iterations.
-    """
-    for _ in range(n_iter):
-        # TODO: This can be optimized slightly if `x_block_0` is a least-squares solution ...
-        lambda_block -= step_size * (nnt @ (lambda_block + x_block - np.expand_dims(bias, axis=1)) + x_block_0)
-        # np.maximum(lambda_block, 0, out=lambda_block, where=~mask)
-        np.clip(lambda_block, a_min=0, a_max=None, out=lambda_block)
-    return lambda_block
+    if not np.isfinite(feasibility_tolerance) or feasibility_tolerance <= 0:
+        raise ValueError('PGD feasibility_tolerance must be positive and finite')
+    t = 1
+    momentum = 0
+    z_block = np.copy(lambda_block)
+    previous_gradient = None
+    for iteration in range(max_iter + 1):
+        candidate = x_block + nnt @ (lambda_block - bias[:, None])
+        min_assignment = float(np.min(candidate))
+        gap = abs(float(np.sum(lambda_block * candidate, dtype=np.float64))) / x_block.shape[1]
+        if gap <= optimality_tolerance and min_assignment >= -feasibility_tolerance:
+            return lambda_block
+        if iteration == max_iter:
+            return lambda_block
+        momentum_gradient = candidate if previous_gradient is None else \
+            candidate + momentum * (candidate - previous_gradient)
+        next_lambda = np.maximum(0, z_block - step_size * momentum_gradient)
+        t_acc = cpu_cast_float(0.5 * (1.0 + np.sqrt(1.0 + 4.0 * t * t)))
+        momentum = cpu_cast_float((t - 1.0) / t_acc)
+        z_block = next_lambda + momentum * (next_lambda - lambda_block)
+        previous_gradient = candidate
+        lambda_block[:] = next_lambda
+        t = t_acc
 
 
 def do_dual_pgd(
@@ -132,33 +153,3 @@ def do_path_based_maxflow_pgd(
         t = t_acc
 
     return y_block
-
-try:
-    """
-    This module might be imported on systems that just do not have a GPU (
-    let alone one from Nvidia that can use CUDA).
-    Thus, we try to import this but fall-back on plain Numpy if it fails.
-    The main thing that we need to monkey-patch is `get_array_module` since
-    we use it to write code that works on both CPU and GPU. We handle this by
-    just hard-coding it to return Numpy whenever called.
-    """
-    import cupy as cp
-    from te.algorithms.array_utils.gpu_utils import zip_map, PartitionedGPUArray, ScatteredGPUArray
-
-    def conditional_relu(l, m):
-        l[(~m) & (l < 0)] = 0
-        return l
-
-    def do_pgd_gpu(lambda_block: PartitionedGPUArray, x_block: PartitionedGPUArray, nnt: ScatteredGPUArray, bias: ScatteredGPUArray,
-                   x_block_0: PartitionedGPUArray, step_size: float, n_iter: int, mask: PartitionedGPUArray, epsilon: float) -> PartitionedGPUArray:
-        """
-        A variant of `do_memory_efficient_pgd` suited for running on one or more GPUs.
-        """
-        for _ in range(n_iter):
-            lambda_block = zip_map([nnt, lambda_block, x_block, bias, x_block_0], 
-                                   lambda nn, l, x, b, x0: l - step_size * (nn @ (l - epsilon + x - cp.expand_dims(b, axis=1)) + x0))
-            zip_map([lambda_block, mask], lambda l, m: conditional_relu(l, m))
-        return lambda_block
-
-except ModuleNotFoundError:
-    do_pgd_gpu = None

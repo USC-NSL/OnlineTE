@@ -14,6 +14,7 @@ from te.algorithms.sub_algorithms.admm import ADMMWrapper
 from te.algorithms.communication import *
 from te.algorithms.sub_algorithms.mlu_backends.base import ControllerMLUSolver, ControllerMLUException
 from .solver_params import EdgeBasedOnlineTEParameters
+from te.algorithms.formulations.edge_based.solutions import EdgeBasedSolution
 
 
 class OnlineTECoordinator(TELP[EdgeBasedOnlineTEParameters], DistributedSolverNodeBase):
@@ -50,6 +51,8 @@ class OnlineTECoordinator(TELP[EdgeBasedOnlineTEParameters], DistributedSolverNo
             node_params.CommunicationBackendCLS[EdgeBasedOnlineTEParameters](
                 node_params.RPCParams_, EdgeBasedOnlineTEParameters
             )
+        # TE Solution Class
+        self._solution_cls = EdgeBasedSolution
         # self.backend.register_signal_handler()
         self.backend.start()
         # These we call right now, as opposed to doing them under `initialize`

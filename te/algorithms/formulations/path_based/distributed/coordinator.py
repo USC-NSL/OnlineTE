@@ -13,6 +13,7 @@ from te.algorithms.sub_algorithms.admm import ADMMWrapper
 from te.algorithms.communication import *
 from te.algorithms.sub_algorithms.mlu_backends.base import ControllerMLUSolver, ControllerMLUException
 from .solver_params import PathBasedOnlineTEParameters
+from te.algorithms.formulations.path_based.solutions import PathBasedSolution
 
 
 class OnlineTECoordinator(TELP[PathBasedOnlineTEParameters], DistributedSolverNodeBase):
@@ -41,6 +42,9 @@ class OnlineTECoordinator(TELP[PathBasedOnlineTEParameters], DistributedSolverNo
         self._sharing_mean_1: Optional[CPUArray] = None
         self._sharing_mean_2: Optional[CPUArray] = None
         self._sharing_dual: Optional[CPUArray] = None
+        # Splits for solution reporting
+        self._splits: Optional[CPUArray] = None
+        self._solution_cls = PathBasedSolution
         # Communication backend
         self.backend: CoordinatorBackendBase = \
             node_params.CommunicationBackendCLS[PathBasedOnlineTEParameters](
@@ -88,6 +92,10 @@ class OnlineTECoordinator(TELP[PathBasedOnlineTEParameters], DistributedSolverNo
             case TEObjective.MAX_FLOW: return self._total_flow
             case _: raise NotImplementedError
 
+    @property
+    def splits(self) -> CPUArray:
+        return self._splits
+
     def _initialize_variables_and_residuals(self):
         N = self.number_of_edges
         # PATHS = self._path_object
@@ -109,7 +117,7 @@ class OnlineTECoordinator(TELP[PathBasedOnlineTEParameters], DistributedSolverNo
         # Initialize the consensus wrapper
         self._outer_admm_wrapper = ADMMWrapper(
             N, self._solver_params.Rho,
-            # adaptive_tau=2, adaptive_mu=5, adaptive_T=2
+            adaptive_tau=2, adaptive_mu=5, adaptive_T=3
         )
         # Initialize the sharing wrapper
         self._sharing_dual = cpu_zeros((N,))
@@ -126,6 +134,11 @@ class OnlineTECoordinator(TELP[PathBasedOnlineTEParameters], DistributedSolverNo
     
     def _set_X_ek(self):
         self._X_ek = self.backend.get_X_ek()
+        if self._solver_params.ScaleWithCapacity:
+            # Public assignments and validation use physical flows.
+            self._X_ek *= self._capacities[:, None]
+        if self.problem_description.eval_params.solution_dir is not None:
+            self._splits = self.backend.get_Y_tk()
     
     def _add_constraints(self):
         assert self._mlu_solver is not None
@@ -246,7 +259,7 @@ class OnlineTECoordinator(TELP[PathBasedOnlineTEParameters], DistributedSolverNo
                         })
                     case _: raise NotImplementedError
 
-                if gap < 0.05:
+                if gap < self.optimality_tolerance and progress_bar._pbar.n > 1:
                     progress_bar._pbar.close()
                     if self.first_solve:
                         print(as_success("Cold start finished!"))

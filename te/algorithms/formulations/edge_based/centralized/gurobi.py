@@ -9,6 +9,7 @@ from utils.logging import as_info, ShortTQDMEnumerate, ShortTQDM
 from utils.gurobi_utils import *
 from te.algorithms.objective_evaluators import get_total_routed_flow
 from topologies.utils import get_graph_M_matrix
+from te.algorithms.formulations.edge_based.solutions import EdgeBasedSolution
 
 
 class GurobiTE(TELP[GurobiSolverParams]):
@@ -28,6 +29,8 @@ class GurobiTE(TELP[GurobiSolverParams]):
 
         self._demand_objective: Optional[gurobipy.LinExpr] = None
         self._regularizer_objective: Optional[gurobipy.LinExpr] = None
+
+        self._solution_cls = EdgeBasedSolution
     
     @property
     def alg_name(self) -> str:

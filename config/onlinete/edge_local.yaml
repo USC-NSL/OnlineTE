@@ -1,17 +1,20 @@
 objective: MLU
 topo_name: Interoute
+# topo_name: Claranet
 tm_seed: 123
 topo_seed: 456
 initial_tm_seed: 789
 EvaluationParams:
   feasibility_tolerance: 1e-5
-  optimality_tolerance: 5e-4
+  optimality_tolerance: 1e-2
   loop_tolerance: 1e-3
   sequence_length: 5
   scale_factor: 10
   verbose: true
-  skip_checks: true
+  skip_checks: false
   trace_reference: Interoute_trace_MLU.txt
+  trace_out: test.txt
+  solution_dir: solutions
 tm_class: sampled
 sampled:
   sample_rate: 0.05
@@ -21,10 +24,15 @@ initial_tm.uniform:
   max: 1
 solver: online_te
 online_te:
+  local: true
   mlu_backend: pdlp
-  num_workers: 5
+  # num_workers: 1
+  num_workers: 10
   SolverParams:
-    InnerLoopRounds: 5
+    Precision: single
+    InnerLoopRounds: 10
     OuterLoopRounds: 200
-    SwitchIterations: 2
+    SwitchMaxIterations: 10
     ScaleWithCapacity: true
+    SwitchOptimalityTolerance: 1e-3
+    Gamma: 1.0

@@ -1,4 +1,5 @@
 import tqdm
+import json
 import numpy as np
 import te.constants
 from itertools import count
@@ -132,3 +133,16 @@ class TQDMSpinner:
     
     def __next__(self):
         return next(self._counter)
+
+
+class JSONEncoder(json.JSONEncoder):
+    """
+    A json encoder for some numpy types that Python's default json
+    encoder complains about (like `float32`).
+    """
+    def default(self, obj):
+        if isinstance(obj, np.generic):
+            return obj.item()
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super().default(obj)

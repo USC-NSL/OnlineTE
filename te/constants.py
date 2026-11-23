@@ -107,13 +107,13 @@ then they are not in consensus at all.
 NUM_PROCS = multiprocessing.cpu_count()
 """Number of available cores"""
 
-MAX_NUMBER_OF_SINGLE_HOST_WORKERS = min(24, max(NUM_PROCS - 4, 1))
+MAX_NUMBER_OF_SINGLE_HOST_WORKERS = max(NUM_PROCS - 2, 1)
 """
 Maximum number of processes that will be spawned to do any parallel task
 on a single host.
 We avoid going up to exactly the CPU count, since that will bring a lot of
 contention and cause problems.
-We leave 4 cores alone at all times for other things.
+We leave 2 cores alone at all times for other things.
 """
 
 MAX_NUMBER_OF_COMMODITIES_PER_CORE = 5000

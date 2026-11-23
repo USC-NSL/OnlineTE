@@ -34,6 +34,11 @@ class CoordinatorBackendBase[P: SolverParams](CommunicationBackendBase[P]):
     @abstractmethod
     def get_X_ek(self) -> CPUArray:
         """Get the final solution array (X_ek)"""
+
+    # TODO: Find a more graceful way of doing this ...
+    @abstractmethod
+    def get_Y_tk(self) -> CPUArray:
+        """Get the final solution array (Y_tk)"""
     
     @abstractmethod
     def get_X_ek_sum(self) -> CPUArray:

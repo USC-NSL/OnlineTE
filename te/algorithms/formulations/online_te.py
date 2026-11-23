@@ -18,6 +18,7 @@ from te.algorithms.communication.base import *
 from te.algorithms.communication.helper import *
 from te.algorithms.formulations.helper import *
 from te.algorithms.sub_algorithms.mlu_backends.aggregate import *
+from te.path_providers.sparse_ops import set_numba_thread_count_per_local_worker
 
 
 @dataclass
@@ -101,12 +102,17 @@ def spawn_online_te_solver(
     # Number of workers that we want to spawn must match the number of workers
     # controlled by our controller node.
     assert len(solver.WorkerRPCParamList) == num_workers
+    m = problem.graph.number_of_nodes()
+    K = m * (m-1)
+    assert K % num_workers == 0, f'Number of workers ({num_workers}) must '\
+        f'divide the number of commodities ({K})!'
     if is_local:
         print(as_warning(log_section_title("LOCAL EXPERIMENT")))
         print(as_info(
             f'A total of {num_workers} worker nodes will be spawned with addresses:\n'+
             PrettyAddressList(tuple([p.Peers[0] for p in solver.WorkerRPCParamList])).str_all()
         ))
+        set_numba_thread_count_per_local_worker(num_workers)
         with concurrent.futures.ProcessPoolExecutor(
             max_workers=num_workers, 
             mp_context=multiprocessing.get_context(method='spawn')

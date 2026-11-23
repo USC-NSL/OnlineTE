@@ -1,3 +1,4 @@
+import math
 from typing import Optional, Literal
 from dataclasses import dataclass
 from te.algorithms.base import SolverParams
@@ -17,12 +18,14 @@ class PathBasedOnlineTEParameters(SolverParams):
     """Inner ADMM step size"""
     Gamma: float = 0.1
     """Step size for solving the switch-level problems"""
-    SwitchIterations: int = 5
-    """Number of iterations for each switch-level problem"""
+    SwitchMaxIterations: int = 1000
+    """Maximum gradient steps per switch update; warn if unconverged"""
+    SwitchOptimalityTolerance: float = 1e-5
+    """Switch Frank-Wolfe gap tolerance, averaged over commodities"""
     Precision: Literal['double', 'single', 'half'] = SINGLE_PRECISION
     """Floating point operation precision"""
-    ScaleWithCapacity: bool = False
-    """Scale everything with link capacities"""
+    ScaleWithCapacity: bool = True
+    """Normalize internal edge flows by capacity; report assignments in physical units"""
     PathFile: Optional[str] = None
     """Path to a `PathProvider` object to use for paths"""
     NumberOfPathsPerCommodity: int = 8
@@ -30,6 +33,10 @@ class PathBasedOnlineTEParameters(SolverParams):
     AdjustGamma: bool = True
     """Whether to adjust PGD step size based on path lengths"""
     def __post_init__(self):
+        if self.SwitchMaxIterations <= 0:
+            raise ValueError('SwitchMaxIterations must be positive')
+        if not math.isfinite(self.SwitchOptimalityTolerance) or self.SwitchOptimalityTolerance <= 0:
+            raise ValueError('SwitchOptimalityTolerance must be positive and finite')
         if self.Rho > self.Eta:
             as_warning(f"Outer ADMM step size (`Rho`) = {self.Rho} is strictly larger "
                        f"than inner ADMM step size (`Eta`) = {self.Eta}.\nThis is almost never beneficial.")

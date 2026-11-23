@@ -7,12 +7,15 @@ message PathBasedOnlineTEParameters {
     optional float Rho = 3;
     optional float Eta = 4;
     optional float Gamma = 5;
-    optional int32 SwitchIterations = 6;
+    reserved 6;
+    reserved "SwitchIterations";
     optional string Precision = 7;
     optional bool ScaleWithCapacity = 8;
     optional int32 NumberOfPathsPerCommodity = 9;
     optional string PathFile = 10;
     optional bool AdjustGamma = 11;
+    optional int32 SwitchMaxIterations = 12;
+    optional double SwitchOptimalityTolerance = 13;
 }
 
 
@@ -23,7 +26,11 @@ message EdgeBasedOnlineTEParameters {
     optional float Eta = 4;
     optional float Gamma = 5;
     optional float Beta = 6;
-    optional int32 SwitchIterations = 7;
+    reserved 7;
+    reserved "SwitchIterations", "SwitchTolerance";
     optional string Precision = 8;
     optional bool ScaleWithCapacity = 9;
+    optional double SwitchFeasibilityTolerance = 10;
+    optional int32 SwitchMaxIterations = 11;
+    optional double SwitchOptimalityTolerance = 12;
 }

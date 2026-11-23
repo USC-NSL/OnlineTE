@@ -31,8 +31,8 @@ online_te:
     Gamma: 0.1
     InnerLoopRounds: 10
     OuterLoopRounds: 200
-    SwitchIterations: 10
+    SwitchMaxIterations: 1000
     AdjustGamma: true
-    ScaleWithCapacity: false
+    ScaleWithCapacity: true
     NumberOfPathsPerCommodity: 16
     PathFile: paths_Cogentco.pkl

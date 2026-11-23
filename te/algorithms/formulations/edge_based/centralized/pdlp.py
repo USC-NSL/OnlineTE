@@ -7,6 +7,7 @@ from te.traffic_models.base import commodity_od_iterator, traffic_to_commodity
 from topologies.utils import get_node_in_array, get_node_out_array
 from utils.logging import ShortTQDMEnumerate
 from utils.pdlp_utils import solve_qp_or_scream, ConstraintVector
+from te.algorithms.formulations.edge_based.solutions import EdgeBasedSolution
 
 
 class PDLPTE(TELP[PDLPSolverParams]):
@@ -24,6 +25,8 @@ class PDLPTE(TELP[PDLPSolverParams]):
         self._out_indexing: Dict[int, np.ndarray] = get_node_out_array(self._graph)
 
         self._constraints: Optional[ConstraintVector] = None
+
+        self._solution_cls = EdgeBasedSolution
     
     @property
     def alg_name(self) -> str:

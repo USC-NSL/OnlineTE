@@ -1,3 +1,4 @@
+import math
 from typing import Optional, Literal
 from dataclasses import dataclass
 from te.algorithms.base import SolverParams
@@ -17,8 +18,6 @@ class EdgeBasedOnlineTEParameters(SolverParams):
     """Inner ADMM step size"""
     Gamma: float = 1.0
     """Step size for solving the switch-level problems"""
-    SwitchIterations: int = 2
-    """Number of iterations for each switch-level problem"""
     Precision: Literal['double', 'single', 'half'] = SINGLE_PRECISION
     """Floating point operation precision"""
     ScaleWithCapacity: bool = False
@@ -31,8 +30,22 @@ class EdgeBasedOnlineTEParameters(SolverParams):
     If not `None`, then an alternating shrinkage algorithm is
     used to solve the inner loop problems instead.
     """
+    SwitchFeasibilityTolerance: float = 1e-5
+    """Absolute dense switch feasibility tolerance, in solver units"""
+    SwitchOptimalityTolerance: float = 1e-5
+    """Dense switch complementarity gap tolerance, averaged over commodities"""
+    SwitchMaxIterations: int = 1000
+    """Maximum gradient steps per dense switch update; warn if unconverged"""
 
     def __post_init__(self):
+        if self.SwitchMaxIterations <= 0:
+            raise ValueError('SwitchMaxIterations must be positive')
+        if not math.isfinite(self.SwitchFeasibilityTolerance) or self.SwitchFeasibilityTolerance <= 0:
+            raise ValueError('SwitchFeasibilityTolerance must be positive and finite')
+        if not math.isfinite(self.SwitchOptimalityTolerance) or self.SwitchOptimalityTolerance <= 0:
+            raise ValueError('SwitchOptimalityTolerance must be positive and finite')
+        if self.Beta is None and not 0 < self.Gamma <= 1:
+            raise ValueError('Dense switch Gamma must satisfy 0 < Gamma <= 1')
         if self.Beta is not None:
             assert self.Beta > 0, "L1 penalty coefficient must be strictly greater than 0"
         if self.Rho > self.Eta:

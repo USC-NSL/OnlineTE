@@ -2,6 +2,7 @@
 objective: MLU
 # Topolgoy name
 topo_name: Cogentco
+# topo_name: Claranet
 # Traffic matrix and topology seeds
 tm_seed: 123
 topo_seed: 456
@@ -21,6 +22,9 @@ EvaluationParams:
   verbose: true
   # Write the objective trace for validation
   trace_out: Cogentco_trace_MLU.txt
+  # trace_out: Claranet_trace_MLU.txt
+  # Directory to write the solutions
+  solution_dir: solutions
 # The `sampled` matrix is a traffic matrix where for each
 # iteration, a selected percent of demands arbitrarily change.
 # In this example, 5 percent of the demands are allowed to
@@ -36,6 +40,9 @@ initial_tm_class: uniform
 initial_tm.uniform:
   min: 1e-2
   max: 1
+# initial_tm_class: gravity
+# initial_tm.gravity:
+#   min: 1e-2
 solver: gurobi
 gurobi:
   SolverParams:
@@ -49,3 +56,4 @@ gurobi:
     # sense given the current topology.
     max_num_paths_per_commodity: 16
     path_file: paths_Cogentco.pkl
+    # path_file: paths_Claranet.pkl

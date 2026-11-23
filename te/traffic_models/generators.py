@@ -355,6 +355,7 @@ class NCFlowTrafficMatrixGenerator(TMGenerator):
 @dataclass(frozen=True)
 class GravityTMGeneratorParams(TMGeneratorParams):
     graph: nx.DiGraph = field(default=nx.DiGraph(), metadata={'help': argparse.SUPPRESS})
+    min: float = 0.0
     _type: ClassVar[str] = 'gravity'
 
 
@@ -398,11 +399,7 @@ class GravityTrafficMatrixGenerator(TMGenerator):
                         continue
                     frac = norm_u * in_cap_sum[v] / \
                         (in_total_cap - in_cap_sum[u])
-                    if self.random:
-                        tm[u, v] = max(
-                            RNG.normal(frac, frac / 4), 0.0)
-                    else:
-                        tm[u, v] = frac
+                    tm[u, v] = max(RNG.normal(frac, frac / 4), PARAMS.min)
 
             np.multiply(tm, PARAMS.scale_factor, out=tm)
             yield tm
@@ -427,7 +424,7 @@ def attach_TM_class_parser(parser: jsonargparse.ArgumentParser):
                         help='Class of traffic matrix generator to use')
     parser.add_argument('--initial-tm-class', choices=[tp.type() for tp in[
             UniformDriftTMGenerator, ExponentialTMGenerator, BimodalTMGenerator,
-            FilebackedTMGenerator
+            FilebackedTMGenerator, GravityTrafficMatrixGenerator
         ]], help='Class of initial traffic matrix generator to use to feed another generator',
         required=False
     )

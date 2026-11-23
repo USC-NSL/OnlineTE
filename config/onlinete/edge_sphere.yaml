@@ -26,5 +26,5 @@ online_te:
   SolverParams:
     InnerLoopRounds: 5
     OuterLoopRounds: 200
-    SwitchIterations: 2
+    SwitchMaxIterations: 1000
     ScaleWithCapacity: true

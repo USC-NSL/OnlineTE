@@ -20,7 +20,8 @@ class DenseSolver:
         N: CPUArray,
         NNT: CPUArray,
         mask: BooleanCPUArray, 
-        pgd_step: float, pgd_iters: int
+        pgd_step: float, pgd_max_iters: int = 1000,
+        optimality_tolerance: float = 1e-5, feasibility_tolerance: float = 1e-5
     ):
         self._X_0: CPUArray = X_0
         self._X_ek: CPUArray = cpu_array(X_0)
@@ -29,7 +30,9 @@ class DenseSolver:
         self._mask = mask
         self._lambda_ek = cpu_zeros(mask.shape)
         self._pgd_step = pgd_step
-        self._pgd_iters = pgd_iters
+        self._optimality_tolerance = optimality_tolerance
+        self._feasibility_tolerance = feasibility_tolerance
+        self._pgd_max_iters = pgd_max_iters
 
     @property
     def X_ek(self) -> CPUArray:
@@ -52,8 +55,10 @@ class DenseSolver:
             bias=sharing_bias,
             x_block_0=self._X_0,
             step_size=self._pgd_step, 
-            n_iter=self._pgd_iters, 
-            mask=self._mask
+            mask=self._mask,
+            optimality_tolerance=self._optimality_tolerance,
+            feasibility_tolerance=self._feasibility_tolerance,
+            max_iter=self._pgd_max_iters
         )
         self._X_ek += self._NNT @ (self._lambda_ek - sharing_bias[:, None])
         return np.mean(self._X_ek, axis=1)
@@ -183,15 +188,15 @@ class OnlineTEWorkerNode(DistributedSolverNodeBase):
                 self._NULL_M, self._NNT_M,
                 self._MASK_M, 
                 self._solver_params.Gamma,
-                self._solver_params.SwitchIterations
+                pgd_max_iters=self._solver_params.SwitchMaxIterations,
+                optimality_tolerance=self._solver_params.SwitchOptimalityTolerance,
+                feasibility_tolerance=self._solver_params.SwitchFeasibilityTolerance
             )
         else:
             self._solver = SparseSolver(
-                self._NNT_M,
-                self._MASK_M,
-                self._solver_params.Gamma,
-                self._solver_params.SwitchIterations,
-                self._solver_params.Beta
+                X_0=cpu_array(self._PINV_CACHE), NNT=self._NNT_M, mask=self._MASK_M,
+                admm_step=self._solver_params.Gamma, admm_iters=5,
+                l1_threshold=self._solver_params.Beta
             )
 
     # TODO: Record the last epoch that we managed to handle ...

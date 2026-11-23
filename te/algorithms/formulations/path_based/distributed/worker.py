@@ -22,12 +22,12 @@ class DenseSolver:
         alpha_cols: NumbaList,
         alpha_rows: NumbaList, 
         beta: IntegerCPUArray,
-        pgd_step: float, pgd_iters: int,
+        pgd_step: float, pgd_max_iters: int,
         eta: float,
         adjust_step_size: bool,
         capacities: CPUArray,
         scale_with_capacity: bool,
-        objective: TEObjective
+        objective: TEObjective, optimality_tolerance: float = 1e-5
     ):
         self._demands: CPUArray = demands
         K, N, T = alpha_shape
@@ -36,7 +36,8 @@ class DenseSolver:
         self._alpha_cols = alpha_cols
         self._beta = beta
         self._adjust_step_size = adjust_step_size
-        self._pgd_iters = pgd_iters
+        self._pgd_max_iters = pgd_max_iters
+        self._optimality_tolerance = optimality_tolerance
         self._eta = eta
         self._scale_with_capacity = scale_with_capacity
         self._capacities = capacities
@@ -54,7 +55,6 @@ class DenseSolver:
         self._T = T
         self._Y_tk = cpu_zeros((T, K))
         self._initialize_splits()
-        self._Y_tk_old = cpu_array(self._Y_tk)
     
     def _initialize_splits(self):
         self._Y_tk = get_path_split_with_capacity(
@@ -69,10 +69,14 @@ class DenseSolver:
     @property
     def X_ek(self) -> CPUArray:
         return path_based_to_edge_based_nnz(
-            self._Y_tk,self._alpha_rows, self._alpha_cols,
+            self._Y_tk, self._alpha_rows, self._alpha_cols,
             self._N, self._demands,
             self.conditional_capacity
         )
+
+    @property
+    def Y_tk(self) -> CPUArray:
+        return self._Y_tk
 
     @property
     def X_bar(self) -> CPUArray:
@@ -95,11 +99,11 @@ class DenseSolver:
             ))
     
     def update(self, sharing_bias: CPUArray) -> CPUArray:
-        new_Y_old = cpu_array(self._Y_tk)
+        y_block_old = cpu_array(self._Y_tk)
         if self._objective == TEObjective.MLU:
             self._Y_tk = do_path_based_nesterov_pgd(
                 y_block=self._Y_tk,
-                y_block_old=self._Y_tk_old,
+                y_block_old=y_block_old,
                 alpha_rows=self._alpha_rows,
                 alpha_cols=self._alpha_cols,
                 sharing_bias=sharing_bias,
@@ -108,13 +112,13 @@ class DenseSolver:
                 num_edges=self._N,
                 num_paths=self._T,
                 step_sizes=self._pgd_steps,
-                n_iter=self._pgd_iters,
+                n_iter=self._pgd_max_iters,
                 capacities=self.conditional_capacity
             )
         elif self._objective == TEObjective.MAX_FLOW:
             self._Y_tk = do_path_based_maxflow_pgd(
                 y_block=self._Y_tk,
-                y_block_old=self._Y_tk_old,
+                y_block_old=y_block_old,
                 alpha_rows=self._alpha_rows,
                 alpha_cols=self._alpha_cols,
                 sharing_bias=sharing_bias,
@@ -123,13 +127,12 @@ class DenseSolver:
                 num_edges=self._N,
                 num_paths=self._T,
                 step_sizes=self._pgd_steps,
-                n_iter=self._pgd_iters,
+                n_iters=self._pgd_max_iters,
                 eta=self._eta,
                 capacities=self.conditional_capacity
             )
         else:
             raise ValueError
-        self._Y_tk_old = new_Y_old
         return path_based_to_edge_based_mean_nnz(
             self._Y_tk, self._alpha_rows, self._alpha_cols,
             self._N, self._demands, self.conditional_capacity
@@ -168,6 +171,7 @@ class OnlineTEWorkerNode(DistributedSolverNodeBase):
         self.backend.do_inner_loop_update = self.do_inner_loop_pgd_update
         self.backend.update_cached_values = self.update_cached_values
         self.backend.report_chunk = self.report_chunk
+        self.backend.report_splits = self.report_splits
         self.backend.update_demands = self.update_demands
     
     def run(self):
@@ -249,7 +253,8 @@ class OnlineTEWorkerNode(DistributedSolverNodeBase):
             alpha_rows=NumbaList(self._path_object.rows),
             beta=self._path_object.beta,
             pgd_step=self._solver_params.Gamma,
-            pgd_iters=self._solver_params.SwitchIterations,
+            pgd_max_iters=self._solver_params.SwitchMaxIterations,
+            optimality_tolerance=self._solver_params.SwitchOptimalityTolerance,
             eta=self._solver_params.Eta,
             adjust_step_size=self._solver_params.AdjustGamma,
             capacities=self._capacities,
@@ -268,6 +273,9 @@ class OnlineTEWorkerNode(DistributedSolverNodeBase):
     
     def report_chunk(self) -> CPUArray:
         return self._dense_solver.X_ek
+
+    def report_splits(self) -> CPUArray:
+        return self._dense_solver.Y_tk
     
     def report_aggregate(self) -> CPUArray:
         raise ValueError("This should NOT be used!")

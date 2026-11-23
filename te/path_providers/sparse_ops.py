@@ -18,10 +18,13 @@ particular:
 """
 
 
+import os
+import te.constants
 import numpy as np
 from numba import njit, prange
 from typing import Optional, List, Tuple
 from array_utils.cpu.types import *
+from utils.logging import as_warning
 
 from numba.core.errors import NumbaTypeSafetyWarning
 
@@ -29,6 +32,18 @@ import warnings
 # TODO: This warning is raised in all of the sparse operations here
 #       See how we can resolve it.
 warnings.simplefilter('ignore', category=NumbaTypeSafetyWarning)
+
+
+def set_numba_thread_count_per_local_worker(num_workers: int):
+    """
+    On newer Python versions, a local run using Numba for each worker can
+    oversubscribe the CPU (as one of the fellow SIGCOMM AE reviewers pointed out).
+    This function limits the number of threads accordingly.
+    """
+    thread_count_per_worker = min(max(te.constants.MAX_NUMBER_OF_SINGLE_HOST_WORKERS // num_workers, 1), 4)
+    print(as_warning(f'Due to local deployment, Numba threads per worker have been limited to {thread_count_per_worker}'))
+    os.environ['OPENBLAS_NUM_THREADS'] = str(thread_count_per_worker)
+    os.environ['NUMBA_NUM_THREADS'] = str(thread_count_per_worker)
 
 
 @njit(parallel=True, cache=True)

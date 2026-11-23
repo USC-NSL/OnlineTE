@@ -53,6 +53,9 @@ service OnlineTECore {
     rpc SetSolverParameters(SolverParameters) returns (google.protobuf.Empty) {}
     // To prevent leaks, this RPC kills each node and releases all resources.
     rpc Close(google.protobuf.Empty) returns (google.protobuf.Empty) {}
+    // TODO: Make this more graceful ...
+    // Request the path-based splits (only used for path-based solvers)
+    rpc RequestSplit(google.protobuf.Empty) returns (stream Chunk) {}
 }
 
 

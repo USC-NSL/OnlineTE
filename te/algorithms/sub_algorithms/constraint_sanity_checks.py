@@ -19,6 +19,14 @@ def is_eq(target: float, actual: float, feasibility_tol: float):
     return math.isclose(target, actual, abs_tol=feasibility_tol)
 
 
+def check_non_negativity(edge_based_assignment: np.ndarray, feasibility_tolerance: float) -> Tuple[bool, Optional[float]]:
+    """Check if the edge-based assignment is non-negative within a given tolerance"""
+    min_assignment = np.min(edge_based_assignment)
+    if (min_assignment >= 0 or abs(min_assignment) < feasibility_tolerance):
+        return True, None
+    return False, min_assignment
+
+
 def check_capacity_constraint(
     edge_based_assignment: np.ndarray,
     graph: nx.DiGraph,
@@ -30,14 +38,13 @@ def check_capacity_constraint(
 
         edge_index, source_index, destination_index, demand, capacity
     """
-    N, _ = edge_based_assignment.shape
     X_O_E = np.sum(edge_based_assignment, axis=1)
     congested_edges: List[Tuple[int, int, int, float, float]] = []
     for e, (s, d, c_e) in enumerate(graph.edges(data='capacity')):
         demand = X_O_E[e]
         if is_leq(c_e, demand, feasibility_tol=feasibility_tolerance):
             congested_edges.append((e, s, d, demand, c_e))
-    return len(congested_edges)/N, congested_edges
+    return congested_edges
 
 
 def vector_consensus_test(
@@ -178,5 +185,5 @@ def check_flow_satisfaction(
 
 __all__ = [
     'check_capacity_constraint', 'vector_consensus_test', 'check_loop_free_assignment',
-    'check_flow_leaks', 'check_flow_satisfaction'
+    'check_flow_leaks', 'check_flow_satisfaction', 'check_non_negativity'
 ]

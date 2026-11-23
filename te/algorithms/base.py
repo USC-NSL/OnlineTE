@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import csv
 import enum
 import time
 import json
@@ -9,10 +10,12 @@ import networkx as nx
 import te.constants
 import dataclasses
 from collections import defaultdict
-from typing import List, Optional, Tuple, Dict, Callable, Any
+from typing import List, Optional, Tuple, Dict, Callable, Any, Iterator
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from utils.logging import as_fail, as_warning, as_info, log_subsection_title, str_round
+from utils.logging import (
+    as_fail, as_warning, as_info, JSONEncoder,log_subsection_title,
+    str_round, TQDMSpinner)
 from utils.table_dataclass import TableDataclass
 from topologies.utils import get_edge_indexing
 from te.traffic_models.base import *
@@ -68,6 +71,15 @@ class TEEvaluationParams(SolverParams):
         Path to an existing `TETracer` object to validate the
         solution against.
         Currently, it only checks the final objective.
+    solution_dir: Optional[str] = None
+        The directory to save the final solution in. Skipped if
+        `None`.
+    solution_can_rewrite: bool = True
+        Whether or not to overwrite the solution directory if it
+        already exists.
+    solution_round: Optional[int] = 6
+        Round each numerical entry in the solution output to given
+        number of digits. Skipped if `None`.
     
     Notes
     -----
@@ -89,6 +101,9 @@ class TEEvaluationParams(SolverParams):
     sequence_length: int = 1
     trace_out: Optional[str] = None
     trace_reference: Optional[str] = None
+    solution_dir: Optional[str] = None
+    solution_can_rewrite: bool = True
+    solution_round: Optional[int] = 6
 
     def __post_init__(self):
         assert self.optimality_tolerance < 1 and self.optimality_tolerance > 0
@@ -97,7 +112,11 @@ class TEEvaluationParams(SolverParams):
             print(as_warning(f'`loop_tolerance` is too tight relative to `feasibility_tolerance`, numerical noise'
                              'may be reported as loops!'))
         if self.trace_reference is not None:
-            assert os.path.exists(self.trace_reference)
+            assert os.path.exists(self.trace_reference),\
+                f'The reference trace {self.trace_reference} does not exist!'
+        if self.solution_dir is not None and not self.solution_can_rewrite:
+            assert not os.path.exists(self.solution_dir),\
+                f'The solution directory {self.solution_dir} exists and we are not allowed to rewrite!'
     
     def __call__(self, **kwargs):
         copy = dataclasses.replace(self)
@@ -205,7 +224,7 @@ class TETracer:
 
     def save(self, path: str):
         with open(path, 'w') as f:
-            f.write(json.dumps(self._traces, indent=4))
+            f.write(json.dumps(self._traces, indent=4, cls=JSONEncoder))
 
     @classmethod
     def load(cls, path: str) -> TETracer:
@@ -286,6 +305,8 @@ class TELP[P: SolverParams](ABC):
         ref_trace = self._problem_description.eval_params.trace_reference
         self._reference_trace: Optional[TETracer] = \
             None if ref_trace is None else TETracer.load(ref_trace)
+        self._solution_cls: Optional[type[TESolutionEncoder]] = None
+        self._solution_object: Optional[TESolutionEncoder] = None
 
     @property
     def objective(self) -> TEObjective:
@@ -320,6 +341,9 @@ class TELP[P: SolverParams](ABC):
         return self._tracer
 
     @property
+    def feasibility_tolerance(self) -> float:
+        return self._problem_description.eval_params.feasibility_tolerance
+    @property
     def optimality_tolerance(self) -> float:
         return self._problem_description.eval_params.optimality_tolerance
 
@@ -330,6 +354,18 @@ class TELP[P: SolverParams](ABC):
     @property
     def first_solve(self) -> bool:
         return self._first_solve
+
+    @property
+    def solution_dir(self) -> Optional[str]:
+        return self._problem_description.eval_params.solution_dir
+    @property
+    def solution_cls(self) -> type[TESolutionEncoder]:
+        assert self._solution_cls is not None
+        return self._solution_cls
+    @property
+    def solution_object(self) -> TESolutionEncoder:
+        assert self._solution_object is not None
+        return self._solution_object
 
     def report_problem_size(self):
         print(as_info(f"Graph Size: {self.number_of_nodes} nodes |"
@@ -407,6 +443,13 @@ class TELP[P: SolverParams](ABC):
         self._add_objective()
         self._tracer.add_result("model_build_time", time.perf_counter() - t_start)
         self._tracer.execute_callbacks(self, SolverCallbackType.PostMake)
+        if self.solution_dir is not None:
+            eval_params = self.problem_description.eval_params
+            self._solution_object = self.solution_cls(
+                self.solution_dir,
+                can_overwrite=eval_params.solution_can_rewrite,
+                round=eval_params.solution_round
+            )
 
     @abstractmethod
     def close(self):
@@ -447,6 +490,8 @@ class TELP[P: SolverParams](ABC):
                     self.current_objective, i
                 )
                 print(as_info(f'Objective gap to reference: {gap:.2f}%'))
+            if self.solution_dir is not None:
+                self._solution_object.dump(self, tm, i)
         self._tracer.add_result("total_solve_time", time.perf_counter() - t_start)
         self._tracer.execute_callbacks(self, SolverCallbackType.PostSolve)
         if self._problem_description.eval_params.trace_out is not None:
@@ -461,6 +506,9 @@ class TELP[P: SolverParams](ABC):
         feasibility_tolerance = eval_params.feasibility_tolerance
         loop_tolerance = eval_params.loop_tolerance
         indexing = self._edge_indexing
+        is_non_neg, worst_offender = check_non_negativity(assignments, feasibility_tolerance)
+        if not is_non_neg:
+            print(as_fail(f"Solution has negative assignments. Worst offender is {worst_offender}!"))
         if not self._skip_loop_check:
             witness = check_loop_free_assignment(
                 assignments, graph, loop_tolerance
@@ -473,21 +521,19 @@ class TELP[P: SolverParams](ABC):
             assignments, graph, commodity_list,
             feasibility_tolerance, indexing
         )
-        congestions = check_capacity_constraint(
-            assignments, graph, feasibility_tolerance
-        )
         if self._problem_description.objective == TEObjective.MLU:
-            # satisfaction, total_routed_flow = check_flow_satisfaction(
             satisfaction = check_flow_satisfaction(
                 assignments, graph, commodity_list,
                 feasibility_tolerance, indexing
             )
+            # MLU is allowed to congest links.
+            congestions = []
         else:
+            # Max-Flow is allowed to leave demands unsatisfied. 
             satisfaction = None
-            # _, total_routed_flow = check_flow_satisfaction(
-            #     assignments, graph, commodity_list,
-            #     feasibility_tolerance, indexing
-            # )
+            congestions = check_capacity_constraint(
+                assignments, graph, feasibility_tolerance
+            )
         return TECheckResult(
             loop_witness=witness,
             congestions=congestions,
@@ -498,6 +544,35 @@ class TELP[P: SolverParams](ABC):
                 np.clip(assignments, a_min=0, a_max=None)
             ) / assignments.size
         )
+
+
+class TESolutionEncoder(ABC):
+    def __init__(self, solution_directory: str, can_overwrite: bool = True, round: Optional[int] = 8):
+        self._solution_directory = solution_directory
+        if os.path.exists(solution_directory) and can_overwrite:
+            import shutil
+            print(as_warning(f'Deleting existing solution directory at {solution_directory}'))
+            shutil.rmtree(solution_directory)
+        os.makedirs(self._solution_directory)
+        self._round = round
+
+    @abstractmethod
+    def encode_it(self, lp: TELP, tm: np.ndarray) -> Iterator[List[str]]:
+        """Encode the solution into a string one line at a time"""
+
+    def _numeric_to_str(self, num: float) -> str:
+        if self._round is not None:
+            return str_round(num, self._round)
+        return str(num)
+
+    def dump(self, lp: TELP, tm: np.ndarray, tm_iter: int):
+        path = os.path.join(self._solution_directory, f'solution_{tm_iter}.csv')
+        spinner = TQDMSpinner('Writing Solution')
+        with open(path, 'w', newline='', encoding='utf-8') as out:
+            writer = csv.writer(out)
+            for line in self.encode_it(lp, tm):
+                writer.writerow(line)
+                spinner.update()
 
 
 __all__ = [

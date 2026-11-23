@@ -69,35 +69,20 @@ def te_problem_description_parser(prog_name: str) -> jsonargparse.ArgumentParser
 
     General Parameters
     ------------------
-    `topo`: str
-        The topology name (must in the Internet Topology Zoo)
-    `tm-seed`: int
-        The RNG seed used to generate the TM
+    `objective`: TEObjective
+        The TE objective type to solve for
+    `topo-path`: Optional[str]
+        Path to a topology graph in `.graphml` extension or `json`
+    `topo-name`: Optional[str]
+        Name of a topology to pick for the Topology Zoo
+    `topo-seed`: Optional[int]
+        The RNG seed used to generate the topology capacities if needed
+    `tm-seed`: Optional[int]
+        The RNG seed used to generate the TM if needed
     `objective`: TEObjective
         TE objective to solve for
-    `tm-path`: Optional[str]
-        Path to a TM file that will be loaded as a file-backed matrix
-    
-    Runtime Parameters
-    ------------------
-    `feas-tol`: float
-        Contraint feasibility absolute tolerance
-    `conv-tol`: float
-        Objective value relative convergance tolerance
-    `scale-factor`: float
-        Link capacity scaling factor
-    `report-unsat`: bool
-        Whether or not to output the details of unsatisfied demands or
-        congested links.
-    
-    Solution Output Parameters
-    --------------------------
-    `save-sol`: bool
-        Whether or not to save the solution output
-    `path-sol`: str
-        Path to the directory to output the solution
-    `name-sol`: str
-        Name of teh output solution file
+    `EvaluationParams`: TEEvaluationParams
+        The set of evaluation parameters. Parsed as a class argument.
     """
     parser = jsonargparse.ArgumentParser(prog_name)
 
@@ -113,8 +98,8 @@ def te_problem_description_parser(prog_name: str) -> jsonargparse.ArgumentParser
 
     # RNG seeds if we have to generate anything
     rng_seed_group = parser.add_argument_group('RNG Seeds')
-    rng_seed_group.add_argument('--tm-seed', help='RNG seed for generating traffic matrix sequences')
-    rng_seed_group.add_argument('--topo-seed', help='RNG seed for generating topology capacities')
+    rng_seed_group.add_argument('--tm-seed', help='RNG seed for generating traffic matrix sequences', type=Optional[int])
+    rng_seed_group.add_argument('--topo-seed', help='RNG seed for generating topology capacities', type=Optional[int])
 
     # Evaluation parameters
     parser.add_class_arguments(TEEvaluationParams, 'EvaluationParams', help='TE Evaluation Parameters')

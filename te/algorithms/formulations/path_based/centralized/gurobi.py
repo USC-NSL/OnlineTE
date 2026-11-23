@@ -9,6 +9,7 @@ from utils.gurobi_utils import make_model
 from te.path_providers import *
 from te.path_providers.sparse_ops import path_based_to_edge_based_nnz
 from . import GurobiPathBasedSolverParams
+from te.algorithms.formulations.path_based.solutions import PathBasedSolution
 
 
 class GurobiPathBasedTE(TELP[GurobiPathBasedSolverParams]):
@@ -25,6 +26,7 @@ class GurobiPathBasedTE(TELP[GurobiPathBasedSolverParams]):
         self._demand_constraints: Optional[List[gurobipy.Constr]] = None
         self._total_flow: Optional[gurobipy.LinExpr] = None
         self._skip_loop_check = True
+        self._solution_cls = PathBasedSolution
         
         self._initialize()
     
@@ -52,6 +54,10 @@ class GurobiPathBasedTE(TELP[GurobiPathBasedSolverParams]):
     @property
     def current_objective(self) -> float:
         return abs(self._objective.getValue())
+
+    @property
+    def splits(self) -> np.ndarray:
+        return self._splits
 
     def _set_X_ek(self):
         ROWS = self._path_object.rows
@@ -133,7 +139,11 @@ class GurobiPathBasedTE(TELP[GurobiPathBasedSolverParams]):
             total_assignment = gurobipy.LinExpr()
             for t in range(T):
                 total_assignment.addTerms(1, Y_TK[(t, k)])
-            demand_constraints.append(MODEL.addConstr(total_assignment == 1))
+            match self.objective:
+                case TEObjective.MLU:
+                    demand_constraints.append(MODEL.addConstr(total_assignment == 1))
+                case TEObjective.MAX_FLOW:
+                    demand_constraints.append(MODEL.addConstr(total_assignment <= 1))
         self._demand_constraints = demand_constraints
         
         # Number of paths constraint
